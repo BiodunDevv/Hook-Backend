@@ -33,7 +33,6 @@ import { GoogleMapsModule } from '@integrations/google-maps/google-maps.module';
 // Common
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { RolesGuard } from '@common/guards/roles.guard';
-import { User } from '@modules/users/entities/user.entity';
 
 @Module({
   imports: [

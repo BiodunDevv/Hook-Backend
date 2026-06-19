@@ -1,9 +1,9 @@
-import { Controller, Post, Get, Patch, Body, Param, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Get, Patch, Body, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import {
-  RequestSignupOtpDto, VerifySignupOtpDto, SocialLoginDto, LoginDto,
-  SetPasswordDto, ChangePasswordDto, RefreshTokenDto,
+  RegisterDto, VerifyOtpDto, CompleteProfileDto, SocialLoginDto, LoginDto,
+  ChangePasswordDto, RefreshTokenDto, RequestOtpDto,
 } from './dto/auth.dto';
 import { CurrentUser, Public } from '@common/decorators';
 import { success, created } from '@common/dto/api-response.dto';
@@ -13,36 +13,46 @@ import { success, created } from '@common/dto/api-response.dto';
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
-  // ========================================================
-  // STEP 1: REQUEST OTP — send code to email or phone
-  // ========================================================
   @Public()
-  @Post('signup/request-otp')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Send OTP to email or phone for signup/login' })
-  async requestOtp(@Body() dto: RequestSignupOtpDto) {
-    return success(
-      await this.authService.requestSignupOtp(dto),
-      'Verification code sent',
+  @Post('register')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Step 1: Create account with email + password — sends OTP' })
+  async register(@Body() dto: RegisterDto) {
+    return created(
+      await this.authService.register(dto),
+      'Verification code sent to your email',
     );
   }
 
-  // ========================================================
-  // STEP 2: VERIFY OTP + signup (new) or login (existing)
-  // ========================================================
   @Public()
-  @Post('signup/verify-otp')
+  @Post('verify-otp')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Verify OTP — creates account or logs in' })
-  async verifyOtp(@Body() dto: VerifySignupOtpDto) {
+  @ApiOperation({ summary: 'Step 2: Verify email with OTP code' })
+  async verifyOtp(@Body() dto: VerifyOtpDto) {
+    return success(await this.authService.verifyOtp(dto));
+  }
+
+  @Public()
+  @Post('complete-profile')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Step 3: Set your name and activate account' })
+  async completeProfile(@Body() dto: CompleteProfileDto) {
     return success(
-      await this.authService.verifySignupOtp(dto),
+      await this.authService.completeProfile(dto),
+      'Account activated successfully',
     );
   }
 
-  // ========================================================
-  // SOCIAL LOGIN — Google / Apple
-  // ========================================================
+  @Public()
+  @Post('login')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Sign in with email and password' })
+  async login(@Body() dto: LoginDto) {
+    return success(
+      await this.authService.login(dto.email, dto.password),
+    );
+  }
+
   @Public()
   @Post('social')
   @HttpCode(HttpStatus.OK)
@@ -52,33 +62,6 @@ export class AuthController {
       await this.authService.socialLogin(dto),
       `Signed in with ${dto.provider}`,
     );
-  }
-
-  // ========================================================
-  // PASSWORD LOGIN — for returning email+password users
-  // ========================================================
-  @Public()
-  @Post('login')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Sign in with email and password' })
-  async login(@Body() dto: LoginDto) {
-    return success(
-      await this.authService.passwordLogin(dto.email, dto.password),
-    );
-  }
-
-  // ========================================================
-  // SET PASSWORD — for OTP users who want password later
-  // ========================================================
-  @ApiBearerAuth()
-  @Post('password/set')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Set a password (for users who signed up via OTP)' })
-  async setPassword(
-    @CurrentUser('sub') userId: string,
-    @Body() dto: SetPasswordDto,
-  ) {
-    return success(await this.authService.setPassword(userId, dto.password));
   }
 
   @ApiBearerAuth()
@@ -94,9 +77,6 @@ export class AuthController {
     );
   }
 
-  // ========================================================
-  // PROFILE
-  // ========================================================
   @ApiBearerAuth()
   @Get('profile')
   @ApiOperation({ summary: 'Get my profile' })
@@ -114,23 +94,17 @@ export class AuthController {
     return success(await this.authService.updateProfile(userId, dto));
   }
 
-  // ========================================================
-  // RESEND OTP
-  // ========================================================
   @Public()
-  @Post('signup/resend-otp')
+  @Post('resend-otp')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Resend verification code' })
-  async resendOtp(@Body() dto: RequestSignupOtpDto) {
+  async resendOtp(@Body() dto: RequestOtpDto) {
     return success(
-      await this.authService.resendOtp(dto.email || dto.phone!),
+      await this.authService.resendOtp(dto.email),
       'Code resent',
     );
   }
 
-  // ========================================================
-  // TOKEN REFRESH
-  // ========================================================
   @Public()
   @Post('refresh')
   @HttpCode(HttpStatus.OK)

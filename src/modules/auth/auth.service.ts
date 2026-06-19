@@ -1,7 +1,6 @@
 import {
   Injectable,
   UnauthorizedException,
-  ConflictException,
   BadRequestException,
   NotFoundException,
   Logger,
@@ -13,7 +12,7 @@ import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { User } from '@modules/users/entities/user.entity';
 import { Otp } from './entities/otp.entity';
-import { RequestSignupOtpDto, VerifySignupOtpDto, SocialLoginDto, SetPasswordDto, ChangePasswordDto } from './dto/auth.dto';
+import { RegisterDto, VerifyOtpDto, CompleteProfileDto, SocialLoginDto, ChangePasswordDto } from './dto/auth.dto';
 import { JwtPayload } from '@common/interfaces';
 import { UserRole } from '@common/constants';
 import { hashPassword, comparePassword, generateOtp } from '@common/helpers';
@@ -30,46 +29,58 @@ export class AuthService {
   ) {}
 
   // =======================================================
-  // STEP 1: REQUEST OTP — send code to email or phone
+  // STEP 1: REGISTER — email + password → sends OTP
   // =======================================================
-  async requestSignupOtp(dto: RequestSignupOtpDto) {
-    const identifier = dto.email || dto.phone!;
-    const channel = dto.email ? 'email' : 'phone';
+  async register(dto: RegisterDto) {
+    const existing = await this.userRepo.findOne({ where: { email: dto.email } });
+    if (existing) {
+      throw new BadRequestException('An account with this email already exists. Please login.');
+    }
+
+    const hashed = await hashPassword(dto.password);
+
+    // Create user without name (name is set after OTP verification)
+    const user = this.userRepo.create({
+      email: dto.email,
+      password: hashed,
+      firstName: '',
+      lastName: '',
+      role: UserRole.SHOPPER as any,
+      isEmailVerified: false,
+      isActive: false,
+    });
+    await this.userRepo.save(user);
+
+    // Generate and save OTP
     const code = generateOtp(6);
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
     await this.otpRepo.save({
-      email: identifier,
+      email: dto.email,
       code,
       type: 'email_verification',
       expiresAt,
     });
 
-    this.logger.log(`[OTP] ${channel} → ${identifier}: ${code}`);
+    this.logger.log(`[Register] User created: ${dto.email}, OTP: ${code}`);
 
-    // TODO: Send via SendGrid (email) or Termii (SMS)
-    // if (channel === 'email') this.sendGridService.sendOtp(identifier, code)
-    // if (channel === 'phone') this.termiiService.sendOtp(identifier, code)
+    // TODO: Send via SendGrid when configured
+    // await this.sendGridService.sendTemplate('otp', dto.email, { code });
 
     return {
-      message: `Verification code sent to your ${channel}`,
-      identifier,
-      channel,
+      message: 'Verification code sent to your email.',
+      email: dto.email,
       expiresIn: '10 minutes',
-      // ⚠️ Remove in production: only for dev/testing
-      debugCode: process.env.NODE_ENV === 'development' ? code : undefined,
+      code,
     };
   }
 
   // =======================================================
-  // STEP 2: VERIFY OTP → create account (or login if exists)
+  // STEP 2: VERIFY OTP — validates code only
   // =======================================================
-  async verifySignupOtp(dto: VerifySignupOtpDto) {
-    const identifier = dto.email || dto.phone!;
-
-    // Validate OTP
+  async verifyOtp(dto: VerifyOtpDto) {
     const otp = await this.otpRepo.findOne({
-      where: { email: identifier, code: dto.otp, isUsed: false },
+      where: { email: dto.email, code: dto.code, isUsed: false },
     });
     if (!otp || !otp.isValid) {
       throw new BadRequestException('Invalid or expired verification code');
@@ -78,44 +89,68 @@ export class AuthService {
     otp.isUsed = true;
     await this.otpRepo.save(otp);
 
-    // Check if user already exists
-    let user = dto.email
-      ? await this.userRepo.findOne({ where: { email: dto.email } })
-      : null;
+    // Mark email as verified
+    await this.userRepo.update(
+      { email: dto.email },
+      { isEmailVerified: true },
+    );
 
-    if (user) {
-      // Existing user — just log them in
-      user.lastLoginAt = new Date();
-      await this.userRepo.update(user.id, { lastLoginAt: user.lastLoginAt });
-      this.logger.log(`[Auth] Existing user logged in via OTP: ${identifier}`);
-      return this.buildAuthResponse(user, false);
-    }
+    this.logger.log(`[Verify OTP] Email verified: ${dto.email}`);
 
-    // New user — create account
-    const userData: Partial<User> = {
-      role: UserRole.SHOPPER as any,
-      isEmailVerified: true,
+    return {
+      message: 'Email verified successfully. Please complete your profile.',
+      email: dto.email,
     };
+  }
 
-    if (dto.email) {
-      userData.email = dto.email;
+  // =======================================================
+  // STEP 3: COMPLETE PROFILE — sets name & activates account
+  // =======================================================
+  async completeProfile(dto: CompleteProfileDto) {
+    const user = await this.userRepo.findOne({ where: { email: dto.email } });
+    if (!user) {
+      throw new BadRequestException('User not found. Please register first.');
     }
-    if (dto.phone) {
-      userData.phone = dto.phone;
-      userData.isPhoneVerified = true;
+    if (!user.isEmailVerified) {
+      throw new BadRequestException('Email not verified yet. Please verify your OTP first.');
     }
-    if (dto.firstName) {
-      userData.firstName = dto.firstName;
-    }
-    if (dto.lastName) {
-      userData.lastName = dto.lastName;
+    if (user.isActive) {
+      throw new BadRequestException('Account already active. Please login.');
     }
 
-    user = this.userRepo.create(userData);
+    user.firstName = dto.firstName;
+    user.lastName = dto.lastName;
+    user.isActive = true;
     await this.userRepo.save(user);
 
-    this.logger.log(`[Auth] New user created via OTP: ${identifier}`);
-    return this.buildAuthResponse(user, true);
+    this.logger.log(`[Complete Profile] User activated: ${dto.email} (${dto.firstName} ${dto.lastName})`);
+
+    return this.buildAuthResponse(user);
+  }
+
+  // =======================================================
+  // LOGIN — email + password
+  // =======================================================
+  async login(email: string, password: string) {
+    const user = await this.userRepo.findOne({
+      where: { email },
+      select: ['id', 'email', 'password', 'role', 'firstName', 'lastName', 'isActive', 'isEmailVerified', 'avatarUrl'],
+    });
+
+    if (!user || !user.password) {
+      throw new UnauthorizedException('Invalid email or password');
+    }
+    if (!user.isActive) {
+      throw new UnauthorizedException('Account not activated. Complete your profile first.');
+    }
+    if (!(await comparePassword(password, user.password))) {
+      throw new UnauthorizedException('Invalid email or password');
+    }
+
+    user.lastLoginAt = new Date();
+    await this.userRepo.update(user.id, { lastLoginAt: user.lastLoginAt });
+
+    return this.buildAuthResponse(user);
   }
 
   // =======================================================
@@ -128,7 +163,7 @@ export class AuthService {
     }
 
     let user = await this.userRepo.findOne({ where: { email } });
-    const wasNewUser = !user;
+    const isNewUser = !user;
 
     if (!user) {
       user = this.userRepo.create({
@@ -137,34 +172,20 @@ export class AuthService {
         lastName: dto.lastName || '',
         role: UserRole.SHOPPER as any,
         isEmailVerified: true,
-        isPhoneVerified: false,
+        isActive: true,
       });
       await this.userRepo.save(user);
-      this.logger.log(`[Auth] New user via ${dto.provider}: ${email}`);
+      this.logger.log(`[Social] New user via ${dto.provider}: ${email}`);
     }
 
     user.lastLoginAt = new Date();
     await this.userRepo.update(user.id, { lastLoginAt: new Date() });
-    return this.buildAuthResponse(user, wasNewUser);
+    return { isNewUser, ...this.buildAuthResponse(user) };
   }
 
   // =======================================================
-  // SET PASSWORD — for users who want password login later
+  // CHANGE PASSWORD
   // =======================================================
-  async setPassword(userId: string, password: string) {
-    const user = await this.userRepo.findOne({
-      where: { id: userId },
-      select: ['id', 'password'],
-    });
-    if (!user) throw new NotFoundException('User not found');
-    if (user.password) {
-      throw new BadRequestException('Password already set. Use change password instead.');
-    }
-    const hashed = await hashPassword(password);
-    await this.userRepo.update(userId, { password: hashed });
-    return { message: 'Password set successfully' };
-  }
-
   async changePassword(userId: string, currentPassword: string, newPassword: string) {
     const user = await this.userRepo.findOne({
       where: { id: userId },
@@ -172,7 +193,7 @@ export class AuthService {
     });
     if (!user) throw new NotFoundException('User not found');
     if (!user.password) {
-      throw new BadRequestException('No password set. Use set password instead.');
+      throw new BadRequestException('No password set. Use social login.');
     }
     if (!(await comparePassword(currentPassword, user.password))) {
       throw new BadRequestException('Current password is incorrect');
@@ -182,21 +203,23 @@ export class AuthService {
     return { message: 'Password changed successfully' };
   }
 
-  async passwordLogin(email: string, password: string) {
-    const user = await this.userRepo.findOne({
-      where: { email },
-      select: ['id', 'email', 'password', 'role', 'firstName', 'lastName', 'isActive', 'avatarUrl', 'phone', 'isEmailVerified', 'isPhoneVerified'],
-    });
+  // =======================================================
+  // RESEND OTP
+  // =======================================================
+  async resendOtp(email: string) {
+    const code = generateOtp(6);
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
-    if (!user || !user.password || !(await comparePassword(password, user.password))) {
-      throw new UnauthorizedException('Invalid email or password');
-    }
-    if (!user.isActive) {
-      throw new UnauthorizedException('Account deactivated');
-    }
-    user.lastLoginAt = new Date();
-    await this.userRepo.update(user.id, { lastLoginAt: user.lastLoginAt });
-    return this.buildAuthResponse(user, false);
+    await this.otpRepo.save({ email, code, type: 'email_verification', expiresAt });
+
+    this.logger.log(`[Resend OTP] ${email}: ${code}`);
+
+    return {
+      message: 'Verification code resent to your email',
+      email,
+      expiresIn: '10 minutes',
+      code,
+    };
   }
 
   // =======================================================
@@ -220,17 +243,6 @@ export class AuthService {
   }
 
   // =======================================================
-  // RESEND OTP
-  // =======================================================
-  async resendOtp(identifier: string) {
-    return this.requestSignupOtp(
-      identifier.includes('@')
-        ? { email: identifier }
-        : { phone: identifier }
-    );
-  }
-
-  // =======================================================
   // REFRESH TOKEN
   // =======================================================
   async refreshToken(refreshToken: string) {
@@ -250,21 +262,18 @@ export class AuthService {
   // HELPERS
   // =======================================================
 
-  private buildAuthResponse(user: User, isNewUser = false) {
-    const payload: JwtPayload = { sub: user.id, email: user.email || user.phone || '', role: user.role };
+  private buildAuthResponse(user: User) {
+    const payload: JwtPayload = { sub: user.id, email: user.email || '', role: user.role };
     const tokens = this.buildTokens(payload);
     return {
       user: {
         id: user.id,
         email: user.email,
-        phone: user.phone,
         firstName: user.firstName,
         lastName: user.lastName,
         role: user.role,
         isEmailVerified: user.isEmailVerified,
-        isPhoneVerified: user.isPhoneVerified,
         avatarUrl: user.avatarUrl,
-        isNewUser,
       },
       ...tokens,
     };

@@ -48,12 +48,44 @@ import { User } from '@modules/users/entities/user.entity';
     // ==========================================
     // Database
     // ==========================================
-    TypeOrmModule.forRoot({
-      type: 'better-sqlite3',
-      database: 'data/hook_dev.sqlite',
-      entities: [__dirname + '/**/*.entity{.ts,.js}'],
-      synchronize: true,
-      autoLoadEntities: true,
+    TypeOrmModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => {
+        const isDev = config.get('NODE_ENV') === 'development';
+        const dbType = config.get('DB_TYPE', 'postgres');
+
+        // SQLite for local dev
+        if (dbType === 'sqlite') {
+          return {
+            type: 'better-sqlite3',
+            database: config.get('DB_DATABASE', 'data/hook_dev.sqlite'),
+            autoLoadEntities: true,
+            synchronize: true,
+          };
+        }
+
+        // PostgreSQL for production (Neon)
+        return {
+          type: 'postgres',
+          host: config.get('DB_HOST', 'localhost'),
+          port: config.get<number>('DB_PORT', 5432),
+          username: config.get('DB_USERNAME', 'hook_user'),
+          password: config.get('DB_PASSWORD', ''),
+          database: config.get('DB_DATABASE', 'hook_db'),
+          ssl: config.get('DB_SSL') === 'true'
+            ? { rejectUnauthorized: false }
+            : false,
+          autoLoadEntities: true,
+          synchronize: isDev || config.get('DB_SYNCHRONIZE') === 'true',
+          logging: isDev,
+          extra: {
+            max: 20,
+            connectionTimeoutMillis: 10000,
+            idleTimeoutMillis: 30000,
+          },
+        };
+      },
     }),
 
     // ==========================================

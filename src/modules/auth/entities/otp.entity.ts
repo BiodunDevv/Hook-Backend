@@ -16,7 +16,7 @@ export class Otp extends BaseEntity {
   @Column({ default: false })
   isUsed!: boolean;
 
-  @Column({ type: 'datetime' })
+  @Column({ type: 'timestamptz' })
   expiresAt!: Date;
 
   get isValid(): boolean {

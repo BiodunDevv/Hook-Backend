@@ -45,7 +45,7 @@ export class Settlement extends BaseEntity {
   status!: SettlementStatus;
 
   // Escrow
-  @Column({ type: 'datetime' })
+  @Column({ type: 'timestamptz' })
   escrowReleaseAt!: Date; // 24h post-delivery
 
   @Column({ nullable: true })

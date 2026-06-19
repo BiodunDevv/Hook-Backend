@@ -35,6 +35,9 @@ data/
 *.sqlite
 *.sqlite3
 
+# Dashboard (separate repo)
+temp-dash/
+
 # Temp
 tmp/
 temp/

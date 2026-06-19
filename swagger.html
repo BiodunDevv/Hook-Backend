@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Hook API — Swagger Documentation</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.11.8/swagger-ui.min.css" />
+</head>
+<body style="margin:0">
+  <div id="swagger-ui"></div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.11.8/swagger-ui-bundle.min.js"></script>
+  <script>
+    SwaggerUIBundle({
+      url: 'swagger-spec.json',
+      dom_id: '#swagger-ui',
+      presets: [
+        SwaggerUIBundle.presets.apis,
+        SwaggerUIBundle.SwaggerUIStandalonePreset
+      ],
+      layout: "StandaloneLayout",
+      persistAuthorization: true,
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,1075 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hook Admin</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700;14..32,800&display=swap');
+*{font-family:'Inter',sans-serif;margin:0;padding:0;box-sizing:border-box}
+body{background:#F4F4F5;color:#18181B}
+::-webkit-scrollbar{width:5px}
+::-webkit-scrollbar-thumb{background:#D4D4D8;border-radius:10px}
+.hide{display:none!important}
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid #E4E4E7;border-top-color:#F59E0B;border-radius:50%;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Sidebar */
+.sb{width:256px;height:100vh;background:#fff;border-right:1px solid #E4E4E7;position:fixed;left:0;top:0;z-index:50;display:flex;flex-direction:column;flex-shrink:0}
+.sb-logo{display:flex;align-items:center;gap:10px;padding:20px 20px 16px}
+.sb-logo .h{width:32px;height:32px;background:#F59E0B;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px}
+.sb-logo span{font-size:18px;font-weight:600;letter-spacing:-.3px}
+.sb-nav{flex:1;overflow-y:auto;padding:0 12px;display:flex;flex-direction:column;gap:2px}
+.sb-item{display:flex;align-items:center;gap:12px;width:100%;padding:9px 12px;border-radius:8px;font-size:14px;font-weight:500;color:#52525B;cursor:pointer;transition:all .15s;border:none;background:transparent;text-align:left;font-family:inherit}
+.sb-item:hover{background:#F4F4F5;color:#18181B}
+.sb-item.active{background:#18181B;color:#fff}
+.sb-item .ico{width:17px;height:17px;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:inherit}
+.sb-item .ico svg{color:inherit}
+.sb-item .cnt{margin-left:auto;background:#F4F4F5;color:#71717A;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:600}
+.sb-item.active .cnt{background:rgba(255,255,255,.15);color:#fff}
+.sb-item .dot{width:8px;height:8px;background:#10B981;border-radius:50%;margin-left:auto}
+.sb-ft{border-top:1px solid #E4E4E7;padding:12px}
+.sb-user{display:flex;align-items:center;gap:10px;width:100%;padding:8px;border-radius:8px;cursor:pointer;border:none;background:transparent;text-align:left;font-family:inherit}
+.sb-user:hover{background:#F4F4F5}
+.sb-user .av{width:32px;height:32px;background:#FDE68A;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:12px;color:#92400E;flex-shrink:0}
+.sb-user .nm{font-size:13px;font-weight:500;color:#18181B}
+.sb-user .em{font-size:11px;color:#A1A1AA}
+.sb-user .ch{color:#A1A1AA;margin-left:auto}
+.mn{margin-left:256px;flex:1;display:flex;flex-direction:column;min-height:100vh;width:calc(100% - 256px)}
+
+/* Topbar */
+.tb{display:flex;align-items:center;gap:12px;border-bottom:1px solid #E4E4E7;background:#fff;padding:14px 24px;position:sticky;top:0;z-index:40}
+.tb .sw{display:flex;flex:1;max-width:400px;align-items:center;gap:8px;border-radius:8px;border:1px solid #E4E4E7;background:#FAFAFA;padding:8px 12px;font-size:13px;color:#A1A1AA}
+.tb .sw input{flex:1;background:transparent;color:#3F3F46;outline:none;border:none;font-family:inherit;font-size:13px}
+.tb .sw input::placeholder{color:#A1A1AA}
+.tb .sw kbd{border-radius:6px;border:1px solid #E4E4E7;background:#fff;padding:2px 6px;font-size:11px;color:#A1A1AA;font-weight:500}
+.tb-act{display:flex;align-items:center;gap:8px;border-radius:8px;border:1px solid #E4E4E7;background:#FAFAFA;padding:4px;font-size:13px}
+.tb-act button{padding:4px 12px;border-radius:6px;font-weight:500;cursor:pointer;border:none;background:transparent;color:#71717A;font-family:inherit;transition:all .15s}
+.tb-act button:hover{color:#18181B}
+.tb-act button.on{background:#fff;color:#18181B;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.tb-bell{position:relative;border-radius:8px;border:1px solid #E4E4E7;padding:8px;color:#71717A;cursor:pointer;background:#fff}
+.tb-bell:hover{background:#FAFAFA}
+.tb-bell .d{position:absolute;right:5px;top:5px;width:6px;height:6px;background:#EF4444;border-radius:50%}
+.tb-btn{display:flex;align-items:center;gap:6px;border-radius:8px;border:1px solid #E4E4E7;padding:8px 12px;font-size:13px;font-weight:500;color:#3F3F46;cursor:pointer;background:#fff;font-family:inherit}
+.tb-btn:hover{background:#FAFAFA}
+.tb-quick{display:flex;align-items:center;gap:6px;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;color:#18181B;cursor:pointer;border:none;background:linear-gradient(180deg,#FCD34D,#F59E0B);font-family:inherit;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.tb-quick:hover{filter:brightness(1.05)}
+
+/* Content */
+.ctn{padding:24px;flex:1;max-width:1600px;margin:0 auto;width:100%}
+.ph{margin-bottom:24px}
+.ph h1{font-size:24px;font-weight:600;color:#18181B}
+.ph p{margin-top:4px;font-size:14px;color:#71717A}
+
+/* Stat Cards */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px}
+.sc{border-radius:12px;border:1px solid #E4E4E7;background:#fff;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.sc-top{display:flex;justify-content:space-between;align-items:flex-start}
+.sc-label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#A1A1AA}
+.sc-spark{display:flex;align-items:flex-end;gap:3px}
+.sc-spark .b{width:3px;border-radius:2px;background:#D4D4D8}
+.sc-value{font-size:24px;font-weight:600;color:#18181B;margin-top:8px}
+.sc-foot{display:flex;align-items:center;gap:6px;margin-top:12px;font-size:12px}
+.sc-foot .dt{width:6px;height:6px;border-radius:50%;border:1px solid #D4D4D8;flex-shrink:0}
+
+/* Charts Row */
+.cr{display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-bottom:24px}
+.cc{border-radius:12px;border:1px solid #E4E4E7;background:#fff;padding:20px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.cch{display:flex;justify-content:space-between;align-items:center}
+.cch h3{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#A1A1AA}
+.cch .mo{padding:4px;border-radius:50%;cursor:pointer;color:#A1A1AA}
+.cch .mo:hover{background:#F4F4F5}
+.cct{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:16px;margin-top:16px}
+.cct .rv{font-size:14px;color:#71717A}
+.cct .rvv{font-size:30px;font-weight:600;color:#18181B}
+.cct .tg{display:flex;gap:4px;border-radius:8px;border:1px solid #E4E4E7;background:#FAFAFA;padding:4px;font-size:13px}
+.cct .tg button{padding:4px 12px;border-radius:6px;border:none;background:transparent;font-weight:500;color:#71717A;cursor:pointer;font-family:inherit}
+.cct .tg button:hover{color:#18181B}
+.cct .tg button.on{background:#fff;color:#18181B;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.leg{display:flex;gap:16px;font-size:12px;color:#71717A;margin-top:8px}
+.leg span{display:flex;align-items:center;gap:6px}
+
+/* Live Ops */
+.live-h{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px}
+.live-hd{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.live-hd .p{width:8px;height:8px;background:#10B981;border-radius:50%;border:2px solid #A7F3D0;flex-shrink:0}
+.live-hd h3{font-size:16px;font-weight:600}
+.live-h .vm{font-size:13px;font-weight:500;cursor:pointer;background:none;border:none;color:#18181B;font-family:inherit}
+.live-h .vm:hover{text-decoration:underline}
+.live-sub{font-size:13px;color:#71717A;margin-bottom:16px}
+.live-item{border:1px solid #E4E4E7;border-radius:10px;padding:14px;background:#FAFAFA}
+.live-it{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px}
+.live-it .id{font-size:14px;font-weight:600}
+.live-it .st{font-size:10px;font-weight:700;padding:3px 8px;border-radius:999px;text-transform:uppercase;letter-spacing:.5px}
+.st-blue{background:#DBEAFE;color:#1D4ED8}
+.st-yellow{background:#FEF3C7;color:#B45309}
+.st-red{background:#FEE2E2;color:#DC2626}
+.st-purple{background:#EDE9FE;color:#7C3AED}
+.st-green{background:#D1FAE5;color:#059669}
+.live-im{display:flex;align-items:center;gap:6px;font-size:12px;color:#71717A;margin-bottom:8px}
+.live-ir{display:flex;align-items:center;justify-content:space-between;font-size:12px;color:#52525B}
+.live-ir .pin{color:#D4D4D8}
+
+/* Bottom Grid */
+.bg{display:grid;grid-template-columns:2fr 1fr;gap:16px}
+.tc{border-radius:12px;border:1px solid #E4E4E7;background:#fff;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.tch{padding:20px 24px 16px;border-bottom:1px solid #E4E4E7;display:flex;justify-content:space-between;align-items:center}
+.tch h3{font-size:16px;font-weight:600;margin-bottom:2px}
+.tch p{font-size:13px;color:#71717A}
+.tch .vb{padding:6px 16px;background:#FAFAFA;border:1px solid #E4E4E7;border-radius:8px;font-size:13px;font-weight:500;cursor:pointer;color:#3F3F46;font-family:inherit}
+.tch .vb:hover{background:#F4F4F5}
+.tw{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th{padding:10px 24px;text-align:left;font-size:11px;font-weight:600;color:#71717A;text-transform:uppercase;letter-spacing:.5px;background:#FAFAFA;border-bottom:1px solid #E4E4E7}
+td{padding:14px 24px;font-size:14px;border-bottom:1px solid #F4F4F5;color:#18181B}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#FAFAFA}
+
+/* Badges */
+.bdg{display:inline-flex;align-items:center;gap:4px;padding:2px 10px;border-radius:999px;font-size:11px;font-weight:600}
+.bdg-g{background:#D1FAE5;color:#065F46}
+.bdg-b{background:#DBEAFE;color:#1E40AF}
+.bdg-z{background:#F4F4F5;color:#374151}
+.bdg-p{background:#EDE9FE;color:#5B21B6}
+.bdg-r{background:#FEE2E2;color:#DC2626}
+.bdg-am{background:#FEF3C7;color:#92400E}
+.pay{font-size:10px;font-weight:700;text-transform:uppercase}
+.pay-pd{color:#10B981}
+.pay-pg{color:#F59E0B}
+.pay-up{color:#EF4444}
+
+/* Ai Card */
+.ai-c{border-radius:12px;border:1px solid #E4E4E7;background:#fff;padding:20px;display:flex;flex-direction:column;justify-content:space-between;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.ai-h{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.ai-h svg{color:#F59E0B}
+.ai-h h3{font-size:16px;font-weight:600}
+.ai-c>p{font-size:13px;color:#71717A;margin-bottom:24px}
+.ai-s{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;border-top:1px solid #E4E4E7;padding-top:20px;margin-top:auto}
+.ai-l{font-size:12px;color:#71717A;margin-bottom:2px}
+.ai-v{font-size:18px;font-weight:600}
+.ai-v.gr{color:#10B981}
+
+/* Order Page Styles */
+.osb{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;font-size:11px;font-weight:600;border:1px solid}
+.iav{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:500;font-size:12px;flex-shrink:0}
+.otab{padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;border:none;background:transparent;color:#71717A;font-family:inherit;transition:all .15s}
+.otab:hover{color:#18181B}
+.otab.on{background:#fff;color:#18181B;box-shadow:0 1px 2px rgba(0,0,0,.06);border:1px solid #E4E4E7}
+
+/* Toast */
+.toast{position:fixed;bottom:24px;right:24px;padding:12px 20px;background:#18181B;color:#fff;border-radius:10px;font-size:13px;z-index:999;animation:fi .3s ease-out;box-shadow:0 8px 24px rgba(0,0,0,.15)}
+@keyframes fi{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+
+/* Login */
+.ls{min-height:100vh;display:flex;align-items:center;justify-content:center;background:#F4F4F5}
+.lb{background:#fff;border-radius:16px;padding:40px;width:100%;max-width:400px;border:1px solid #E4E4E7}
+.ll{text-align:center;margin-bottom:32px}
+.ll .bx{width:48px;height:48px;background:#F59E0B;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:24px;margin:0 auto 12px}
+.ll h1{font-size:22px;font-weight:600}
+.ll p{font-size:14px;color:#71717A;margin-top:4px}
+.fd{margin-bottom:16px}
+.fd label{display:block;font-size:13px;font-weight:500;color:#3F3F46;margin-bottom:6px}
+.fd input{width:100%;padding:10px 14px;border:1px solid #E4E4E7;border-radius:8px;font-size:14px;outline:none;background:#FAFAFA;font-family:inherit}
+.fd input:focus{border-color:#F59E0B;box-shadow:0 0 0 3px rgba(245,158,11,.12)}
+.lbtn{width:100%;padding:11px;background:#F59E0B;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;font-family:inherit}
+.lbtn:hover{background:#D97706}
+.lbtn:disabled{opacity:.6;cursor:not-allowed}
+.lerr{display:none;padding:10px 14px;background:#FEE2E2;border:1px solid #FECACA;border-radius:8px;color:#DC2626;font-size:13px;margin-bottom:16px}
+
+@media(max-width:1024px){.stats{grid-template-columns:repeat(2,1fr)}.cr,.bg{grid-template-columns:1fr}}
+@media(max-width:768px){.stats{grid-template-columns:1fr}.mn{margin-left:0}.sb{display:none}}
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="loginScreen" class="ls">
+  <div class="lb">
+    <div class="ll">
+      <div class="bx">H</div>
+      <h1>Hook Admin</h1>
+      <p>Sign in to manage your marketplace</p>
+    </div>
+    <form id="loginForm">
+      <div id="loginError" class="lerr"></div>
+      <div class="fd">
+        <label>Email</label>
+        <input type="email" id="email" value="admin@hook.ng" required>
+      </div>
+      <div class="fd">
+        <label>Password</label>
+        <input type="password" id="password" value="admin123" required>
+      </div>
+      <button type="submit" id="loginBtn" class="lbtn">
+        <span id="loginBtnText">Sign In</span>
+        <span id="loginSpinner" class="hide spinner"></span>
+      </button>
+    </form>
+  </div>
+</div>
+
+<!-- DASHBOARD -->
+<div id="dashScreen" class="hide" style="display:flex;min-height:100vh">
+  <!-- SIDEBAR -->
+  <aside class="sb">
+    <div class="sb-logo"><div class="h">H</div><span>Hook</span></div>
+    <nav class="sb-nav">
+      <button class="sb-item active" data-view="dashboard"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="17" height="17"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg></span>Dashboard</button>
+      <button class="sb-item" data-view="orders"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="17" height="17"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg></span>Orders <span class="cnt">12</span></button>
+      <button class="sb-item" data-view="products"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="17" height="17"><path d="M16.5 9.4 7.55 4.24a1 1 0 0 0-1.1 0L4 5.5"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-5-3a2 2 0 0 0-2 0l-5 3A2 2 0 0 0 7 8v8a2 2 0 0 0 1 1.73l5 3a2 2 0 0 0 2 0l5-3A2 2 0 0 0 21 16z"/><path d="M3.29 6.96 12 12.01l8.71-5.05"/><path d="M12 22.08V12"/></svg></span>Products</button>
+      <button class="sb-item" data-view="vendors"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="17" height="17"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>Vendors</button>
+      <button class="sb-item" data-view="drivers"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="17" height="17"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg></span>Drivers <span class="dot"></span></button>
+      <button class="sb-item" data-view="field-agents"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="17" height="17"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>Field Agents</button>
+      <button class="sb-item" data-view="booths"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="17" height="17"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg></span>Booths</button>
+      <button class="sb-item" data-view="customers"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="17" height="17"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>Customers</button>
+      <button class="sb-item" data-view="financials"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="17" height="17"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span>Financials</button>
+      <button class="sb-item" data-view="ai"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="17" height="17"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span>AI Negotiation</button>
+      <button class="sb-item" data-view="reports"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="17" height="17"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span>Reports</button>
+      <button class="sb-item" data-view="settings"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="17" height="17"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>Settings</button>
+    </nav>
+    <div class="sb-ft">
+      <button class="sb-user" onclick="logout()">
+        <div class="av">AO</div>
+        <div><div class="nm" id="sideName">Admin Ops</div><div class="em" id="sideEmail">hook.africa</div></div>
+        <svg class="ch" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="mn">
+
+    <!-- Topbar -->
+    <header class="tb">
+      <div class="sw">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" placeholder="Search orders, vendors, customers...">
+        <kbd>&#8984;K</kbd>
+      </div>
+      <div class="tb-act">
+        <button class="on" onclick="setRange(this)">Today</button>
+        <button onclick="setRange(this)">7d</button>
+        <button onclick="setRange(this)">30d</button>
+      </div>
+      <button class="tb-bell"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="17" height="17"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><span class="d"></span></button>
+      <button class="tb-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export</button>
+      <button class="tb-quick"><svg viewBox="0 0 24 24" fill="currentColor" width="15" height="15"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>Quick Actions</button>
+    </header>
+
+    <div class="ctn">
+
+      <!-- ===== DASHBOARD VIEW ===== -->
+      <div id="v-dashboard">
+        <div class="ph"><h1>Overview</h1><p>Here's what's happening today.</p></div>
+
+        <!-- Stat Cards -->
+        <div class="stats" id="statCards"></div>
+
+        <!-- Charts Row -->
+        <div class="cr">
+          <div class="cc">
+            <div class="cch"><h3>Sales Trend</h3><div class="mo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg></div></div>
+            <div class="cct">
+              <div><div class="rv">Total Revenue</div><div class="rvv">$20,320</div></div>
+              <div><div class="tg"><button class="on">Weekly</button><button>Monthly</button><button>Yearly</button></div><div class="leg" style="justify-content:flex-end;margin-top:8px"><span><span style="width:8px;height:8px;border-radius:50%;background:#D4D4D8"></span>New User</span><span><span style="width:8px;height:8px;border-radius:50%;background:#3F3F46"></span>Existing User</span></div></div>
+            </div>
+            <div style="height:280px;margin-top:16px"><canvas id="salesChart"></canvas></div>
+          </div>
+          <div class="cc" style="display:flex;flex-direction:column">
+            <div class="live-h">
+              <div><div class="live-hd"><div class="p"></div><h3>Live Operations</h3></div><p class="live-sub">5 active deliveries right now</p></div>
+              <button class="vm">View Map</button>
+            </div>
+            <div id="liveList"></div>
+          </div>
+        </div>
+
+        <!-- Bottom Grid -->
+        <div class="bg">
+          <div class="tc">
+            <div class="tch"><div><h3>Recent Orders</h3><p>Latest transactions across the network</p></div><button class="vb" onclick="switchView('orders')">View All</button></div>
+            <div class="tw" id="recentOrdersWrap"></div>
+          </div>
+          <div class="ai-c">
+            <div><div class="ai-h"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg><h3>AI Negotiation Pipeline</h3></div><p>Success rate and discount volume</p><div style="height:200px"><canvas id="aiChart"></canvas></div></div>
+            <div class="ai-s"><div><div class="ai-l">Total Attempts</div><div class="ai-v" id="aiTotal">2,045</div></div><div><div class="ai-l">Success Rate</div><div class="ai-v gr" id="aiRate">64.3%</div></div><div><div class="ai-l">Avg Discount</div><div class="ai-v" id="aiDisc">14.2%</div></div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== ORDERS VIEW ===== -->
+      <div id="v-orders" class="hide">
+        <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:24px">
+          <div>
+            <h1 style="font-size:24px;font-weight:600">Orders</h1>
+            <p style="color:#71717A;font-size:14px;margin-top:4px">Manage and track all customer orders in real-time.</p>
+          </div>
+          <div style="display:flex;gap:12px">
+            <button class="tb-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export CSV</button>
+            <button class="tb-quick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>+ Create Order</button>
+          </div>
+        </div>
+        <div style="background:#fff;border-radius:12px;border:1px solid #E4E4E7;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.04)">
+          <!-- Controls -->
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px;border-bottom:1px solid #E4E4E7">
+            <div style="display:flex;gap:12px">
+              <input type="text" placeholder="Search by ID, customer..." style="padding:8px 14px;border:1px solid #E4E4E7;border-radius:8px;font-size:13px;width:240px;outline:none;background:#FAFAFA;font-family:inherit">
+              <button class="tb-btn" style="padding:7px 14px;font-size:13px">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+                Filters <span style="background:#F59E0B;color:#000;font-size:11px;padding:0 6px;border-radius:999px;font-weight:600">2</span>
+              </button>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;font-size:13px">
+              <span style="color:#71717A">Status:</span>
+              <button class="otab on" onclick="activateOrderTab(this)">All</button>
+              <button class="otab" onclick="activateOrderTab(this)">Active</button>
+              <button class="otab" onclick="activateOrderTab(this)">Completed</button>
+            </div>
+          </div>
+          <!-- Table -->
+          <div class="tw"><div id="ordersTableBody" style="min-width:900px"></div></div>
+          <!-- Pagination -->
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 20px;border-top:1px solid #E4E4E7;font-size:13px;color:#71717A">
+            <span>Showing 1 to 12 of 2,492 results</span>
+            <div style="display:flex;align-items:center;gap:4px">
+              <button style="padding:6px 12px;border:1px solid #E4E4E7;border-radius:6px;background:#fff;cursor:pointer;font-family:inherit">Previous</button>
+              <button style="width:30px;height:30px;border-radius:6px;border:none;background:#18181B;color:#fff;font-weight:600;cursor:pointer;font-family:inherit">1</button>
+              <button style="width:30px;height:30px;border-radius:6px;border:none;background:transparent;cursor:pointer;font-family:inherit">2</button>
+              <button style="width:30px;height:30px;border-radius:6px;border:none;background:transparent;cursor:pointer;font-family:inherit">3</button>
+              <span style="padding:0 4px">...</span>
+              <button style="padding:6px 12px;border:1px solid #E4E4E7;border-radius:6px;background:#fff;cursor:pointer;font-family:inherit">Next</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== PLACEHOLDER VIEWS ===== -->
+      <!-- ===== PRODUCTS VIEW ===== -->
+      <div id="v-products" class="hide">
+        <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:32px">
+          <div>
+            <h1 style="font-size:24px;font-weight:600;color:#18181B">Products</h1>
+            <p style="color:#71717A;font-size:14px;margin-top:4px">Manage inventory, pricing, and AI negotiation targets.</p>
+          </div>
+          <div style="display:flex;gap:12px">
+            <button class="tb-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Import</button>
+            <button class="tb-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export</button>
+            <button class="tb-quick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>+ Add Product</button>
+          </div>
+        </div>
+
+        <!-- KPI Cards -->
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:32px">
+          <div class="sc">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start">
+              <div><p style="font-size:13px;font-weight:500;color:#71717A;margin-bottom:4px">Total Products</p><h3 style="font-size:24px;font-weight:700;color:#18181B">12,405</h3></div>
+              <div style="width:40px;height:40px;border-radius:12px;background:#FFF8E1;display:flex;align-items:center;justify-content:center;color:#F59E0B"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M16.5 9.4 7.55 4.24a1 1 0 0 0-1.1 0L4 5.5"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-5-3a2 2 0 0 0-2 0l-5 3A2 2 0 0 0 7 8v8a2 2 0 0 0 1 1.73l5 3a2 2 0 0 0 2 0l5-3A2 2 0 0 0 21 16z"/><path d="M3.29 6.96 12 12.01l8.71-5.05"/><path d="M12 22.08V12"/></svg></div>
+            </div>
+            <p style="font-size:13px;color:#71717A;margin-top:16px">+45 this week</p>
+          </div>
+          <div class="sc">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start">
+              <div><p style="font-size:13px;font-weight:500;color:#71717A;margin-bottom:4px">Active Categories</p><h3 style="font-size:24px;font-weight:700;color:#18181B">32</h3></div>
+              <div style="width:40px;height:40px;border-radius:12px;background:#EFF6FF;display:flex;align-items:center;justify-content:center;color:#3B82F6"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg></div>
+            </div>
+            <p style="font-size:13px;color:#71717A;margin-top:16px">Across 8 departments</p>
+          </div>
+          <div class="sc">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start">
+              <div><p style="font-size:13px;font-weight:500;color:#71717A;margin-bottom:4px">Low Stock Alerts</p><h3 style="font-size:24px;font-weight:700;color:#18181B">184</h3></div>
+              <div style="width:40px;height:40px;border-radius:12px;background:#FFFBEB;display:flex;align-items:center;justify-content:center;color:#F59E0B"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></div>
+            </div>
+            <p style="font-size:13px;color:#71717A;margin-top:16px">Needs attention</p>
+          </div>
+          <div class="sc">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start">
+              <div><p style="font-size:13px;font-weight:500;color:#71717A;margin-bottom:4px">Top Vendors</p><h3 style="font-size:24px;font-weight:700;color:#18181B">145</h3></div>
+              <div style="width:40px;height:40px;border-radius:12px;background:#ECFDF5;display:flex;align-items:center;justify-content:center;color:#10B981"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
+            </div>
+            <p style="font-size:13px;color:#71717A;margin-top:16px">Supplying 80% volume</p>
+          </div>
+        </div>
+
+        <!-- Table -->
+        <div style="background:#fff;border-radius:12px;border:1px solid #E4E4E7;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.04)">
+          <!-- Controls -->
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px;border-bottom:1px solid #E4E4E7">
+            <div style="display:flex;gap:12px">
+              <input type="text" placeholder="Search products, SKUs..." style="width:300px;padding:8px 14px;border:1px solid #E4E4E7;border-radius:8px;font-size:13px;outline:none;background:#FAFAFA;font-family:inherit">
+              <button class="tb-btn" style="padding:7px 14px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>Categories <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" style="margin-left:4px;color:#A1A1AA"><polyline points="6 9 12 15 18 9"/></svg></button>
+              <button class="tb-btn" style="padding:7px 14px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Vendors <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" style="margin-left:4px;color:#A1A1AA"><polyline points="6 9 12 15 18 9"/></svg></button>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px">
+              <span style="font-size:13px;color:#71717A">View:</span>
+              <div style="display:flex;padding:3px;border:1px solid #E4E4E7;border-radius:8px;background:#FAFAFA">
+                <button class="pViewTab on" onclick="switchProdView(this,'all')" style="padding:5px 14px;border-radius:6px;border:none;cursor:pointer;font-size:13px;font-weight:500;font-family:inherit;background:#fff;color:#18181B;box-shadow:0 1px 2px rgba(0,0,0,.06)">All</button>
+                <button class="pViewTab" onclick="switchProdView(this,'low')" style="display:flex;align-items:center;gap:6px;padding:5px 14px;border-radius:6px;border:none;cursor:pointer;font-size:13px;font-weight:500;font-family:inherit;background:transparent;color:#71717A"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="color:#F59E0B"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>Low Stock</button>
+              </div>
+            </div>
+          </div>
+          <!-- Table Body -->
+          <div class="tw" id="productsTableBody" style="min-width:900px"></div>
+          <!-- Pagination -->
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 20px;border-top:1px solid #E4E4E7;font-size:13px;color:#71717A">
+            <span>Showing 1 to 5 of 12,405 products</span>
+            <div style="display:flex;align-items:center;gap:4px">
+              <button style="padding:6px 12px;border:1px solid #E4E4E7;border-radius:6px;background:#fff;cursor:pointer;font-family:inherit;color:#A1A1AA">Previous</button>
+              <button style="width:30px;height:30px;border-radius:6px;border:none;background:#18181B;color:#fff;font-weight:600;cursor:pointer;font-family:inherit">1</button>
+              <button style="width:30px;height:30px;border-radius:6px;border:none;background:transparent;cursor:pointer;font-family:inherit;color:#3F3F46">2</button>
+              <button style="width:30px;height:30px;border-radius:6px;border:none;background:transparent;cursor:pointer;font-family:inherit;color:#3F3F46">3</button>
+              <span style="padding:0 4px;color:#A1A1AA">...</span>
+              <button style="padding:6px 12px;border:1px solid #E4E4E7;border-radius:6px;background:#fff;cursor:pointer;font-family:inherit;color:#3F3F46">Next</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- ===== VENDORS VIEW ===== -->
+      <div id="v-vendors" class="hide">
+        <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:32px">
+          <div>
+            <h1 style="font-size:24px;font-weight:600;color:#18181B">Vendor Ecosystem</h1>
+            <p style="color:#71717A;font-size:14px;margin-top:4px">Monitor partner performance, compliance, and revenue generation.</p>
+          </div>
+          <div style="display:flex;gap:12px">
+            <button class="tb-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export Data</button>
+            <button style="display:flex;align-items:center;gap:8px;padding:8px 16px;background:#18181B;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>+ Onboard Vendor</button>
+          </div>
+        </div>
+
+        <!-- KPI Cards -->
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:32px">
+          <div class="sc">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start">
+              <div><p style="font-size:13px;font-weight:500;color:#71717A;margin-bottom:4px">Total Active Vendors</p><h3 style="font-size:24px;font-weight:700;color:#18181B">1,245</h3></div>
+              <div style="width:40px;height:40px;border-radius:12px;background:#FFF8E1;display:flex;align-items:center;justify-content:center;color:#F59E0B"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
+            </div>
+            <p style="font-size:13px;color:#71717A;margin-top:16px">+12 this month</p>
+          </div>
+          <div class="sc">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start">
+              <div><p style="font-size:13px;font-weight:500;color:#71717A;margin-bottom:4px">Network GMV</p><h3 style="font-size:24px;font-weight:700;color:#18181B">$4.2M</h3></div>
+              <div style="width:40px;height:40px;border-radius:12px;background:#ECFDF5;display:flex;align-items:center;justify-content:center;color:#10B981"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg></div>
+            </div>
+            <p style="font-size:13px;color:#71717A;margin-top:16px">+14.2% vs last month</p>
+          </div>
+          <div class="sc">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start">
+              <div><p style="font-size:13px;font-weight:500;color:#71717A;margin-bottom:4px">Avg Fulfillment Rate</p><h3 style="font-size:24px;font-weight:700;color:#18181B">97.8%</h3></div>
+              <div style="width:40px;height:40px;border-radius:12px;background:#EFF6FF;display:flex;align-items:center;justify-content:center;color:#3B82F6"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M16.5 9.4 7.55 4.24a1 1 0 0 0-1.1 0L4 5.5"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-5-3a2 2 0 0 0-2 0l-5 3A2 2 0 0 0 7 8v8a2 2 0 0 0 1 1.73l5 3a2 2 0 0 0 2 0l5-3A2 2 0 0 0 21 16z"/><path d="M3.29 6.96 12 12.01l8.71-5.05"/><path d="M12 22.08V12"/></svg></div>
+            </div>
+            <p style="font-size:13px;color:#71717A;margin-top:16px">+0.5% vs last month</p>
+          </div>
+          <div class="sc">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start">
+              <div><p style="font-size:13px;font-weight:500;color:#71717A;margin-bottom:4px">Platinum Partners</p><h3 style="font-size:24px;font-weight:700;color:#18181B">184</h3></div>
+              <div style="width:40px;height:40px;border-radius:12px;background:#F5F3FF;display:flex;align-items:center;justify-content:center;color:#7C3AED"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
+            </div>
+            <p style="font-size:13px;color:#71717A;margin-top:16px">Generating 65% revenue</p>
+          </div>
+        </div>
+
+        <!-- Table -->
+        <div style="background:#fff;border-radius:12px;border:1px solid #E4E4E7;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.04)">
+          <!-- Controls -->
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px;border-bottom:1px solid #E4E4E7">
+            <div style="display:flex;gap:12px">
+              <input type="text" placeholder="Search vendors by name, ID, or location..." style="width:320px;padding:8px 14px;border:1px solid #E4E4E7;border-radius:8px;font-size:13px;outline:none;background:#FAFAFA;font-family:inherit">
+              <button class="tb-btn" style="padding:7px 14px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>Location <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" style="margin-left:4px;color:#A1A1AA"><polyline points="6 9 12 15 18 9"/></svg></button>
+              <button class="tb-btn" style="padding:7px 14px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>Tier <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" style="margin-left:4px;color:#A1A1AA"><polyline points="6 9 12 15 18 9"/></svg></button>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px">
+              <span style="font-size:13px;color:#71717A">Status:</span>
+              <div style="display:flex;padding:3px;border:1px solid #E4E4E7;border-radius:8px;background:#FAFAFA">
+                <button class="vStatusTab on" onclick="switchVendorStatus(this,'all')" style="padding:5px 14px;border-radius:6px;border:none;cursor:pointer;font-size:13px;font-weight:500;font-family:inherit;background:#fff;color:#18181B;box-shadow:0 1px 2px rgba(0,0,0,.06)">All</button>
+                <button class="vStatusTab" onclick="switchVendorStatus(this,'active')" style="padding:5px 14px;border-radius:6px;border:none;cursor:pointer;font-size:13px;font-weight:500;font-family:inherit;background:transparent;color:#71717A">Active</button>
+                <button class="vStatusTab" onclick="switchVendorStatus(this,'warning')" style="padding:5px 14px;border-radius:6px;border:none;cursor:pointer;font-size:13px;font-weight:500;font-family:inherit;background:transparent;color:#71717A">Warning</button>
+              </div>
+            </div>
+          </div>
+          <!-- Table Body -->
+          <div class="tw" id="vendorsTableBody" style="min-width:900px"></div>
+          <!-- Pagination -->
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 20px;border-top:1px solid #E4E4E7;font-size:13px;color:#71717A">
+            <span>Showing 1 to 6 of 1,245 vendors</span>
+            <div style="display:flex;align-items:center;gap:4px">
+              <button style="padding:6px 12px;border:1px solid #E4E4E7;border-radius:6px;background:#fff;cursor:pointer;font-family:inherit;color:#A1A1AA">Previous</button>
+              <button style="width:30px;height:30px;border-radius:6px;border:none;background:#18181B;color:#fff;font-weight:600;cursor:pointer;font-family:inherit">1</button>
+              <button style="width:30px;height:30px;border-radius:6px;border:none;background:transparent;cursor:pointer;font-family:inherit;color:#3F3F46">2</button>
+              <button style="width:30px;height:30px;border-radius:6px;border:none;background:transparent;cursor:pointer;font-family:inherit;color:#3F3F46">3</button>
+              <span style="padding:0 4px;color:#A1A1AA">...</span>
+              <button style="padding:6px 12px;border:1px solid #E4E4E7;border-radius:6px;background:#fff;cursor:pointer;font-family:inherit;color:#3F3F46">Next</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- ===== DRIVERS VIEW ===== -->
+      <div id="v-drivers" class="hide">
+        <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:24px">
+          <div>
+            <h1 style="font-size:24px;font-weight:600;color:#18181B">Live Dispatch & Routing</h1>
+            <p style="color:#71717A;font-size:14px;margin-top:4px">Monitor EV fleet, active orders, and route optimization in real-time.</p>
+          </div>
+          <div style="display:flex;gap:12px">
+            <div style="position:relative">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" style="position:absolute;left:12px;top:50%;transform:translateY(-50%);color:#A1A1AA"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input type="text" placeholder="Search driver, order, or hub..." style="width:280px;padding:8px 14px 8px 36px;border:1px solid #E4E4E7;border-radius:8px;font-size:13px;outline:none;background:#fff;font-family:inherit">
+            </div>
+            <button class="tb-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>Filters</button>
+          </div>
+        </div>
+
+        <!-- KPI Cards -->
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px">
+          <div class="sc" style="display:flex;align-items:center;gap:16px;padding:20px">
+            <div style="width:48px;height:48px;border-radius:12px;background:#ECFDF5;display:flex;align-items:center;justify-content:center;color:#10B981;flex-shrink:0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="24" height="24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>
+            <div><div style="display:flex;align-items:flex-end;gap:8px;margin-bottom:2px"><span style="font-size:24px;font-weight:700;color:#18181B;line-height:1">142</span><span style="font-size:13px;font-weight:500;color:#10B981">+12</span></div><p style="font-size:13px;color:#71717A">Active EVs</p></div>
+          </div>
+          <div class="sc" style="display:flex;align-items:center;gap:16px;padding:20px">
+            <div style="width:48px;height:48px;border-radius:12px;background:#FFF8E1;display:flex;align-items:center;justify-content:center;color:#F59E0B;flex-shrink:0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="24" height="24"><path d="M16.5 9.4 7.55 4.24a1 1 0 0 0-1.1 0L4 5.5"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-5-3a2 2 0 0 0-2 0l-5 3A2 2 0 0 0 7 8v8a2 2 0 0 0 1 1.73l5 3a2 2 0 0 0 2 0l5-3A2 2 0 0 0 21 16z"/><path d="M3.29 6.96 12 12.01l8.71-5.05"/><path d="M12 22.08V12"/></svg></div>
+            <div><div style="display:flex;align-items:flex-end;gap:8px;margin-bottom:2px"><span style="font-size:24px;font-weight:700;color:#18181B;line-height:1">86</span><span style="font-size:13px;font-weight:500;color:#10B981">+5</span></div><p style="font-size:13px;color:#71717A">On Delivery</p></div>
+          </div>
+          <div class="sc" style="display:flex;align-items:center;gap:16px;padding:20px">
+            <div style="width:48px;height:48px;border-radius:12px;background:#EFF6FF;display:flex;align-items:center;justify-content:center;color:#3B82F6;flex-shrink:0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="24" height="24"><rect x="1" y="6" width="18" height="12" rx="2"/><line x1="23" y1="12" x2="19" y2="12"/></svg></div>
+            <div><div style="display:flex;align-items:flex-end;gap:8px;margin-bottom:2px"><span style="font-size:24px;font-weight:700;color:#18181B;line-height:1">56</span><span style="font-size:13px;font-weight:500;color:#EF4444">-2</span></div><p style="font-size:13px;color:#71717A">Idle / Charging</p></div>
+          </div>
+          <div class="sc" style="display:flex;align-items:center;gap:16px;padding:20px">
+            <div style="width:48px;height:48px;border-radius:12px;background:#FEF2F2;display:flex;align-items:center;justify-content:center;color:#EF4444;flex-shrink:0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="24" height="24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
+            <div><div style="display:flex;align-items:flex-end;gap:8px;margin-bottom:2px"><span style="font-size:24px;font-weight:700;color:#18181B;line-height:1">2</span><span style="font-size:13px;font-weight:500;color:#EF4444">-1</span></div><p style="font-size:13px;color:#71717A">Incidents</p></div>
+          </div>
+        </div>
+
+        <!-- Main Layout: Driver List + Map -->
+        <div style="display:flex;gap:24px;min-height:600px">
+          <!-- Left: Driver List -->
+          <div style="width:320px;background:#fff;border-radius:12px;border:1px solid #E4E4E7;display:flex;flex-direction:column;flex-shrink:0;box-shadow:0 1px 2px rgba(0,0,0,.04)">
+            <div style="padding:16px;border-bottom:1px solid #E4E4E7">
+              <div style="display:flex;padding:4px;background:#FAFAFA;border-radius:8px">
+                <button class="dTab on" onclick="switchDriverTab(this,'all')" style="flex:1;padding:6px;border-radius:6px;border:none;cursor:pointer;font-size:13px;font-weight:500;font-family:inherit;background:#fff;color:#18181B;box-shadow:0 1px 2px rgba(0,0,0,.06)">All Fleet</button>
+                <button class="dTab" onclick="switchDriverTab(this,'active')" style="flex:1;padding:6px;border-radius:6px;border:none;cursor:pointer;font-size:13px;font-weight:500;font-family:inherit;background:transparent;color:#71717A">Active</button>
+                <button class="dTab" onclick="switchDriverTab(this,'idle')" style="flex:1;padding:6px;border-radius:6px;border:none;cursor:pointer;font-size:13px;font-weight:500;font-family:inherit;background:transparent;color:#71717A">Idle</button>
+              </div>
+            </div>
+            <div style="flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px" id="driverList"></div>
+          </div>
+
+          <!-- Right: Live Map Area -->
+          <div style="flex:1;position:relative;border-radius:12px;overflow:hidden;border:1px solid #E4E4E7;background:#E4E4E5">
+            <div id="liveMap" style="position:absolute;inset:0;width:100%;height:100%"></div>
+
+            <!-- Top Banner -->
+            <div style="position:absolute;top:24px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:8px;background:#3B82F6;color:#fff;padding:10px 20px;border-radius:999px;box-shadow:0 4px 12px rgba(0,0,0,.15);font-size:13px;font-weight:500;z-index:10">
+              <div style="width:8px;height:8px;background:#fff;border-radius:50%"></div>
+              Rerouting DRV-1030 to Balogun Market via Third Mainland...
+            </div>
+
+            <!-- Controls -->
+            <div style="position:absolute;top:24px;right:24px;display:flex;flex-direction:column;gap:8px;z-index:10">
+              <button style="width:40px;height:40px;background:#fff;border-radius:12px;border:none;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.1);display:flex;align-items:center;justify-content:center;color:#52525B"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg></button>
+              <button style="width:40px;height:40px;background:#fff;border-radius:12px;border:none;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.1);display:flex;align-items:center;justify-content:center;color:#52525B"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><polygon points="3 11 22 2 13 21 11 13 3 11"/></svg></button>
+            </div>
+
+            <!-- Map Markers -->
+            <div style="position:absolute;top:40%;right:30%;width:32px;height:32px;border-radius:50%;border:2px solid #fff;background:#10B981;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.15);z-index:10"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="color:#fff"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>
+            <div style="position:absolute;top:35%;right:45%;width:32px;height:32px;border-radius:50%;border:2px solid #fff;background:#F59E0B;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.15);z-index:10"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="color:#fff"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>
+            <div style="position:absolute;bottom:25%;right:20%;width:32px;height:32px;border-radius:50%;border:2px solid #fff;background:#F59E0B;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.15);z-index:10"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="color:#fff"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>
+            <div style="position:absolute;top:60%;left:30%;width:40px;height:40px;border-radius:50%;border:2px solid #fff;background:#3B82F6;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 12px rgba(0,0,0,.2);z-index:10;box-shadow:0 0 0 8px rgba(59,130,246,.2)"><svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" width="18" height="18" style="color:#fff"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>
+
+            <!-- Driver Detail Card -->
+            <div style="position:absolute;bottom:24px;left:24px;background:#fff;border-radius:16px;padding:20px;box-shadow:0 8px 32px rgba(0,0,0,.15);width:280px;z-index:10;border:1px solid #E4E4E7">
+              <h3 style="font-weight:700;font-size:16px;color:#18181B;margin-bottom:2px">Amina Mohammed</h3>
+              <p style="font-size:12px;color:#A1A1AA;margin-bottom:16px">DRV-1030</p>
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                <span style="font-size:13px;font-weight:600;color:#18181B">ORD-9924</span>
+                <span style="font-size:13px;font-weight:700;color:#F59E0B">5 mins</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:6px;font-size:13px;color:#71717A;margin-bottom:20px">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="color:#A1A1AA"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                Balogun Market
+              </div>
+              <button style="width:100%;padding:10px;background:#18181B;color:#fff;border:none;border-radius:10px;font-size:13px;font-weight:500;cursor:pointer;font-family:inherit">View Details</button>
+            </div>
+
+            <!-- Legend -->
+            <div style="position:absolute;bottom:24px;right:24px;background:#fff;border-radius:16px;padding:20px;box-shadow:0 8px 32px rgba(0,0,0,.15);z-index:10;border:1px solid #E4E4E7;min-width:170px">
+              <h4 style="font-size:11px;font-weight:700;color:#A1A1AA;text-transform:uppercase;letter-spacing:.5px;margin-bottom:16px">Legend</h4>
+              <div style="display:flex;flex-direction:column;gap:12px;font-size:13px;font-weight:500;color:#52525B">
+                <div style="display:flex;align-items:center;gap:12px"><div style="width:12px;height:12px;border-radius:50%;background:#F59E0B"></div>On Delivery</div>
+                <div style="display:flex;align-items:center;gap:12px"><div style="width:12px;height:12px;border-radius:50%;background:#3B82F6"></div>En Route to Market</div>
+                <div style="display:flex;align-items:center;gap:12px"><div style="width:12px;height:12px;border-radius:50%;background:#10B981"></div>Idle / Available</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="v-field-agents" class="hide ph"><h1>Field Agents</h1><p style="color:#71717A;margin-top:4px">Manage field agents in markets.</p></div>
+      <div id="v-booths" class="hide ph"><h1>Booths</h1><p style="color:#71717A;margin-top:4px">Manage phygital booth locations.</p></div>
+      <div id="v-customers" class="hide ph"><h1>Customers</h1><p style="color:#71717A;margin-top:4px">View all customer accounts.</p></div>
+      <div id="v-financials" class="hide ph"><h1>Financials</h1><p style="color:#71717A;margin-top:4px">Revenue, settlements, and payouts.</p></div>
+      <div id="v-ai" class="hide ph"><h1>AI Negotiation</h1><p style="color:#71717A;margin-top:4px">Monitor AI negotiation performance.</p></div>
+      <div id="v-reports" class="hide ph"><h1>Reports</h1><p style="color:#71717A;margin-top:4px">Analytics and exportable reports.</p></div>
+      <div id="v-settings" class="hide ph"><h1>Settings</h1><p style="color:#71717A;margin-top:4px">System configuration and preferences.</p></div>
+
+    </div>
+  </main>
+</div>
+
+<div id="toastBox"></div>
+
+<script>
+// ===== STATIC MOCK DATA =====
+const statData = [
+  {label:'Gross Merchandise',value:'$12.4M',delta:'+14.2%',trend:'up',caption:'vs last month',spark:[4,6,5,8,7,9,11]},
+  {label:'Total Revenue',value:'$1.86M',delta:'+12.5%',trend:'up',caption:'vs last month',spark:[5,5,7,6,8,9,10]},
+  {label:'Active Orders',value:'8,432',delta:'+5.1%',trend:'up',caption:'vs last day',spark:[6,7,6,8,8,9,9]},
+  {label:'Delivery SLA',value:'98.2%',delta:'+0.8%',trend:'up',caption:'avg 18m delivery',spark:[9,9,8,9,9,10,9]},
+  {label:'AI Negotiation Conv.',value:'64.3%',delta:'+8.4%',trend:'up',caption:'avg $4.20 saved',spark:[4,5,6,5,7,8,9]},
+  {label:'Customer Satisfaction',value:'4.8/5',delta:'0.0%',trend:'flat',caption:'from 12k reviews',spark:[8,8,8,9,8,8,9]},
+  {label:'Active Vendors',value:'1,245',delta:'+2.4%',trend:'up',caption:'across 8 cities',spark:[6,6,7,7,8,8,9]},
+  {label:'Active Drivers',value:'3,890',delta:'-1.2%',trend:'down',caption:'74% utilization',spark:[9,8,8,7,8,7,7]},
+];
+
+const salesData = [
+  {day:'Mon',newU:900,exU:1700},{day:'Tue',newU:300,exU:850},{day:'Wed',newU:3200,exU:6400},
+  {day:'Thu',newU:1100,exU:2500},{day:'Fri',newU:1500,exU:3300},{day:'Sat',newU:900,exU:2200},{day:'Sun',newU:1200,exU:2400}
+];
+const aiData = [{day:'Mon',v:400},{day:'Tue',v:280},{day:'Wed',v:170},{day:'Thu',v:290},{day:'Fri',v:160},{day:'Sat',v:210},{day:'Sun',v:330}];
+
+const liveOps = [
+  {id:'DEL-8492',driver:'Oluwaseun A.',eta:4,from:'Victoria Island',to:'Lekki Phase 1',status:'ON ROUTE',sClass:'st-blue'},
+  {id:'DEL-8493',driver:'Chinedu E.',eta:12,from:'Yaba',to:'Surulere',status:'PICKING UP',sClass:'st-yellow'},
+  {id:'DEL-8494',driver:'Amina M.',eta:25,from:'Ikeja',to:'Maryland',status:'DELAYED',sClass:'st-red'},
+  {id:'DEL-8495',driver:'Emmanuel O.',eta:8,from:'Ikoyi',to:'Victoria Island',status:'ON ROUTE',sClass:'st-blue'},
+  {id:'DEL-8496',driver:'Fatima S.',eta:15,from:'Gbagada',to:'Anthony',status:'QUALITY CHECK',sClass:'st-purple'},
+];
+
+const recentOrders = [
+  {id:'ORD-9938',item:"Air Force 1 '07",customer:'Folake O.',vendor:'Nike Store VI',status:'Delivered',sClass:'bdg-g',amount:'$110',payment:'PAID',payClass:'pay-pd'},
+  {id:'ORD-9939',item:'Linen Blend Shirt',customer:'Tunde B.',vendor:'Zara Lekki',status:'In Transit',sClass:'bdg-b',amount:'$45',payment:'PAID',payClass:'pay-pd'},
+  {id:'ORD-9940',item:'Pleated Midi Skirt',customer:'Ngozi A.',vendor:'ASOS Hub',status:'Processing',sClass:'bdg-z',amount:'$32',payment:'PENDING',payClass:'pay-pg'},
+  {id:'ORD-9941',item:'Apple Watch Ultra',customer:'Dayo K.',vendor:'Tech & Style',status:'Negotiating',sClass:'bdg-p',amount:'$750',payment:'UNPAID',payClass:'pay-up'},
+  {id:'ORD-9942',item:'Ultraboost 22',customer:'Zainab M.',vendor:'Adidas Ikeja',status:'Delivered',sClass:'bdg-g',amount:'$180',payment:'PAID',payClass:'pay-pd'},
+];
+
+const ordersPageData = [
+  {id:'ORD-9938',initials:'FO',customer:'Folake O.',product:"Air Force 1 '07",vendor:'Nike Store VI',status:'Delivered',sClass:'border-green-200 bg-green-50 text-green-700',icon:'<span class="w-1.5 h-1.5 rounded-full bg-green-500" style="display:inline-block"></span>',eta:'—',price:'$110',sub:''},
+  {id:'ORD-9939',initials:'TB',customer:'Tunde B.',product:'Linen Blend Shirt',vendor:'Zara Lekki',status:'In Transit',sClass:'border-blue-200 bg-blue-50 text-blue-700',icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="10" height="10"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/></svg>',eta:'14 mins',price:'$45',sub:''},
+  {id:'ORD-9940',initials:'NA',customer:'Ngozi A.',product:'Pleated Midi Skirt',vendor:'ASOS Hub',status:'Processing',sClass:'border-gray-200 bg-gray-50 text-gray-700',icon:'<span class="w-1.5 h-1.5 rounded-full bg-gray-400" style="display:inline-block"></span>',eta:'25 mins',price:'$32',sub:''},
+  {id:'ORD-9941',initials:'DK',customer:'Dayo K.',product:'Apple Watch Ultra',vendor:'Tech & Style',status:'Negotiating',sClass:'border-purple-200 bg-purple-50 text-purple-700',icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="10" height="10"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>',eta:'—',price:'$750',sub:'Target: $740'},
+  {id:'ORD-9942',initials:'ZM',customer:'Zainab M.',product:'Ultraboost 22',vendor:'Adidas Ikeja',status:'Delivered',sClass:'border-green-200 bg-green-50 text-green-700',icon:'<span class="w-1.5 h-1.5 rounded-full bg-green-500" style="display:inline-block"></span>',eta:'—',price:'$180',sub:''},
+  {id:'ORD-9943',initials:'SJ',customer:'Samuel J.',product:'Air Max 97',vendor:'Nike Hub VI',status:'In Transit',sClass:'border-blue-200 bg-blue-50 text-blue-700',icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="10" height="10"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/></svg>',eta:'5 mins',price:'$150',sub:''},
+  {id:'ORD-9944',initials:'LO',customer:'Linda O.',product:'Basic Cotton Tee',vendor:'Zara Express',status:'Processing',sClass:'border-gray-200 bg-gray-50 text-gray-700',icon:'<span class="w-1.5 h-1.5 rounded-full bg-gray-400" style="display:inline-block"></span>',eta:'45 mins',price:'$25',sub:''},
+  {id:'ORD-9945',initials:'KD',customer:'Kwame D.',product:'Sony WH-1000XM5',vendor:'TechStyle Boutique',status:'Quality Check',sClass:'border-gray-200 bg-gray-50 text-gray-700',icon:'<span class="w-1.5 h-1.5 rounded-full bg-gray-500" style="display:inline-block"></span>',eta:'15 mins',price:'$350',sub:''},
+  {id:'ORD-9946',initials:'CA',customer:'Chika A.',product:'Stan Smith',vendor:'Adidas Ikeja',status:'Negotiating',sClass:'border-purple-200 bg-purple-50 text-purple-700',icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="10" height="10"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>',eta:'—',price:'$90',sub:'Target: $80'},
+  {id:'ORD-9947',initials:'BS',customer:'Binta S.',product:'Oversized Blazer',vendor:'ASOS Hub',status:'Delivered',sClass:'border-green-200 bg-green-50 text-green-700',icon:'<span class="w-1.5 h-1.5 rounded-full bg-green-500" style="display:inline-block"></span>',eta:'—',price:'$85',sub:''},
+  {id:'ORD-9948',initials:'FR',customer:'Femi R.',product:'Dunk Low',vendor:'Nike Store VI',status:'Delayed',sClass:'border-red-200 bg-red-50 text-red-700',icon:'<span class="w-1.5 h-1.5 rounded-full bg-red-500" style="display:inline-block"></span>',eta:'60 mins',price:'$120',sub:'',etaColor:'color:#DC2626'},
+  {id:'ORD-9949',initials:'GT',customer:'Grace T.',product:'Mom Jeans',vendor:'Zara Lekki',status:'In Transit',sClass:'border-blue-200 bg-blue-50 text-blue-700',icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="10" height="10"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/></svg>',eta:'12 mins',price:'$60',sub:''},
+];
+
+let salesChart = null, aiChart = null;
+
+// ===== LOGIN =====
+document.getElementById('loginForm').addEventListener('submit', async function(e) {
+  e.preventDefault();
+  const email = document.getElementById('email').value.trim();
+  const pass = document.getElementById('password').value;
+  const err = document.getElementById('loginError');
+  const btn = document.getElementById('loginBtn');
+  err.style.display = 'none'; btn.disabled = true;
+  document.getElementById('loginBtnText').textContent = 'Signing in...';
+  document.getElementById('loginSpinner').classList.remove('hide');
+  try {
+    const res = await fetch('/api/v1/auth/login', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({email,password:pass})
+    });
+    const d = await res.json();
+    if (!d.success || !d.data) {
+      err.textContent = d.message || 'Invalid email or password';
+      err.style.display = 'block'; btn.disabled = false;
+      document.getElementById('loginBtnText').textContent = 'Sign In';
+      document.getElementById('loginSpinner').classList.add('hide'); return;
+    }
+    localStorage.setItem('hook_token', d.data.accessToken);
+    localStorage.setItem('hook_user', JSON.stringify(d.data.user));
+    go();
+  } catch(e) {
+    err.textContent = 'Cannot connect to server';
+    err.style.display = 'block'; btn.disabled = false;
+    document.getElementById('loginBtnText').textContent = 'Sign In';
+    document.getElementById('loginSpinner').classList.add('hide');
+  }
+});
+
+// ===== PRODUCTS MOCK DATA =====
+const productsData = [
+  {id:1,name:"Air Force 1 '07",sku:"NK-AF1-07-WHT • Footwear",vendor:"Nike Store VI",stock:45,stockText:"45 in stock",stockBar:"bg-emerald-500",stockW:"40%",stockTextCol:"color:#18181B",price:"$110.00",sold:"1,240 sold",ai:"Enabled",floor:"Floor: $95.00",aiColor:"color:#7C3AED",status:"Active",statusBadge:"#059669",statusBg:"#D1FAE5",statusBorder:"A7F3D0",img:"https://images.unsplash.com/photo-1600185365483-26d7a4cc7519?auto=format&fit=crop&w=100&q=80"},
+  {id:2,name:"Classic Denim Jeans",sku:"ZR-DNM-BLU-32 • Apparel",vendor:"Zara Lekki",stock:8,stockText:"8 in stock",stockBar:"bg-amber-500",stockW:"15%",stockTextCol:"color:#D97706",price:"$65.00",sold:"850 sold",ai:"Disabled",floor:"",aiColor:"color:#A1A1AA",status:"Low Stock",statusBadge:"#D97706",statusBg:"#FFFBEB",statusBorder:"FDE68A",img:"https://images.unsplash.com/photo-1542272604-787c3835535d?auto=format&fit=crop&w=100&q=80"},
+  {id:3,name:"Chronograph Watch",sku:"TS-WTC-GLD-01 • Accessories",vendor:"TechStyle Boutique",stock:120,stockText:"120 in stock",stockBar:"bg-emerald-500",stockW:"85%",stockTextCol:"color:#18181B",price:"$250.00",sold:"320 sold",ai:"Enabled",floor:"Floor: $210.00",aiColor:"color:#7C3AED",status:"Active",statusBadge:"#059669",statusBg:"#D1FAE5",statusBorder:"A7F3D0",img:"https://images.unsplash.com/photo-1524592094714-0f0654e20314?auto=format&fit=crop&w=100&q=80"},
+  {id:4,name:"Oversized Street Hoodie",sku:"AS-HD-BLK-L • Apparel",vendor:"ASOS Hub",stock:0,stockText:"0 in stock",stockBar:"bg-red-500",stockW:"0%",stockTextCol:"color:#EF4444",price:"$55.00",sold:"640 sold",ai:"Enabled",floor:"Floor: $45.00",aiColor:"color:#7C3AED",status:"Out of Stock",statusBadge:"#DC2626",statusBg:"#FEE2E2",statusBorder:"FECACA",img:"https://images.unsplash.com/photo-1556821840-3a63f95609a7?auto=format&fit=crop&w=100&q=80"},
+  {id:5,name:"Essential Cotton T-Shirt",sku:"ZR-TEE-WHT-M • Apparel",vendor:"Zara Express",stock:215,stockText:"215 in stock",stockBar:"bg-emerald-500",stockW:"95%",stockTextCol:"color:#18181B",price:"$25.00",sold:"2,100 sold",ai:"Disabled",floor:"",aiColor:"color:#A1A1AA",status:"Active",statusBadge:"#059669",statusBg:"#D1FAE5",statusBorder:"A7F3D0",img:"https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=100&q=80"},
+];
+
+function renderProductsTable() {
+  document.getElementById('productsTableBody').innerHTML = `<table style="min-width:900px">
+    <thead style="font-size:11px;color:#71717A;text-transform:uppercase;background:#FAFAFA;border-bottom:1px solid #E4E4E7">
+      <tr>
+        <th style="padding:14px 24px;font-weight:600">PRODUCT <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" style="display:inline;margin-left:4px;vertical-align:middle"><path d="M11 3 6 8h5v13h2V8h5L13 3z"/><path d="M11 21 6 16h5V3h2v13h5l-5 5z"/></svg></th>
+        <th style="padding:14px 24px;font-weight:600">VENDOR</th>
+        <th style="padding:14px 24px;font-weight:600">INVENTORY <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" style="display:inline;margin-left:4px;vertical-align:middle"><path d="M11 3 6 8h5v13h2V8h5L13 3z"/><path d="M11 21 6 16h5V3h2v13h5l-5 5z"/></svg></th>
+        <th style="padding:14px 24px;font-weight:600">PRICE <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" style="display:inline;margin-left:4px;vertical-align:middle"><path d="M11 3 6 8h5v13h2V8h5L13 3z"/><path d="M11 21 6 16h5V3h2v13h5l-5 5z"/></svg></th>
+        <th style="padding:14px 24px;font-weight:600">AI NEGOTIATION</th>
+        <th style="padding:14px 24px;font-weight:600">STATUS</th>
+      </tr>
+    </thead>
+    <tbody>${productsData.map(p => `
+      <tr style="border-bottom:1px solid #F4F4F5;background:#fff">
+        <td style="padding:16px 24px">
+          <div style="display:flex;align-items:center;gap:16px">
+            <img src="${p.img}" alt="${p.name}" style="width:40px;height:40px;border-radius:8px;object-fit:cover;background:#F4F4F5;border:1px solid #E4E4E7;flex-shrink:0" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22><rect fill=%22%23F4F4F5%22 width=%2240%22 height=%2240%22/></svg>'">
+            <div><div style="font-weight:600;color:#18181B">${p.name}</div><div style="font-size:12px;color:#A1A1AA;margin-top:2px">${p.sku}</div></div>
+          </div>
+        </td>
+        <td style="padding:16px 24px;font-weight:500;color:#3F3F46">${p.vendor}</td>
+        <td style="padding:16px 24px;width:180px">
+          <div style="font-size:13px;font-weight:500;margin-bottom:6px;${p.stockTextCol}">${p.stockText}</div>
+          <div style="height:6px;width:100%;background:#F4F4F5;border-radius:999px;overflow:hidden">
+            <div style="height:100%;border-radius:999px;${p.stockBar};width:${p.stockW}"></div>
+          </div>
+        </td>
+        <td style="padding:16px 24px"><div style="font-weight:600;color:#18181B">${p.price}</div><div style="font-size:12px;color:#A1A1AA;margin-top:2px">${p.sold}</div></td>
+        <td style="padding:16px 24px">
+          <div style="display:flex;align-items:flex-start;gap:8px">
+            <div style="margin-top:2px;padding:4px;border-radius:6px;${p.ai==='Enabled'?'background:#F5F3FF;color:#7C3AED':'background:#F4F4F5;color:#A1A1AA'}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></div>
+            <div><div style="font-size:13px;font-weight:500;${p.aiColor}">${p.ai}</div>${p.floor ? '<div style="font-size:11px;color:#A1A1AA;margin-top:2px">'+p.floor+'</div>' : ''}</div>
+          </div>
+        </td>
+        <td style="padding:16px 24px"><span style="display:inline-flex;padding:4px 10px;border-radius:999px;font-size:11px;font-weight:600;border:1px solid ${p.statusBorder};background:${p.statusBg};color:${p.statusBadge}">${p.status}</span></td>
+      </tr>
+    `).join('')}</tbody></table>`;
+}
+
+function switchProdView(btn) {
+  document.querySelectorAll('.pViewTab').forEach(b => {
+    b.style.background = 'transparent';
+    b.style.color = '#71717A';
+    b.style.boxShadow = 'none';
+  });
+  btn.style.background = '#fff';
+  btn.style.color = '#18181B';
+  btn.style.boxShadow = '0 1px 2px rgba(0,0,0,.06)';
+}
+
+// ===== VENDORS MOCK DATA =====
+const vendorsData = [
+  {id:"VND-001",name:"Nike Hub VI",joined:"Joined Jan 2023",location:"Victoria Island, Lagos",revenue:"$145,200",rating:"4.9",fulfillment:"99.2%",fColor:"bg-emerald-500",fTextCol:"color:#059669",products:"450 active products",status:"Active",sBg:"#D1FAE5",sColor:"#059669",sBorder:"A7F3D0",tier:"PLATINUM",tBg:"#18181B",tColor:"#fff",img:"https://images.unsplash.com/photo-1552346154-21d32810baa3?auto=format&fit=crop&w=100&q=80"},
+  {id:"VND-002",name:"Zara Express",joined:"Joined Mar 2023",location:"Lekki Phase 1",revenue:"$98,500",rating:"4.7",fulfillment:"97.5%",fColor:"bg-amber-500",fTextCol:"color:#D97706",products:"1,200 active products",status:"Active",sBg:"#D1FAE5",sColor:"#059669",sBorder:"A7F3D0",tier:"GOLD",tBg:"#FEF3C7",tColor:"#92400E",img:"https://images.unsplash.com/photo-1441984904996-e0b6ba687e04?auto=format&fit=crop&w=100&q=80"},
+  {id:"VND-003",name:"TechStyle Boutique",joined:"Joined Jun 2023",location:"Yaba",revenue:"$84,100",rating:"4.8",fulfillment:"98.8%",fColor:"bg-emerald-500",fTextCol:"color:#059669",products:"320 active products",status:"Active",sBg:"#D1FAE5",sColor:"#059669",sBorder:"A7F3D0",tier:"GOLD",tBg:"#FEF3C7",tColor:"#92400E",img:"https://images.unsplash.com/photo-1555529771-835f59bfc50c?auto=format&fit=crop&w=100&q=80"},
+  {id:"VND-004",name:"Adidas Ikeja",joined:"Joined Aug 2023",location:"Ikeja City Mall",revenue:"$72,900",rating:"4.6",fulfillment:"96.4%",fColor:"bg-amber-500",fTextCol:"color:#D97706",products:"280 active products",status:"Warning",sBg:"#FFFBEB",sColor:"#D97706",sBorder:"FDE68A",tier:"SILVER",tBg:"#E4E4E7",tColor:"#3F3F46",img:"https://images.unsplash.com/photo-1608248543803-ba4f8c70ae0b?auto=format&fit=crop&w=100&q=80"},
+  {id:"VND-005",name:"ASOS Hub",joined:"Joined Feb 2023",location:"Surulere",revenue:"$112,400",rating:"4.9",fulfillment:"99.5%",fColor:"bg-emerald-500",fTextCol:"color:#059669",products:"850 active products",status:"Active",sBg:"#D1FAE5",sColor:"#059669",sBorder:"A7F3D0",tier:"PLATINUM",tBg:"#18181B",tColor:"#fff",img:"https://images.unsplash.com/photo-1567401893414-76b7b1e5a7a5?auto=format&fit=crop&w=100&q=80"},
+  {id:"VND-006",name:"Urban Streetwear",joined:"Joined Nov 2023",location:"Ikoyi",revenue:"$45,300",rating:"4.2",fulfillment:"92.1%",fColor:"bg-red-500",fTextCol:"color:#EF4444",products:"150 active products",status:"Under Review",sBg:"#FEE2E2",sColor:"#DC2626",sBorder:"FECACA",tier:"BRONZE",tBg:"#FFEDD5",tColor:"#9A3412",img:"https://images.unsplash.com/photo-1503342217505-b0a15ec3261c?auto=format&fit=crop&w=100&q=80"},
+];
+
+function renderVendorsTable() {
+  document.getElementById('vendorsTableBody').innerHTML = `<table style="min-width:900px">
+    <thead style="font-size:11px;color:#71717A;text-transform:uppercase;background:#FAFAFA;border-bottom:1px solid #E4E4E7">
+      <tr>
+        <th style="padding:14px 24px;font-weight:600">VENDOR <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" style="display:inline;margin-left:4px;vertical-align:middle"><path d="M11 3 6 8h5v13h2V8h5L13 3z"/><path d="M11 21 6 16h5V3h2v13h5l-5 5z"/></svg></th>
+        <th style="padding:14px 24px;font-weight:600">LOCATION</th>
+        <th style="padding:14px 24px;font-weight:600">PERFORMANCE <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" style="display:inline;margin-left:4px;vertical-align:middle"><path d="M11 3 6 8h5v13h2V8h5L13 3z"/><path d="M11 21 6 16h5V3h2v13h5l-5 5z"/></svg></th>
+        <th style="padding:14px 24px;font-weight:600">OPERATIONS</th>
+        <th style="padding:14px 24px;font-weight:600">STATUS & TIER</th>
+      </tr>
+    </thead>
+    <tbody>${vendorsData.map(v => `
+      <tr style="border-bottom:1px solid #F4F4F5;background:#fff">
+        <td style="padding:16px 24px">
+          <div style="display:flex;align-items:center;gap:16px">
+            <img src="${v.img}" alt="${v.name}" style="width:40px;height:40px;border-radius:8px;object-fit:cover;background:#F4F4F5;border:1px solid #E4E4E7;flex-shrink:0">
+            <div><div style="font-weight:600;color:#18181B">${v.name}</div><div style="font-size:12px;color:#A1A1AA;margin-top:2px">${v.id} • ${v.joined}</div></div>
+          </div>
+        </td>
+        <td style="padding:16px 24px">
+          <div style="display:flex;align-items:center;gap:6px;color:#52525B">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="color:#A1A1AA"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+            <span style="font-weight:500">${v.location}</span>
+          </div>
+        </td>
+        <td style="padding:16px 24px"><div style="font-weight:600;color:#18181B;margin-bottom:4px">${v.revenue}</div>
+          <div style="display:flex;align-items:center;gap:4px;font-size:13px;font-weight:500">
+            <svg viewBox="0 0 24 24" fill="#F59E0B" width="12" height="12"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+            <span style="color:#D97706">${v.rating}</span>
+          </div>
+        </td>
+        <td style="padding:16px 24px;width:220px">
+          <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:6px">
+            <span style="font-size:12px;color:#71717A;font-weight:500">Fulfillment</span>
+            <span style="font-size:12px;font-weight:700;${v.fTextCol}">${v.fulfillment}</span>
+          </div>
+          <div style="height:6px;width:100%;background:#F4F4F5;border-radius:999px;overflow:hidden;margin-bottom:6px">
+            <div style="height:100%;border-radius:999px;${v.fColor};width:${v.fulfillment}"></div>
+          </div>
+          <span style="font-size:11px;color:#A1A1AA">${v.products}</span>
+        </td>
+        <td style="padding:16px 24px">
+          <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-start">
+            <span style="display:inline-flex;padding:3px 8px;border-radius:999px;font-size:11px;font-weight:600;border:1px solid ${v.sBorder};background:${v.sBg};color:${v.sColor}">${v.status}</span>
+            <span style="display:inline-flex;padding:3px 10px;border-radius:6px;font-size:10px;font-weight:700;letter-spacing:.5px;background:${v.tBg};color:${v.tColor}">${v.tier}</span>
+          </div>
+        </td>
+      </tr>
+    `).join('')}</tbody></table>`;
+}
+
+function switchVendorStatus(btn) {
+  document.querySelectorAll('.vStatusTab').forEach(b => {
+    b.style.background = 'transparent'; b.style.color = '#71717A'; b.style.boxShadow = 'none';
+  });
+  btn.style.background = '#fff'; btn.style.color = '#18181B'; btn.style.boxShadow = '0 1px 2px rgba(0,0,0,.06)';
+}
+
+// ===== DRIVERS MOCK DATA =====
+const driversData = [
+  {name:"Oluwaseun Aderinto",id:"DRV-1029",location:"Victoria Island",order:"ORD-9921",eta:"12 mins",battery:"84%",active:false,img:"https://images.unsplash.com/photo-1506277886164-e25aa3f4ef7f?auto=format&fit=crop&w=100&q=80",dot:"bg-amber-400"},
+  {name:"Amina Mohammed",id:"DRV-1030",location:"Balogun Market",order:"ORD-9924",eta:"5 mins",battery:"62%",active:true,img:"https://images.unsplash.com/photo-1531123897727-8f129e1688ce?auto=format&fit=crop&w=100&q=80",dot:"bg-blue-500"},
+  {name:"Chinedu Eze",id:"DRV-1031",location:"Yaba Hub",order:null,eta:null,battery:"98%",active:false,img:"https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=100&q=80",dot:"bg-emerald-500"},
+  {name:"Fatima Sani",id:"DRV-1032",location:"Lekki Phase 1",order:"ORD-9930",eta:"18 mins",battery:"45%",active:false,img:"",initials:"FS",dot:"bg-amber-400"},
+];
+
+function renderDriversList() {
+  const c = document.getElementById('driverList');
+  if (!c) return;
+  c.innerHTML = driversData.map(d => {
+    const av = d.img ? `<img src="${d.img}" alt="${d.name}" style="width:100%;height:100%;border-radius:50%;object-fit:cover">` : `<span style="color:#71717A;font-weight:600;font-size:13px">${d.initials}</span>`;
+    return `<div style="padding:16px;border-radius:12px;border:1px solid ${d.active?'#F59E0B':'#E4E4E7'};background:${d.active?'#FFFDF5':'#fff'};cursor:pointer">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
+        <div style="display:flex;gap:12px">
+          <div style="position:relative;width:40px;height:40px;border-radius:50%;background:#F4F4F5;display:flex;align-items:center;justify-content:center;flex-shrink:0;overflow:hidden">${av}<div style="position:absolute;bottom:-1px;right:-1px;width:14px;height:14px;border:2px solid #fff;border-radius:50%;${d.dot}"></div></div>
+          <div><div style="font-weight:600;font-size:13px;color:#18181B">${d.name}</div><div style="font-size:12px;color:#71717A;margin-top:2px">${d.id} • ${d.location}</div></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:4px;font-size:12px;font-weight:500;color:#059669"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="1" y="6" width="18" height="12" rx="2"/><line x1="23" y1="12" x2="19" y2="12"/></svg>${d.battery}</div>
+      </div>
+      ${d.order?`<div style="display:flex;justify-content:space-between;align-items:center;padding-top:12px;border-top:1px solid #F4F4F5">
+        <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#52525B;font-weight:500">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="color:#A1A1AA"><path d="M16.5 9.4 7.55 4.24a1 1 0 0 0-1.1 0L4 5.5"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-5-3a2 2 0 0 0-2 0l-5 3A2 2 0 0 0 7 8v8a2 2 0 0 0 1 1.73l5 3a2 2 0 0 0 2 0l5-3A2 2 0 0 0 21 16z"/><path d="M3.29 6.96 12 12.01l8.71-5.05"/><path d="M12 22.08V12"/></svg>${d.order}</div>
+        <div style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:${d.active?'#D97706':'#F59E0B'}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>${d.eta}</div>
+      </div>`:''}
+    </div>`;
+  }).join('');
+}
+
+function switchDriverTab(btn) {
+  document.querySelectorAll('.dTab').forEach(b => { b.style.background='transparent'; b.style.color='#71717A'; b.style.boxShadow='none'; });
+  btn.style.background='#fff'; btn.style.color='#18181B'; btn.style.boxShadow='0 1px 2px rgba(0,0,0,.06)';
+}
+
+// ===== LIVE MAP =====
+let driverMap = null;
+function initDriverMap() {
+  const container = document.getElementById('liveMap');
+  if (!container) return;
+
+  // Destroy previous map instance
+  if (driverMap) { driverMap.remove(); driverMap = null; }
+
+  // Center on Lagos, Nigeria
+  driverMap = L.map(container, { zoomControl: false }).setView([6.5244, 3.3792], 13);
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors',
+    maxZoom: 19
+  }).addTo(driverMap);
+
+  L.control.zoom({ position: 'topright' }).addTo(driverMap);
+
+  // Driver markers with colored icons
+  const markers = [
+    { lat: 6.435, lng: 3.410, label: 'Oluwaseun A.', color: '#F59E0B', order: 'ORD-9921' },
+    { lat: 6.440, lng: 3.385, label: 'Amina Mohammed', color: '#3B82F6', order: 'ORD-9924' },
+    { lat: 6.456, lng: 3.400, label: 'Chinedu Eze', color: '#10B981', order: null },
+    { lat: 6.430, lng: 3.420, label: 'Fatima Sani', color: '#F59E0B', order: 'ORD-9930' },
+  ];
+
+  markers.forEach(m => {
+    const icon = L.divIcon({
+      html: `<div style="width:32px;height:32px;border-radius:50%;border:2px solid #fff;background:${m.color};display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.2)"><svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14" style="color:#fff"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>`,
+      className: '',
+      iconSize: [32, 32],
+      iconAnchor: [16, 16],
+    });
+    const popup = m.order
+      ? `<b>${m.label}</b><br/>${m.order} • En Route`
+      : `<b>${m.label}</b><br/>Idle / Available`;
+    L.marker([m.lat, m.lng], { icon }).bindPopup(popup).addTo(driverMap);
+  });
+
+  // Highlight Amina (active) with pulse ring
+  L.circleMarker([6.440, 3.385], {
+    radius: 24, color: '#3B82F6', fillColor: '#3B82F6', fillOpacity: 0.1,
+    weight: 2, opacity: 0.3
+  }).addTo(driverMap);
+
+  setTimeout(() => driverMap.invalidateSize(), 200);
+}
+
+function go() {
+  document.getElementById('loginScreen').classList.add('hide');
+  document.getElementById('dashScreen').classList.remove('hide');
+  const u = JSON.parse(localStorage.getItem('hook_user') || '{}');
+  document.getElementById('sideName').textContent = u.firstName ? u.firstName + ' ' + (u.lastName||'') : 'Admin Ops';
+  document.getElementById('sideEmail').textContent = u.email || 'hook.africa';
+  renderDashboard();
+}
+
+// ===== RENDER DASHBOARD =====
+function renderDashboard() {
+  // Stat cards
+  const maxSpark = Math.max(...statData.flatMap(s => s.spark));
+  document.getElementById('statCards').innerHTML = statData.map(s => {
+    const color = s.trend === 'up' ? '#059669' : s.trend === 'down' ? '#EF4444' : '#A1A1AA';
+    return `<div class="sc">
+      <div class="sc-top">
+        <p class="sc-label">${s.label}</p>
+        <div class="sc-spark">${s.spark.map(v => `<span class="b" style="height:${Math.max(v/maxSpark*18,3)}px"></span>`).join('')}</div>
+      </div>
+      <p class="sc-value">${s.value}</p>
+      <div class="sc-foot"><span class="dt"></span><span style="color:${color};font-weight:600">${s.delta}</span><span style="color:#A1A1AA">${s.caption}</span></div>
+    </div>`;
+  }).join('');
+
+  // Recent orders
+  document.getElementById('recentOrdersWrap').innerHTML = `<table><thead><tr><th>Order ID</th><th>Customer & Vendor</th><th>Status</th><th style="text-align:right">Amount</th></tr></thead><tbody>${recentOrders.map(o => `<tr><td style="font-weight:600">${o.id}</td><td>${o.customer}<div style="font-size:12px;color:#A1A1AA;margin-top:2px">${o.item}</div></td><td><span class="bdg ${o.sClass}">${o.status}</span></td><td style="text-align:right"><div style="font-weight:600">${o.amount}</div><div class="pay ${o.payClass}">${o.payment}</div></td></tr>`).join('')}</tbody></table>`;
+
+  // Live ops
+  document.getElementById('liveList').innerHTML = liveOps.map(o => `
+    <div class="live-item">
+      <div class="live-it"><span class="id">${o.id}</span><span class="st ${o.sClass}">${o.status}</span></div>
+      <div class="live-im"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/></svg>${o.driver} &bull; ETA: ${o.eta} mins</div>
+      <div class="live-ir"><span>${o.from}</span><svg class="pin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" style="transform:rotate(-45deg)"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg><span>${o.to}</span></div>
+    </div>`).join('');
+
+  // Orders page
+  renderOrdersTable();
+  initCharts();
+}
+
+// ===== ORDERS TABLE =====
+function renderOrdersTable() {
+  const colors = ['#DBEAFE','#D1FAE5','#EDE9FE','#FEF3C7','#FFE4E6','#CFFAFE'];
+  const txtColors = ['#1E40AF','#065F46','#5B21B6','#92400E','#E11D48','#155E75'];
+  document.getElementById('ordersTableBody').innerHTML = `<table style="min-width:900px">
+    <thead style="font-size:11px;color:#71717A;text-transform:uppercase;background:#FAFAFA;border-bottom:1px solid #E4E4E7">
+      <tr>
+        <th style="padding:14px 24px;font-weight:600">ORDER ID <span style="display:inline-flex;flex-direction:column;vertical-align:middle;line-height:1;margin-left:4px"><svg viewBox="0 0 24 24" fill="currentColor" width="8" height="8" style="margin-bottom:-2px"><polygon points="12 5 20 19 4 19"/></svg><svg viewBox="0 0 24 24" fill="currentColor" width="8" height="8"><polygon points="12 19 4 5 20 5"/></svg></span></th>
+        <th style="padding:14px 24px;font-weight:600">CUSTOMER</th>
+        <th style="padding:14px 24px;font-weight:600">VENDOR & PRODUCT</th>
+        <th style="padding:14px 24px;font-weight:600">STATUS</th>
+        <th style="padding:14px 24px;font-weight:600">DELIVERY ETA</th>
+        <th style="padding:14px 24px;font-weight:600;text-align:right">NEGOTIATED PRICE</th>
+      </tr>
+    </thead>
+    <tbody>${ordersPageData.map((o,i) => {
+      const bg = colors[i%6], tc = txtColors[i%6];
+      return `<tr style="border-bottom:1px solid #F4F4F5;background:#fff">
+        <td style="padding:16px 24px;font-weight:600;font-size:14px">${o.id}</td>
+        <td style="padding:16px 24px"><div style="display:flex;align-items:center;gap:12px"><div class="iav" style="background:${bg};color:${tc}">${o.initials}</div><span style="font-weight:500">${o.customer}</span></div></td>
+        <td style="padding:16px 24px"><div style="font-weight:500">${o.product}</div><div style="font-size:12px;color:#A1A1AA;margin-top:4px">${o.vendor}</div></td>
+        <td style="padding:16px 24px"><span class="osb ${o.sClass}" style="display:inline-flex;align-items:center;gap:6px">${o.icon} ${o.status}</span></td>
+        <td style="padding:16px 24px;font-weight:500;${o.etaColor||''}">${o.eta}</td>
+        <td style="padding:16px 24px;text-align:right"><div style="font-weight:600">${o.price}</div>${o.sub ? '<div style="font-size:11px;color:#7C3AED;font-weight:500;margin-top:4px">'+o.sub+'</div>' : ''}</td>
+      </tr>`;
+    }).join('')}</tbody></table>`;
+}
+
+// ===== CHARTS =====
+function initCharts() {
+  if (!document.getElementById('salesChart')) return;
+  if (salesChart) { salesChart.destroy(); if(aiChart) aiChart.destroy(); }
+
+  const ctx = document.getElementById('salesChart').getContext('2d');
+  const aCtx = document.getElementById('aiChart').getContext('2d');
+
+  salesChart = new Chart(ctx, {
+    type:'bar',
+    data:{
+      labels:salesData.map(d=>d.day),
+      datasets:[
+        {label:'Existing User',data:salesData.map(d=>d.exU),backgroundColor:'#D4D4D8',borderRadius:0,barThickness:28,order:2},
+        {label:'New User',data:salesData.map(d=>d.newU),backgroundColor:'#3F3F46',borderRadius:{topLeft:6,topRight:6,bottomLeft:0,bottomRight:0},barThickness:28,order:1}
+      ]
+    },
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false}},
+      scales:{
+        x:{grid:{display:false},ticks:{color:'#A1A1AA',font:{size:12}}},
+        y:{grid:{color:'#EDEDF0'},ticks:{color:'#A1A1AA',font:{size:12},callback:v=>v/1000+'k'}}
+      }
+    }
+  });
+
+  aiChart = new Chart(aCtx, {
+    type:'bar',
+    data:{
+      labels:aiData.map(d=>d.day),
+      datasets:[{label:'Volume',data:aiData.map(d=>d.v),backgroundColor:'#6366F1',borderRadius:4,barThickness:16}]
+    },
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false}},
+      scales:{
+        x:{grid:{display:false},ticks:{color:'#A1A1AA',font:{size:12}}},
+        y:{grid:{color:'#EDEDF0'},ticks:{color:'#A1A1AA',font:{size:12}}}
+      }
+    }
+  });
+}
+
+// ===== VIEW SWITCHING =====
+function switchView(view) {
+  document.querySelectorAll('[id^="v-"]').forEach(v => v.classList.add('hide'));
+  const el = document.getElementById('v-' + view);
+  if (el) el.classList.remove('hide');
+  document.querySelectorAll('.sb-item').forEach(i => i.classList.remove('active'));
+  const btn = document.querySelector(`.sb-item[data-view="${view}"]`);
+  if (btn) btn.classList.add('active');
+  if (view === 'products') renderProductsTable();
+  if (view === 'vendors') renderVendorsTable();
+  if (view === 'drivers') { renderDriversList(); initDriverMap(); }
+}
+
+// Sidebar click handling
+document.querySelectorAll('.sb-item').forEach(item => {
+  item.addEventListener('click', function() {
+    const view = this.getAttribute('data-view');
+    if (view) switchView(view);
+  });
+});
+
+function setRange(btn) {
+  document.querySelectorAll('.tb-act button').forEach(b => b.classList.remove('on'));
+  btn.classList.add('on');
+}
+
+function activateOrderTab(btn) {
+  document.querySelectorAll('.otab').forEach(b => b.classList.remove('on'));
+  btn.classList.add('on');
+}
+
+function logout() {
+  localStorage.removeItem('hook_token'); localStorage.removeItem('hook_user');
+  document.getElementById('dashScreen').classList.add('hide');
+  document.getElementById('loginScreen').classList.remove('hide');
+}
+
+// Auto-login
+(function() {
+  const t = localStorage.getItem('hook_token');
+  if (t) go();
+})();
+</script>
+</body>
+</html>

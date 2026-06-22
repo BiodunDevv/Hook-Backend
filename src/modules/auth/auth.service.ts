@@ -13,6 +13,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { User } from '@modules/users/entities/user.entity';
 import { Otp } from './entities/otp.entity';
 import { RegisterDto, VerifyOtpDto, CompleteProfileDto, SocialLoginDto, ChangePasswordDto } from './dto/auth.dto';
+import { BrevoService } from '@integrations/brevo/brevo.service';
 import { JwtPayload } from '@common/interfaces';
 import { UserRole } from '@common/constants';
 import { hashPassword, comparePassword, generateOtp } from '@common/helpers';
@@ -26,6 +27,7 @@ export class AuthService {
     @InjectRepository(Otp) private otpRepo: Repository<Otp>,
     private jwtService: JwtService,
     private configService: ConfigService,
+    private brevoService: BrevoService,
   ) {}
 
   // =======================================================
@@ -64,8 +66,7 @@ export class AuthService {
 
     this.logger.log(`[Register] User created: ${dto.email}, OTP: ${code}`);
 
-    // TODO: Send via SendGrid when configured
-    // await this.sendGridService.sendTemplate('otp', dto.email, { code });
+    await this.brevoService.sendOtp(dto.email, code);
 
     return {
       message: 'Verification code sent to your email.',
@@ -213,6 +214,8 @@ export class AuthService {
     await this.otpRepo.save({ email, code, type: 'email_verification', expiresAt });
 
     this.logger.log(`[Resend OTP] ${email}: ${code}`);
+
+    await this.brevoService.sendOtp(email, code);
 
     return {
       message: 'Verification code resent to your email',

@@ -27,7 +27,7 @@ import { SearchModule } from '@modules/search/search.module';
 import { PaystackModule } from '@integrations/paystack/paystack.module';
 import { NombaModule } from '@integrations/nomba/nomba.module';
 import { TermiiModule } from '@integrations/termii/termii.module';
-import { SendGridModule } from '@integrations/sendgrid/sendgrid.module';
+import { BrevoModule } from '@integrations/brevo/brevo.module';
 import { GoogleMapsModule } from '@integrations/google-maps/google-maps.module';
 
 // Common
@@ -124,7 +124,7 @@ import { RolesGuard } from '@common/guards/roles.guard';
     PaystackModule,
     NombaModule,
     TermiiModule,
-    SendGridModule,
+    BrevoModule,
     GoogleMapsModule,
   ],
 

@@ -7,11 +7,71 @@
 Authorization: Bearer <token>
 ```
 
-**Admin Login:** Use `POST /api/v1/auth/login` with:
-```json
+---
+
+## 🔐 Auth Flow (3 Steps)
+
+### Step 1: Register
+```
+POST /auth/register
+Body:
 {
-  "email": "admin@hook.ng",
-  "password": "admin123"
+  "email": "user@example.com",
+  "password": "yourpassword"
+}
+```
+→ An OTP code is sent to the user's email via Brevo.
+
+### Step 2: Verify OTP
+```
+POST /auth/verify-otp
+Body:
+{
+  "email": "user@example.com",
+  "code": "123456"
+}
+```
+→ Email is verified. User must now complete their profile.
+
+### Step 3: Complete Profile
+```
+POST /auth/complete-profile
+Body:
+{
+  "email": "user@example.com",
+  "firstName": "John",
+  "lastName": "Doe"
+}
+```
+→ Account is activated. Returns JWT token.
+
+### Login (after completing steps 1-3)
+```
+POST /auth/login
+Body:
+{
+  "email": "user@example.com",
+  "password": "yourpassword"
+}
+```
+→ Returns JWT token.
+
+### Resend OTP
+```
+POST /auth/resend-otp
+Body:
+{
+  "email": "user@example.com"
+}
+```
+
+### Social Login (Google / Apple)
+```
+POST /auth/social
+Body:
+{
+  "provider": "google",
+  "idToken": "..."
 }
 ```
 

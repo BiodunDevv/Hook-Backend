@@ -1,11 +1,11 @@
 import { Module, Global } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { SendGridService } from './sendgrid.service';
+import { BrevoService } from './brevo.service';
 
 @Global()
 @Module({
   imports: [ConfigModule],
-  providers: [SendGridService],
-  exports: [SendGridService],
+  providers: [BrevoService],
+  exports: [BrevoService],
 })
-export class SendGridModule {}
+export class BrevoModule {}

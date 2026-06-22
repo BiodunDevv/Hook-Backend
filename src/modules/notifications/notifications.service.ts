@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { SendGridService } from '@integrations/sendgrid/sendgrid.service';
+import { BrevoService } from '@integrations/brevo/brevo.service';
 import { TermiiService } from '@integrations/termii/termii.service';
 
 type NotificationChannel = 'email' | 'sms' | 'push';
@@ -14,7 +14,7 @@ type NotificationEvent =
 interface NotificationPayload {
   event: NotificationEvent;
   channel: NotificationChannel[];
-  to: string; // email or phone
+  to: string;
   data: Record<string, string>;
 }
 
@@ -23,7 +23,7 @@ export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
 
   constructor(
-    private sendGridService: SendGridService,
+    private brevoService: BrevoService,
     private termiiService: TermiiService,
   ) {}
 
@@ -33,7 +33,7 @@ export class NotificationsService {
     for (const channel of payload.channel) {
       try {
         if (channel === 'email') {
-          const result = await this.sendGridService.sendTemplate(
+          const result = await this.brevoService.sendTemplate(
             this.mapEventToTemplate(payload.event),
             payload.to,
             payload.data,
@@ -96,8 +96,8 @@ export class NotificationsService {
 
   private buildSmsMessage(event: NotificationEvent, data: Record<string, string>): string {
     const messages: Record<string, string> = {
-      'order.confirmed': `Hook: Order ${data.orderCode} confirmed! We'll notify you when it ships.`,
-      'order.shipped': `Hook: ${data.orderCode} is out for delivery by ${data.driverName || 'your driver'}!`,
+      'order.confirmed': `Hook: Order ${data.orderCode} confirmed!`,
+      'order.shipped': `Hook: ${data.orderCode} is out for delivery!`,
       'order.delivered': `Hook: ${data.orderCode} delivered! Enjoy 🎉`,
       'auth.otp': `Hook code: ${data.code}. Valid 10 min.`,
     };

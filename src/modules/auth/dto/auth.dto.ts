@@ -108,3 +108,37 @@ export class RequestOtpDto {
   @IsEmail()
   email!: string;
 }
+
+// ============================================================
+// FORGOT PASSWORD
+// ============================================================
+export class ForgotPasswordDto {
+  @IsEmail({}, { message: 'Please enter a valid email address' })
+  email!: string;
+}
+
+export class VerifyResetOtpDto {
+  @IsEmail()
+  email!: string;
+
+  @IsString()
+  @MinLength(4)
+  @MaxLength(6)
+  @IsNotEmpty()
+  code!: string;
+}
+
+export class ResetPasswordDto {
+  @IsEmail()
+  email!: string;
+
+  @IsString()
+  @MinLength(6)
+  @MaxLength(128)
+  newPassword!: string;
+
+  @IsString()
+  @MinLength(6)
+  @MaxLength(128)
+  confirmPassword!: string;
+}

@@ -12,7 +12,7 @@ import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { User } from '@modules/users/entities/user.entity';
 import { Otp } from './entities/otp.entity';
-import { RegisterDto, VerifyOtpDto, CompleteProfileDto, SocialLoginDto, ChangePasswordDto } from './dto/auth.dto';
+import { RegisterDto, VerifyOtpDto, CompleteProfileDto, SocialLoginDto, ChangePasswordDto, ForgotPasswordDto, VerifyResetOtpDto, ResetPasswordDto } from './dto/auth.dto';
 import { BrevoService } from '@integrations/brevo/brevo.service';
 import { JwtPayload } from '@common/interfaces';
 import { UserRole } from '@common/constants';
@@ -222,6 +222,88 @@ export class AuthService {
       email,
       expiresIn: '10 minutes',
       code,
+    };
+  }
+
+  // =======================================================
+  // STEP 4: FORGOT PASSWORD — sends OTP for password reset
+  // =======================================================
+  async forgotPassword(dto: ForgotPasswordDto) {
+    const user = await this.userRepo.findOne({ where: { email: dto.email } });
+    if (!user) {
+      // Don't reveal whether the email exists — security best practice
+      return {
+        message: 'If an account with this email exists, a reset code has been sent.',
+        email: dto.email,
+      };
+    }
+
+    const code = generateOtp(6);
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+    await this.otpRepo.save({
+      email: dto.email,
+      code,
+      type: 'password_reset',
+      expiresAt,
+    });
+
+    this.logger.log(`[Forgot Password] OTP sent to ${dto.email}: ${code}`);
+    await this.brevoService.sendTemplate('otp', dto.email, { code });
+
+    return {
+      message: 'If an account with this email exists, a reset code has been sent.',
+      email: dto.email,
+      expiresIn: '10 minutes',
+      code,
+    };
+  }
+
+  // =======================================================
+  // STEP 5: VERIFY RESET OTP — validates reset code
+  // =======================================================
+  async verifyResetOtp(dto: VerifyResetOtpDto) {
+    const otp = await this.otpRepo.findOne({
+      where: { email: dto.email, code: dto.code, isUsed: false, type: 'password_reset' },
+    });
+    if (!otp || !otp.isValid) {
+      throw new BadRequestException('Invalid or expired verification code');
+    }
+
+    otp.isUsed = true;
+    await this.otpRepo.save(otp);
+
+    this.logger.log(`[Verify Reset OTP] Email verified: ${dto.email}`);
+
+    return {
+      message: 'Email verified successfully. You can now reset your password.',
+      email: dto.email,
+    };
+  }
+
+  // =======================================================
+  // STEP 6: RESET PASSWORD — updates password in DB
+  // =======================================================
+  async resetPassword(dto: ResetPasswordDto) {
+    if (dto.newPassword !== dto.confirmPassword) {
+      throw new BadRequestException('Passwords do not match');
+    }
+
+    const user = await this.userRepo.findOne({
+      where: { email: dto.email },
+      select: ['id', 'email', 'password'],
+    });
+    if (!user) {
+      throw new BadRequestException('User not found');
+    }
+
+    const hashed = await hashPassword(dto.newPassword);
+    await this.userRepo.update(user.id, { password: hashed });
+
+    this.logger.log(`[Reset Password] Password updated for ${dto.email}`);
+
+    return {
+      message: 'Password reset successful. You can now login with your new password.',
     };
   }
 

@@ -4,6 +4,7 @@ import { AuthService } from './auth.service';
 import {
   RegisterDto, VerifyOtpDto, CompleteProfileDto, SocialLoginDto, LoginDto,
   ChangePasswordDto, RefreshTokenDto, RequestOtpDto,
+  ForgotPasswordDto, VerifyResetOtpDto, ResetPasswordDto,
 } from './dto/auth.dto';
 import { CurrentUser, Public } from '@common/decorators';
 import { success, created } from '@common/dto/api-response.dto';
@@ -102,6 +103,36 @@ export class AuthController {
     return success(
       await this.authService.resendOtp(dto.email),
       'Code resent',
+    );
+  }
+
+  @Public()
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Step 1: Send OTP to email for password reset' })
+  async forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return success(
+      await this.authService.forgotPassword(dto),
+      'If account exists, reset code sent',
+    );
+  }
+
+  @Public()
+  @Post('verify-reset-otp')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Step 2: Verify OTP for password reset' })
+  async verifyResetOtp(@Body() dto: VerifyResetOtpDto) {
+    return success(await this.authService.verifyResetOtp(dto));
+  }
+
+  @Public()
+  @Post('reset-password')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Step 3: Reset password with new password and confirm' })
+  async resetPassword(@Body() dto: ResetPasswordDto) {
+    return success(
+      await this.authService.resetPassword(dto),
+      'Password reset successful',
     );
   }
 

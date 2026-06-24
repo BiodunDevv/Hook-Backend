@@ -14,7 +14,9 @@ export class CategoriesService {
   async findAll() {
     return this.catRepo.find({
       where: { isActive: true },
-      relations: ['children'],
+      relations: {
+  children: true
+},
       order: { sortOrder: 'ASC' },
     });
   }
@@ -22,7 +24,10 @@ export class CategoriesService {
   async findOne(id: string) {
     const cat = await this.catRepo.findOne({
       where: { id },
-      relations: ['children', 'parent'],
+      relations: {
+  children: true,
+  parent: true
+},
     });
     if (!cat) throw new NotFoundException('Category not found');
     return cat;

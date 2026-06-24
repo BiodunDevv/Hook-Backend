@@ -11,7 +11,10 @@ export class AINegotiationService {
 
   async getNegotiations(page = 1, limit = 20) {
     const [data, total] = await this.negRepo.findAndCount({
-      relations: ['user', 'product'],
+      relations: {
+  user: true,
+  product: true
+},
       order: { updatedAt: 'DESC' },
       skip: (page - 1) * limit,
       take: limit,

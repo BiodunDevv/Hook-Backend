@@ -61,13 +61,18 @@ export class LogisticsService {
   async getByDriver(driverId: string) {
     return this.logisticsRepo.find({
       where: { driverId },
-      relations: ['order'],
+      relations: {
+  order: true
+},
       order: { createdAt: 'DESC' },
     });
   }
 
   async getByOrder(orderId: string) {
-    const log = await this.logisticsRepo.findOne({ where: { orderId }, relations: ['order', 'driver'] });
+    const log = await this.logisticsRepo.findOne({ where: { orderId }, relations: {
+  order: true,
+  driver: true
+} });
     if (!log) throw new NotFoundException('Logistics record not found');
     return log;
   }

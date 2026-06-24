@@ -23,7 +23,13 @@ export class OrdersService {
   async createFromCart(userId: string, deliveryAddress: Order['deliveryAddress'], notes?: string) {
     const cart = await this.cartRepo.findOne({
       where: { userId, isCheckedOut: false },
-      relations: ['items', 'items.product', 'items.product.vendor'],
+      relations: {
+  items: {
+    product: {
+      vendor: true
+    }
+  }
+},
     });
     if (!cart || cart.items.length === 0) throw new BadRequestException('Cart is empty');
 
@@ -77,13 +83,21 @@ export class OrdersService {
     await this.cartRepo.save(cart);
 
     this.logger.log(`Order ${orderCode} created for user ${userId}`);
-    return this.orderRepo.findOne({ where: { id: savedOrder.id }, relations: ['items', 'items.vendor'] });
+    return this.orderRepo.findOne({ where: { id: savedOrder.id }, relations: {
+  items: {
+    vendor: true
+  }
+} });
   }
 
   async findByUser(userId: string, page = 1, limit = 20) {
     const [data, total] = await this.orderRepo.findAndCount({
       where: { userId },
-      relations: ['items', 'items.product'],
+      relations: {
+  items: {
+    product: true
+  }
+},
       order: { createdAt: 'DESC' },
       skip: (page - 1) * limit,
       take: limit,
@@ -92,7 +106,13 @@ export class OrdersService {
   }
 
   async findOne(id: string) {
-    const order = await this.orderRepo.findOne({ where: { id }, relations: ['items', 'items.product', 'payment', 'logistics'] });
+    const order = await this.orderRepo.findOne({ where: { id }, relations: {
+  items: {
+    product: true
+  },
+  payment: true,
+  logistics: true
+} });
     if (!order) throw new NotFoundException('Order not found');
     return order;
   }
@@ -107,7 +127,10 @@ export class OrdersService {
 
   async findAll(page = 1, limit = 20) {
     const [data, total] = await this.orderRepo.findAndCount({
-      relations: ['user', 'items'],
+      relations: {
+  user: true,
+  items: true
+},
       order: { createdAt: 'DESC' },
       skip: (page - 1) * limit,
       take: limit,

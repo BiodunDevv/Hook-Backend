@@ -17,7 +17,9 @@ export class PaymentsService {
   ) {}
 
   async initiatePayment(orderId: string, userId: string) {
-    const order = await this.orderRepo.findOne({ where: { id: orderId, userId }, relations: ['items'] });
+    const order = await this.orderRepo.findOne({ where: { id: orderId, userId }, relations: {
+  items: true
+} });
     if (!order) throw new BadRequestException('Order not found');
 
     // Initialize payment with Paystack
@@ -43,7 +45,9 @@ export class PaymentsService {
   }
 
   async verifyPayment(reference: string) {
-    const payment = await this.paymentRepo.findOne({ where: { transactionRef: reference }, relations: ['order'] });
+    const payment = await this.paymentRepo.findOne({ where: { transactionRef: reference }, relations: {
+  order: true
+} });
     if (!payment) throw new BadRequestException('Payment not found');
 
     const verification = await this.paystackService.verifyTransaction(reference);
@@ -78,7 +82,9 @@ export class PaymentsService {
 
   async getAllPayments(page = 1, limit = 20) {
     const [data, total] = await this.paymentRepo.findAndCount({
-      relations: ['order'],
+      relations: {
+  order: true
+},
       order: { createdAt: 'DESC' },
       skip: (page - 1) * limit,
       take: limit,

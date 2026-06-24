@@ -15,14 +15,22 @@ export class DriversService {
   async getActiveDeliveries() {
     return this.logisticsRepo.find({
       where: { status: 'in_transit' as any },
-      relations: ['order', 'order.user', 'driver'],
+      relations: {
+  order: {
+    user: true
+  },
+  driver: true
+},
       order: { updatedAt: 'DESC' },
     });
   }
 
   async getAllDeliveries(page = 1, limit = 20) {
     const [data, total] = await this.logisticsRepo.findAndCount({
-      relations: ['order', 'driver'],
+      relations: {
+  order: true,
+  driver: true
+},
       order: { createdAt: 'DESC' },
       skip: (page - 1) * limit,
       take: limit,
@@ -33,12 +41,20 @@ export class DriversService {
   async getAvailableDrivers() {
     const drivers = await this.userRepo.find({
       where: { role: UserRole.EV_DRIVER, isActive: true },
-      select: ['id', 'firstName', 'lastName', 'email', 'phone'],
+      select: {
+  id: true,
+  firstName: true,
+  lastName: true,
+  email: true,
+  phone: true
+},
     });
 
     const busyDriverIds = (await this.logisticsRepo.find({
       where: { status: 'in_transit' as any },
-      select: ['driverId'],
+      select: {
+  driverId: true
+},
     })).map(l => l.driverId).filter(Boolean);
 
     return drivers.map(d => ({

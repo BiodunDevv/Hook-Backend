@@ -20,7 +20,10 @@ export class SearchService {
         { title: ILike(`%${query}%`), status: ProductStatus.APPROVED },
         { description: ILike(`%${query}%`), status: ProductStatus.APPROVED },
       ],
-      relations: ['category', 'vendor'],
+      relations: {
+  category: true,
+  vendor: true
+},
       skip,
       take: limit,
       order: { orderCount: 'DESC' },
@@ -40,7 +43,10 @@ export class SearchService {
   async searchSuggestions(query: string) {
     const products = await this.productRepo.find({
       where: { title: ILike(`%${query}%`), status: ProductStatus.APPROVED },
-      select: ['title', 'slug'],
+      select: {
+  title: true,
+  slug: true
+},
       take: 8,
     });
     return products.map(p => ({ label: p.title, value: p.slug }));

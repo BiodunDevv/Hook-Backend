@@ -18,7 +18,9 @@ export class FieldAgentService {
   }
 
   async findByAgent(agentId: string) {
-    const agent = await this.agentRepo.findOne({ where: { agentId }, relations: ['booths'] });
+    const agent = await this.agentRepo.findOne({ where: { agentId }, relations: {
+  booths: true
+} });
     if (!agent) throw new NotFoundException('Field agent record not found');
     return agent;
   }
@@ -30,6 +32,9 @@ export class FieldAgentService {
   }
 
   async findAll() {
-    return this.agentRepo.find({ relations: ['agent', 'booths'] });
+    return this.agentRepo.find({ relations: {
+  agent: true,
+  booths: true
+} });
   }
 }

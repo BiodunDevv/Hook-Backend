@@ -16,7 +16,11 @@ export class CartService {
   async getCart(userId: string) {
     let cart = await this.cartRepo.findOne({
       where: { userId, isCheckedOut: false },
-      relations: ['items', 'items.product'],
+      relations: {
+  items: {
+    product: true
+  }
+},
     });
     if (!cart) {
       cart = this.cartRepo.create({ userId, items: [], subtotal: 0, deliveryFee: 0, total: 0 });
@@ -54,7 +58,9 @@ export class CartService {
 
   async updateItemQuantity(userId: string, itemId: string, quantity: number) {
     if (quantity < 1) return this.removeItem(userId, itemId);
-    const item = await this.cartItemRepo.findOne({ where: { id: itemId }, relations: ['cart'] });
+    const item = await this.cartItemRepo.findOne({ where: { id: itemId }, relations: {
+  cart: true
+} });
     if (!item || item.cart.userId !== userId) throw new NotFoundException('Cart item not found');
     item.quantity = quantity;
     item.totalPrice = item.unitPrice * quantity;
@@ -63,7 +69,9 @@ export class CartService {
   }
 
   async removeItem(userId: string, itemId: string) {
-    const item = await this.cartItemRepo.findOne({ where: { id: itemId }, relations: ['cart'] });
+    const item = await this.cartItemRepo.findOne({ where: { id: itemId }, relations: {
+  cart: true
+} });
     if (!item || item.cart.userId !== userId) throw new NotFoundException('Cart item not found');
     await this.cartItemRepo.remove(item);
     return this.recalculateCart(item.cartId);
@@ -77,7 +85,11 @@ export class CartService {
   }
 
   private async recalculateCart(cartId: string) {
-    const cart = await this.cartRepo.findOne({ where: { id: cartId }, relations: ['items', 'items.product'] });
+    const cart = await this.cartRepo.findOne({ where: { id: cartId }, relations: {
+  items: {
+    product: true
+  }
+} });
     if (!cart) throw new NotFoundException('Cart not found');
     cart.subtotal = cart.items.reduce((sum, i) => sum + i.totalPrice, 0);
     cart.deliveryFee = cart.subtotal > 0 ? 1500 : 0; // Flat ₦1500 delivery

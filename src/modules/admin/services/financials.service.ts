@@ -123,7 +123,10 @@ export class FinancialsService {
 
     const [data, total] = await this.settlementRepo.findAndCount({
       where,
-      relations: ['vendor', 'order'],
+      relations: {
+  vendor: true,
+  order: true
+},
       order: { createdAt: 'DESC' },
       skip: (safePage - 1) * safeLimit,
       take: safeLimit,

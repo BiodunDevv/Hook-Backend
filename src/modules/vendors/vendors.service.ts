@@ -28,7 +28,9 @@ export class VendorsService {
 
   async findAll(page = 1, limit = 20) {
     const [data, total] = await this.vendorRepo.findAndCount({
-      relations: ['owner'],
+      relations: {
+  owner: true
+},
       order: { createdAt: 'DESC' },
       skip: (page - 1) * limit,
       take: limit,
@@ -37,13 +39,18 @@ export class VendorsService {
   }
 
   async findOne(id: string) {
-    const vendor = await this.vendorRepo.findOne({ where: { id }, relations: ['owner', 'products'] });
+    const vendor = await this.vendorRepo.findOne({ where: { id }, relations: {
+  owner: true,
+  products: true
+} });
     if (!vendor) throw new NotFoundException('Vendor not found');
     return vendor;
   }
 
   async findByOwner(ownerId: string) {
-    return this.vendorRepo.findOne({ where: { ownerId }, relations: ['products'] });
+    return this.vendorRepo.findOne({ where: { ownerId }, relations: {
+  products: true
+} });
   }
 
   async update(id: string, dto: Partial<Vendor>) {

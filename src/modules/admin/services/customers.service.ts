@@ -40,7 +40,10 @@ export class CustomersService {
   async getUserById(id: string) {
     const user = await this.userRepo.findOne({
       where: { id },
-      relations: ['vendors', 'orders'],
+      relations: {
+  vendors: true,
+  orders: true
+},
     });
     if (!user) throw new NotFoundException('User not found');
     const { password, ...rest } = user as any;

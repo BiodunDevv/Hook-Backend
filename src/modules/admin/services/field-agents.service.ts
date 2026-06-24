@@ -13,7 +13,6 @@ export class FieldAgentsService {
 
   async getFieldAgents(page = 1, limit = 20) {
     const [data, total] = await this.fieldAgentRepo.findAndCount({
-      relations: ['agentId'],
       order: { createdAt: 'DESC' },
       skip: (page - 1) * limit,
       take: limit,
@@ -24,7 +23,6 @@ export class FieldAgentsService {
   async getFieldAgent(id: string) {
     const agent = await this.fieldAgentRepo.findOne({
       where: { id },
-      relations: ['agentId'],
     });
     if (!agent) throw new NotFoundException('Field agent not found');
     return agent;

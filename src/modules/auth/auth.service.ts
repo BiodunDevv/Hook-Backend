@@ -135,7 +135,17 @@ export class AuthService {
   async login(email: string, password: string) {
     const user = await this.userRepo.findOne({
       where: { email },
-      select: ['id', 'email', 'password', 'role', 'firstName', 'lastName', 'isActive', 'isEmailVerified', 'avatarUrl'],
+      select: {
+  id: true,
+  email: true,
+  password: true,
+  role: true,
+  firstName: true,
+  lastName: true,
+  isActive: true,
+  isEmailVerified: true,
+  avatarUrl: true
+},
     });
 
     if (!user || !user.password) {
@@ -190,7 +200,10 @@ export class AuthService {
   async changePassword(userId: string, currentPassword: string, newPassword: string) {
     const user = await this.userRepo.findOne({
       where: { id: userId },
-      select: ['id', 'password'],
+      select: {
+  id: true,
+  password: true
+},
     });
     if (!user) throw new NotFoundException('User not found');
     if (!user.password) {
@@ -291,7 +304,11 @@ export class AuthService {
 
     const user = await this.userRepo.findOne({
       where: { email: dto.email },
-      select: ['id', 'email', 'password'],
+      select: {
+  id: true,
+  email: true,
+  password: true
+},
     });
     if (!user) {
       throw new BadRequestException('User not found');
@@ -313,7 +330,9 @@ export class AuthService {
   async getProfile(userId: string) {
     const user = await this.userRepo.findOne({
       where: { id: userId },
-      relations: ['vendors'],
+      relations: {
+  vendors: true
+},
     });
     if (!user) throw new NotFoundException('User not found');
     return user;

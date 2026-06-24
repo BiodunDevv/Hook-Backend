@@ -118,13 +118,19 @@ export class NegotiationService {
   async findByUser(userId: string) {
     return this.negRepo.find({
       where: { userId },
-      relations: ['product'],
+      relations: {
+  product: true
+},
       order: { updatedAt: 'DESC' },
     });
   }
 
   async findOne(id: string) {
-    const neg = await this.negRepo.findOne({ where: { id }, relations: ['product', 'product.vendor'] });
+    const neg = await this.negRepo.findOne({ where: { id }, relations: {
+  product: {
+    vendor: true
+  }
+} });
     if (!neg) throw new NotFoundException('Negotiation not found');
     return neg;
   }

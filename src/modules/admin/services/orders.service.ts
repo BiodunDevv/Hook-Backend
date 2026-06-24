@@ -18,7 +18,13 @@ export class OrdersService {
 
     const [data, total] = await this.orderRepo.findAndCount({
       where,
-      relations: ['user', 'items', 'items.product', 'payment'],
+      relations: {
+  user: true,
+  items: {
+    product: true
+  },
+  payment: true
+},
       order: { createdAt: 'DESC' },
       skip: (page - 1) * limit,
       take: limit,
@@ -40,7 +46,17 @@ export class OrdersService {
   async getOrderDetail(orderId: string) {
     const order = await this.orderRepo.findOne({
       where: { id: orderId },
-      relations: ['user', 'items', 'items.product', 'items.vendor', 'payment', 'logistics', 'logistics.driver'],
+      relations: {
+  user: true,
+  items: {
+    product: true,
+    vendor: true
+  },
+  payment: true,
+  logistics: {
+    driver: true
+  }
+},
     });
     if (!order) throw new NotFoundException('Order not found');
     return order;

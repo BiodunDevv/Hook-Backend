@@ -15,7 +15,10 @@ export class ProductsService {
   async getProductsForReview(page = 1, limit = 20) {
     const [data, total] = await this.productRepo.findAndCount({
       where: { status: ProductStatus.PENDING_APPROVAL },
-      relations: ['vendor', 'category'],
+      relations: {
+  vendor: true,
+  category: true
+},
       order: { createdAt: 'ASC' },
       skip: (page - 1) * limit,
       take: limit,
@@ -24,7 +27,9 @@ export class ProductsService {
   }
 
   async reviewProduct(productId: string, status: ProductStatus, note?: string, adjustedPrice?: number) {
-    const product = await this.productRepo.findOne({ where: { id: productId }, relations: ['vendor'] });
+    const product = await this.productRepo.findOne({ where: { id: productId }, relations: {
+  vendor: true
+} });
     if (!product) throw new NotFoundException('Product not found');
     product.status = status;
     if (adjustedPrice !== undefined) product.sellingPrice = adjustedPrice;
@@ -40,7 +45,10 @@ export class ProductsService {
 
     const [data, total] = await this.productRepo.findAndCount({
       where,
-      relations: ['vendor', 'category'],
+      relations: {
+  vendor: true,
+  category: true
+},
       order: { createdAt: 'DESC' },
       skip: (page - 1) * limit,
       take: limit,

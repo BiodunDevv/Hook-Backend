@@ -51,7 +51,10 @@ export class ProductsService {
 
     const [data, total] = await this.productRepo.findAndCount({
       where,
-      relations: ['category', 'vendor'],
+      relations: {
+  category: true,
+  vendor: true
+},
       order: { [pagination.sortBy || 'createdAt']: pagination.sortOrder || 'DESC' },
       skip: ((pagination.page || 1) - 1) * (pagination.limit || 20),
       take: pagination.limit || 20,
@@ -73,7 +76,10 @@ export class ProductsService {
   async findOne(id: string) {
     const product = await this.productRepo.findOne({
       where: { id },
-      relations: ['category', 'vendor'],
+      relations: {
+  category: true,
+  vendor: true
+},
     });
     if (!product) throw new NotFoundException('Product not found');
     return product;

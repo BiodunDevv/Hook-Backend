@@ -18,7 +18,9 @@ export class VendorsService {
 
     const [data, total] = await this.vendorRepo.findAndCount({
       where,
-      relations: ['owner'],
+      relations: {
+  owner: true
+},
       order: { createdAt: 'DESC' },
       skip: (page - 1) * limit,
       take: limit,
@@ -27,7 +29,9 @@ export class VendorsService {
   }
 
   async approveVendor(vendorId: string) {
-    const vendor = await this.vendorRepo.findOne({ where: { id: vendorId }, relations: ['owner'] });
+    const vendor = await this.vendorRepo.findOne({ where: { id: vendorId }, relations: {
+  owner: true
+} });
     if (!vendor) throw new NotFoundException('Vendor not found');
     vendor.isApproved = true;
     vendor.approvedAt = new Date();

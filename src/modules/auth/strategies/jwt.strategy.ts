@@ -17,14 +17,18 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: configService.get<string>('JWT_SECRET'),
+      secretOrKey: configService.get<string>('JWT_SECRET')!,
     });
   }
 
   async validate(payload: JwtPayload): Promise<JwtPayload> {
     const user = await this.userRepo.findOne({
       where: { id: payload.sub },
-      select: ['id', 'role', 'isActive'],
+      select: {
+  id: true,
+  role: true,
+  isActive: true
+},
     });
     if (!user || user.isActive === false) {
       throw new UnauthorizedException('User not found or deactivated');

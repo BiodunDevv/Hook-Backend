@@ -2,15 +2,29 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Hook API — Swagger Documentation</title>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.11.8/swagger-ui.min.css" />
+  <title>Hook API Documentation</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/docs-assets/swagger-ui.css" />
+  <style>
+    body { margin: 0; background: #f8fafc; }
+    #swagger-ui:empty::before {
+      content: "Loading Hook API documentation...";
+      display: block;
+      padding: 24px;
+      color: #334155;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .topbar { display: none; }
+    .swagger-ui .info { margin: 28px 0; }
+    .swagger-ui .scheme-container { box-shadow: none; border-bottom: 1px solid #e5e7eb; }
+  </style>
 </head>
-<body style="margin:0">
+<body>
   <div id="swagger-ui"></div>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.11.8/swagger-ui-bundle.min.js"></script>
+  <script src="/docs-assets/swagger-ui-bundle.js"></script>
   <script>
     SwaggerUIBundle({
-      url: 'swagger-spec.json',
+      url: '/swagger-spec.json',
       dom_id: '#swagger-ui',
       presets: [
         SwaggerUIBundle.presets.apis,
@@ -18,6 +32,11 @@
       ],
       layout: "StandaloneLayout",
       persistAuthorization: true,
+      docExpansion: "list",
+      defaultModelsExpandDepth: 1,
+      defaultModelExpandDepth: 2,
+      displayRequestDuration: true,
+      filter: true,
     });
   </script>
 </body>

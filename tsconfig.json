@@ -23,13 +23,33 @@
     "ignoreDeprecations": "6.0",
     "paths": {
       "@/*": ["src/*"],
-      "@common/*": ["src/common/*"],
       "@config/*": ["src/config/*"],
-      "@modules/*": ["src/modules/*"],
-      "@integrations/*": ["src/integrations/*"],
-      "@database/*": ["src/database/*"]
+      "@controllers/*": ["src/controllers/*"],
+      "@emails/*": ["src/emails/*"],
+      "@lib/*": ["src/lib/*"],
+      "@middleware/*": ["src/middleware/*"],
+      "@models/*": ["src/models/*"],
+      "@routes/*": ["src/routes/*"],
+      "@services/*": ["src/services/*"],
+      "@validations/*": ["src/validations/*"],
+      "@utils/*": ["src/utils/*"]
     }
   },
-  "include": ["src/**/*"],
+  "include": [
+    "src/app.ts",
+    "src/server.ts",
+    "src/types/**/*.d.ts",
+    "src/config/data-source.ts",
+    "src/controllers/**/*.ts",
+    "src/database/seeds/**/*.ts",
+    "src/emails/**/*.ts",
+    "src/lib/**/*.ts",
+    "src/middleware/**/*.ts",
+    "src/models/**/*.ts",
+    "src/routes/**/*.ts",
+    "src/services/**/*.ts",
+    "src/validations/**/*.ts",
+    "src/utils/**/*.ts"
+  ],
   "exclude": ["node_modules", "dist"]
 }

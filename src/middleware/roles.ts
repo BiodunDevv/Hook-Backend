@@ -12,5 +12,5 @@ export function requireRoles(...roles: UserRole[]) {
   };
 }
 
-export const requireAdmin = requireRoles(UserRole.ADMIN, UserRole.SUPER_ADMIN);
+export const requireAdmin = requireRoles(UserRole.SUPPORT, UserRole.ADMIN, UserRole.SUPER_ADMIN);
 export const requireSuperAdmin = requireRoles(UserRole.SUPER_ADMIN);

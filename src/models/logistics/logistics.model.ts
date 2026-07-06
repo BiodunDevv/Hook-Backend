@@ -1,86 +1,45 @@
-﻿import { Entity, Column, OneToOne, ManyToOne, JoinColumn, Index } from 'typeorm';
-import { BaseEntity } from '@models/base.model';
 import { LogisticsStatus } from '@lib/constants';
-import { Order } from '@models/orders/order.model';
-import { User } from '@models/users/user.model';
+import { BaseEntity, createModel, createSchema } from '@models/base.model';
 
-@Entity('logistics')
-@Index(['driverId', 'status'])
-@Index(['orderId'], { unique: true })
-export class Logistics extends BaseEntity {
-  @OneToOne(() => Order, (order) => order.logistics)
-  @JoinColumn({ name: 'orderId' })
-  order!: Order;
-
-  @Column()
-  orderId!: string;
-
-  @ManyToOne(() => User)
-  @JoinColumn({ name: 'driverId' })
-  driver!: User;
-
-  @Column({ nullable: true })
+export interface Logistics extends BaseEntity {
+  orderId: string;
   driverId?: string;
-
-  @Column({
-    type: 'varchar',
-    default: LogisticsStatus.ASSIGNED,
-  })
-  status!: LogisticsStatus;
-
-  // Pickup
-  @Column({ type: 'simple-json', nullable: true })
-  pickupLocation?: {
-    name: string;
-    address: string;
-    coordinates: { lat: number; lng: number };
-    notes?: string;
-  };
-
-  @Column({ nullable: true })
+  status: LogisticsStatus;
+  pickupLocation?: { name: string; address: string; coordinates: { lat: number; lng: number }; notes?: string };
   pickedUpAt?: Date;
-
-  // Pack-and-Tag
-  @Column({ nullable: true })
-  qrCodeRef?: string; // HK-XXXXXX-000001
-
-  @Column({ nullable: true })
+  qrCodeRef?: string;
   qrScannedAt?: Date;
-
-  // OTP handshake
-  @Column({ nullable: true })
   vendorOtp?: string;
-
-  @Column({ nullable: true })
   otpVerifiedAt?: Date;
-
-  // Delivery
-  @Column({ type: 'simple-json', nullable: true })
-  deliveryLocation?: {
-    address: string;
-    coordinates: { lat: number; lng: number };
-    instructions?: string;
-  };
-
-  @Column({ nullable: true })
+  deliveryLocation?: { address: string; coordinates: { lat: number; lng: number }; instructions?: string };
   deliveredAt?: Date;
-
-  @Column({ type: 'text', nullable: true })
-  deliveryProof?: string; // Base64 signature or photo ref
-
-  // Realtime tracking
-  @Column({ type: 'simple-json', nullable: true })
-  trackingPath?: Array<{
-    lat: number;
-    lng: number;
-    timestamp: string;
-  }>;
-
-  @Column({ nullable: true })
+  deliveryProof?: string;
+  trackingPath?: Array<{ lat: number; lng: number; timestamp: string }>;
   estimatedDeliveryAt?: Date;
-
-  @Column({ nullable: true })
   estimatedDistanceKm?: number;
+  order?: any;
+  driver?: any;
 }
 
+const LogisticsSchema = createSchema<Logistics>({
+  orderId: { type: String, required: true, unique: true, index: true },
+  driverId: { type: String, index: true },
+  status: { type: String, enum: Object.values(LogisticsStatus), default: LogisticsStatus.ASSIGNED, index: true },
+  pickupLocation: { type: Object },
+  pickedUpAt: { type: Date },
+  qrCodeRef: { type: String },
+  qrScannedAt: { type: Date },
+  vendorOtp: { type: String },
+  otpVerifiedAt: { type: Date },
+  deliveryLocation: { type: Object },
+  deliveredAt: { type: Date },
+  deliveryProof: { type: String },
+  trackingPath: [{ type: Object }],
+  estimatedDeliveryAt: { type: Date },
+  estimatedDistanceKm: { type: Number },
+  deletedAt: { type: Date },
+});
 
+LogisticsSchema.index({ driverId: 1, status: 1 });
+
+export const Logistics = createModel<Logistics>('Logistics', LogisticsSchema);

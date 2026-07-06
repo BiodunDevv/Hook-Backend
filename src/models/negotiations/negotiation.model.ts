@@ -1,71 +1,43 @@
-﻿import { Entity, Column, ManyToOne, JoinColumn, Index } from 'typeorm';
-import { BaseEntity } from '@models/base.model';
 import { NegotiationStatus } from '@lib/constants';
-import { User } from '@models/users/user.model';
-import { Product } from '@models/products/product.model';
+import { BaseEntity, createModel, createSchema } from '@models/base.model';
 
-@Entity('negotiations')
-@Index(['userId', 'productId', 'status'])
-export class Negotiation extends BaseEntity {
-  @ManyToOne(() => User, (user) => user.negotiations)
-  @JoinColumn({ name: 'userId' })
-  user!: User;
-
-  @Column()
-  userId!: string;
-
-  @ManyToOne(() => Product, (product) => product.negotiations)
-  @JoinColumn({ name: 'productId' })
-  product!: Product;
-
-  @Column()
-  productId!: string;
-
-  // Session tracking
-  @Column({ type: 'int', default: 1 })
-  round!: number;
-
-  @Column({ type: 'float' })
-  offeredPrice!: number;
-
-  @Column({ type: 'float' })
-  counterPrice!: number; // AI-generated counter
-
-  @Column({ type: 'float', nullable: true })
+export interface Negotiation extends BaseEntity {
+  userId: string;
+  productId: string;
+  round: number;
+  offeredPrice: number;
+  counterPrice: number;
   acceptedPrice?: number;
-
-  @Column({
-    type: 'varchar',
-    default: NegotiationStatus.ACTIVE,
-  })
-  status!: NegotiationStatus;
-
-  // Margins at time of negotiation
-  @Column({ type: 'float' })
-  costPrice!: number; // Snapshot
-
-  @Column({ type: 'float' })
-  sellingPrice!: number; // Snapshot
-
-  @Column({ type: 'float' })
-  minAcceptablePrice!: number; // Snapshot
-
-  @Column({ type: 'simple-json', default: '[]' })
-  messageHistory!: Array<{
-    role: 'user' | 'bot';
-    message: string;
-    price?: number;
-    timestamp: string;
-  }>;
-
-  @Column({ nullable: true })
+  status: NegotiationStatus;
+  costPrice: number;
+  sellingPrice: number;
+  minAcceptablePrice: number;
+  messageHistory: Array<{ role: 'user' | 'bot'; message: string; price?: number; timestamp: string }>;
   expiredAt?: Date;
-
-  @Column({ nullable: true })
   acceptedAt?: Date;
-
-  @Column({ type: 'text', nullable: true })
   declineReason?: string;
+  user?: any;
+  product?: any;
 }
 
+const NegotiationSchema = createSchema<Negotiation>({
+  userId: { type: String, required: true, index: true },
+  productId: { type: String, required: true, index: true },
+  round: { type: Number, default: 1 },
+  offeredPrice: { type: Number, required: true },
+  counterPrice: { type: Number, required: true },
+  acceptedPrice: { type: Number },
+  status: { type: String, enum: Object.values(NegotiationStatus), default: NegotiationStatus.ACTIVE, index: true },
+  costPrice: { type: Number, required: true },
+  sellingPrice: { type: Number, required: true },
+  minAcceptablePrice: { type: Number, required: true },
+  messageHistory: [{ type: Object }],
+  expiredAt: { type: Date },
+  acceptedAt: { type: Date },
+  declineReason: { type: String },
+  deletedAt: { type: Date },
+});
 
+NegotiationSchema.index({ userId: 1, productId: 1, status: 1 });
+
+export const Negotiation = createModel<Negotiation>('Negotiation', NegotiationSchema);

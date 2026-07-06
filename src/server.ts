@@ -1,5 +1,4 @@
 import dotenv from 'dotenv';
-import 'reflect-metadata';
 import { createApp } from './app';
 import { initializeDatabase } from './config/data-source';
 
@@ -16,9 +15,7 @@ function printReady(port: number, apiPrefix: string) {
     ? process.env.APP_URL
     : `http://localhost:${port}`;
   const docsUrl = `http://localhost:${port}/docs`;
-  const dbLabel = process.env.DB_TYPE === 'sqlite'
-    ? `SQLite · ${process.env.DB_DATABASE || 'data/hook_dev.sqlite'}`
-    : `Postgres · ${process.env.DB_HOST || 'DATABASE_URL'}`;
+  const dbLabel = `MongoDB · ${process.env.MONGODB_URI ? 'MONGODB_URI' : 'not configured'}`;
 
   console.log(`
   ╔═══════════════════════════════════════════════╗
@@ -58,9 +55,7 @@ bootstrap().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : 'Unknown startup error';
   console.error('Failed to start Hook API');
   console.error(`Reason: ${message}`);
-  if (process.env.DB_TYPE !== 'sqlite') {
-    console.error('');
-    console.error('Database tip: npm run dev uses local SQLite by default. If you intentionally want the .env database, run HOOK_USE_ENV_DB=true npm run dev.');
-  }
+  console.error('');
+  console.error('Database tip: npm run dev now uses MongoDB from .env. Check MONGODB_URI and MONGODB_DB_NAME.');
   process.exit(1);
 });

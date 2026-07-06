@@ -1,104 +1,57 @@
-﻿import { Entity, Column, ManyToOne, JoinColumn, OneToMany, Index } from 'typeorm';
-import { BaseEntity } from '@models/base.model';
 import { ProductStatus } from '@lib/constants';
-import { Vendor } from '@models/vendors/vendor.model';
-import { Category } from '@models/categories/category.model';
-import { CartItem } from '@models/cart/cart-item.model';
-import { OrderItem } from '@models/orders/order-item.model';
-import { Negotiation } from '@models/negotiations/negotiation.model';
+import { BaseEntity, createModel, createSchema } from '@models/base.model';
 
-@Entity('products')
-@Index(['vendorId', 'status'])
-@Index(['categoryId'])
-@Index(['slug'], { unique: true })
-export class Product extends BaseEntity {
-  @Column({ length: 255 })
-  title!: string;
-
-  @Column({ length: 255, unique: true })
-  slug!: string;
-
-  @Column({ type: 'text', nullable: true })
+export interface Product extends BaseEntity {
+  title: string;
+  slug: string;
   description?: string;
-
-  // Pricing
-  @Column({ type: 'float' })
-  costPrice!: number; // What Hook's runner pays at market
-
-  @Column({ type: 'float' })
-  sellingPrice!: number; // Listed retail price
-
-  @Column({ type: 'float', nullable: true })
-  discountedPrice?: number; // Promotional price
-
-  @Column({ type: 'float' })
-  minAcceptablePrice!: number; // Floor for AI negotiation
-
-  // Inventory
-  @Column({ default: 0 })
-  quantity!: number;
-
-  @Column({ default: 0 })
-  reservedQuantity!: number;
-
-  // Variants
-  @Column({ type: 'simple-json', nullable: true })
+  costPrice: number;
+  sellingPrice: number;
+  discountedPrice?: number;
+  minAcceptablePrice: number;
+  quantity: number;
+  reservedQuantity: number;
   colors?: string[];
-
-  @Column({ type: 'simple-json', nullable: true })
   sizes?: string[];
-
-  // Media
-  @Column({ type: 'simple-json', default: '[]' })
-  images!: string[];
-
-  @Column({ type: 'simple-json', nullable: true })
+  images: string[];
   videos?: string[];
-
-  // Hook ID (HID) for market tracking
-  @Column({ length: 20, nullable: true, unique: true })
-  hookId?: string; // e.g. BAL-SHK-089
-
-  // Status
-  @Column({
-    type: 'varchar',
-    default: ProductStatus.DRAFT,
-  })
-  status!: ProductStatus;
-
-  @Column({ type: 'int', default: 0 })
-  viewCount!: number;
-
-  @Column({ type: 'int', default: 0 })
-  orderCount!: number;
-
-  @Column({ type: 'float', default: 0 })
-  averageRating!: number;
-
-  // === Relationships ===
-
-  @ManyToOne(() => Vendor, (vendor) => vendor.products)
-  @JoinColumn({ name: 'vendorId' })
-  vendor!: Vendor;
-
-  @Column()
-  vendorId!: string;
-
-  @ManyToOne(() => Category, (cat) => cat.products)
-  @JoinColumn({ name: 'categoryId' })
-  category!: Category;
-
-  @Column()
-  categoryId!: string;
-
-  @OneToMany(() => CartItem, (ci) => ci.product)
-  cartItems!: CartItem[];
-
-  @OneToMany(() => OrderItem, (oi) => oi.product)
-  orderItems!: OrderItem[];
-
-  @OneToMany(() => Negotiation, (neg) => neg.product)
-  negotiations!: Negotiation[];
+  hookId?: string;
+  status: ProductStatus;
+  viewCount: number;
+  orderCount: number;
+  averageRating: number;
+  vendorId: string;
+  categoryId: string;
+  vendor?: any;
+  category?: any;
 }
 
+const ProductSchema = createSchema<Product>({
+  title: { type: String, required: true, trim: true },
+  slug: { type: String, required: true, unique: true, trim: true },
+  description: { type: String },
+  costPrice: { type: Number, required: true },
+  sellingPrice: { type: Number, required: true },
+  discountedPrice: { type: Number },
+  minAcceptablePrice: { type: Number, required: true },
+  quantity: { type: Number, default: 0 },
+  reservedQuantity: { type: Number, default: 0 },
+  colors: [{ type: String }],
+  sizes: [{ type: String }],
+  images: [{ type: String }],
+  videos: [{ type: String }],
+  hookId: { type: String, unique: true, sparse: true },
+  status: { type: String, enum: Object.values(ProductStatus), default: ProductStatus.DRAFT, index: true },
+  viewCount: { type: Number, default: 0 },
+  orderCount: { type: Number, default: 0 },
+  averageRating: { type: Number, default: 0 },
+  vendorId: { type: String, required: true, index: true },
+  categoryId: { type: String, required: true, index: true },
+  deletedAt: { type: Date },
+});
 
+ProductSchema.index({ vendorId: 1, status: 1 });
+ProductSchema.index({ categoryId: 1 });
+ProductSchema.index({ title: 'text', description: 'text' });
+
+export const Product = createModel<Product>('Product', ProductSchema);

@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { PaymentStatus, SettlementStatus } from '@lib/constants';
-import { sendSuccess } from '@utils/http';
+import { HttpError, sendSuccess } from '@utils/http';
 import { actor, adminRepos, getPagination, paginated, routeParam } from './admin.helpers';
 
 export class AdminFinancialsController {
@@ -32,6 +32,15 @@ export class AdminFinancialsController {
       take: limit,
     });
     sendSuccess(res, paginated(data, total, page, limit));
+  };
+
+  settlementDetail = async (req: Request, res: Response) => {
+    const settlement = await adminRepos.settlements().findOne({
+      where: { id: routeParam(req.params.id) },
+      relations: { vendor: true },
+    });
+    if (!settlement) throw new HttpError(404, 'Settlement not found');
+    sendSuccess(res, settlement);
   };
 
   trigger = async (req: Request, res: Response) => {

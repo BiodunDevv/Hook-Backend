@@ -1,4 +1,4 @@
-import { Repository } from 'typeorm';
+import type { MongoRepository as Repository } from '@lib/mongo-repository';
 import { DELIVERY_SLA_HOURS, ESCROW_HOLD_HOURS, OrderStatus, PaymentStatus, SettlementStatus, VENDOR_COMMISSION_PERCENTAGE } from '@lib/constants';
 import { Cart } from '@models/cart/cart.model';
 import { CartItem } from '@models/cart/cart-item.model';
@@ -25,9 +25,11 @@ export class OrderService {
       where: { userId, isCheckedOut: false },
       relations: { items: { product: { vendor: true } } },
     });
-    if (!cart || !cart.items.length) throw new HttpError(400, 'Cart is empty');
+    if (cart) cart.items = cart.items || await this.cartItems.find({ where: { cartId: cart.id }, relations: { product: true } });
+    const cartItems = cart?.items || [];
+    if (!cart || !cartItems.length) throw new HttpError(400, 'Cart is empty');
 
-    const vendorIds = [...new Set(cart.items.map((item) => item.product.vendorId))];
+    const vendorIds = [...new Set(cartItems.map((item) => item.product.vendorId))];
     const order = await this.orders.save(this.orders.create({
       orderCode: `HK-${Date.now().toString().slice(-8)}`,
       userId,
@@ -43,7 +45,7 @@ export class OrderService {
       scheduledDeliveryAt: body.scheduledDeliveryAt,
     }));
 
-    await Promise.all(cart.items.map(async (item) => {
+    await Promise.all(cartItems.map(async (item) => {
       const product = item.product;
       await this.orderItems.save(this.orderItems.create({
         orderId: order.id,
@@ -64,7 +66,7 @@ export class OrderService {
       });
     }));
 
-    await this.createSettlements(order.id, cart.items);
+    await this.createSettlements(order.id, cartItems);
     await this.logistics.save(this.logistics.create({
       orderId: order.id,
       deliveryLocation: {

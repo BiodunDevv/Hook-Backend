@@ -1,64 +1,41 @@
-﻿import { Entity, Column, ManyToOne, JoinColumn, Index } from 'typeorm';
-import { BaseEntity } from '@models/base.model';
-import { dateTimeColumnType } from '@models/column-types';
 import { SettlementStatus } from '@lib/constants';
-import { Vendor } from '@models/vendors/vendor.model';
-import { Order } from '@models/orders/order.model';
+import { BaseEntity, createModel, createSchema } from '@models/base.model';
 
-@Entity('settlements')
-@Index(['vendorId', 'status'])
-@Index(['orderId'])
-export class Settlement extends BaseEntity {
-  @ManyToOne(() => Vendor, (vendor) => vendor.settlements)
-  @JoinColumn({ name: 'vendorId' })
-  vendor!: Vendor;
-
-  @Column()
-  vendorId!: string;
-
-  @ManyToOne(() => Order)
-  @JoinColumn({ name: 'orderId' })
-  order!: Order;
-
-  @Column()
-  orderId!: string;
-
-  @Column({ length: 50, unique: true, nullable: true })
+export interface Settlement extends BaseEntity {
+  vendorId: string;
+  orderId: string;
   settlementRef?: string;
-
-  // Financial breakdown
-  @Column({ type: 'float' })
-  itemTotal!: number;
-
-  @Column({ type: 'float' })
-  commissionAmount!: number; // Hook's 15%
-
-  @Column({ type: 'float' })
-  netAmount!: number; // What vendor gets
-
-  @Column({ type: 'float' })
-  deliveryFeePortion!: number;
-
-  @Column({
-    type: 'varchar',
-    default: SettlementStatus.PENDING_ESCROW,
-  })
-  status!: SettlementStatus;
-
-  // Escrow
-  @Column({ type: dateTimeColumnType })
-  escrowReleaseAt!: Date; // 24h post-delivery
-
-  @Column({ nullable: true })
+  itemTotal: number;
+  commissionAmount: number;
+  netAmount: number;
+  deliveryFeePortion: number;
+  status: SettlementStatus;
+  escrowReleaseAt: Date;
   escrowReleasedAt?: Date;
-
-  @Column({ nullable: true })
   paidAt?: Date;
-
-  @Column({ length: 100, nullable: true })
-  gatewayTransferRef?: string; // Paystack/Nomba transfer ref
-
-  @Column({ type: 'text', nullable: true })
+  gatewayTransferRef?: string;
   notes?: string;
+  vendor?: any;
+  order?: any;
 }
 
+const SettlementSchema = createSchema<Settlement>({
+  vendorId: { type: String, required: true, index: true },
+  orderId: { type: String, required: true, index: true },
+  settlementRef: { type: String, unique: true, sparse: true },
+  itemTotal: { type: Number, required: true },
+  commissionAmount: { type: Number, required: true },
+  netAmount: { type: Number, required: true },
+  deliveryFeePortion: { type: Number, required: true },
+  status: { type: String, enum: Object.values(SettlementStatus), default: SettlementStatus.PENDING_ESCROW, index: true },
+  escrowReleaseAt: { type: Date, required: true },
+  escrowReleasedAt: { type: Date },
+  paidAt: { type: Date },
+  gatewayTransferRef: { type: String },
+  notes: { type: String },
+  deletedAt: { type: Date },
+});
+
+SettlementSchema.index({ vendorId: 1, status: 1 });
+
+export const Settlement = createModel<Settlement>('Settlement', SettlementSchema);

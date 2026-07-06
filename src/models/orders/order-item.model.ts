@@ -1,51 +1,33 @@
-﻿import { Entity, Column, ManyToOne, JoinColumn } from 'typeorm';
-import { BaseEntity } from '@models/base.model';
-import { Order } from './order.model';
-import { Product } from '@models/products/product.model';
-import { Vendor } from '@models/vendors/vendor.model';
+import { BaseEntity, createModel, createSchema } from '@models/base.model';
 
-@Entity('order_items')
-export class OrderItem extends BaseEntity {
-  @ManyToOne(() => Order, (order) => order.items, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'orderId' })
-  order!: Order;
-
-  @Column()
-  orderId!: string;
-
-  @ManyToOne(() => Product)
-  @JoinColumn({ name: 'productId' })
-  product!: Product;
-
-  @Column()
-  productId!: string;
-
-  @Column({ length: 100 })
-  productTitle!: string; // Snapshot at order time
-
-  @Column({ length: 255, nullable: true })
+export interface OrderItem extends BaseEntity {
+  orderId: string;
+  productId: string;
+  productTitle: string;
   productImage?: string;
-
-  @ManyToOne(() => Vendor)
-  @JoinColumn({ name: 'vendorId' })
-  vendor!: Vendor;
-
-  @Column()
-  vendorId!: string;
-
-  @Column()
-  quantity!: number;
-
-  @Column({ type: 'float' })
-  unitPrice!: number;
-
-  @Column({ type: 'float' })
-  totalPrice!: number;
-
-  @Column({ type: 'simple-json', nullable: true })
+  vendorId: string;
+  quantity: number;
+  unitPrice: number;
+  totalPrice: number;
   selectedVariants?: { color?: string; size?: string };
-
-  @Column({ type: 'float', default: 0 })
-  commissionAmount!: number; // 15% of vendor's share
+  commissionAmount: number;
+  product?: any;
+  vendor?: any;
+  order?: any;
 }
 
+const OrderItemSchema = createSchema<OrderItem>({
+  orderId: { type: String, required: true, index: true },
+  productId: { type: String, required: true, index: true },
+  productTitle: { type: String, required: true },
+  productImage: { type: String },
+  vendorId: { type: String, required: true, index: true },
+  quantity: { type: Number, required: true },
+  unitPrice: { type: Number, required: true },
+  totalPrice: { type: Number, required: true },
+  selectedVariants: { type: Object },
+  commissionAmount: { type: Number, default: 0 },
+  deletedAt: { type: Date },
+});
+
+export const OrderItem = createModel<OrderItem>('OrderItem', OrderItemSchema);

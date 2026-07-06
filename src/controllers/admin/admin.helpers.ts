@@ -1,11 +1,13 @@
 import { Request } from 'express';
-import { AppDataSource } from '@config/data-source';
 import { getPagination, paginated, routeParam } from '@lib/api-utils';
+import { MongoRepository } from '@lib/mongo-repository';
 import { AdminAuditLog } from '@models/admin/admin-audit-log.model';
 import { Booth } from '@models/booths/booth.model';
+import { Category } from '@models/categories/category.model';
 import { FieldAgent } from '@models/field-agents/field-agent.model';
 import { Logistics } from '@models/logistics/logistics.model';
 import { Negotiation } from '@models/negotiations/negotiation.model';
+import { OrderItem } from '@models/orders/order-item.model';
 import { Order } from '@models/orders/order.model';
 import { Payment } from '@models/payments/payment.model';
 import { Product } from '@models/products/product.model';
@@ -14,17 +16,19 @@ import { User } from '@models/users/user.model';
 import { Vendor } from '@models/vendors/vendor.model';
 
 export const adminRepos = {
-  users: () => AppDataSource.getRepository(User),
-  vendors: () => AppDataSource.getRepository(Vendor),
-  products: () => AppDataSource.getRepository(Product),
-  orders: () => AppDataSource.getRepository(Order),
-  payments: () => AppDataSource.getRepository(Payment),
-  logistics: () => AppDataSource.getRepository(Logistics),
-  negotiations: () => AppDataSource.getRepository(Negotiation),
-  settlements: () => AppDataSource.getRepository(Settlement),
-  booths: () => AppDataSource.getRepository(Booth),
-  fieldAgents: () => AppDataSource.getRepository(FieldAgent),
-  auditLogs: () => AppDataSource.getRepository(AdminAuditLog),
+  users: () => new MongoRepository(User),
+  vendors: () => new MongoRepository(Vendor, { owner: () => adminRepos.users() }),
+  products: () => new MongoRepository(Product, { vendor: () => adminRepos.vendors(), category: () => adminRepos.categories() }),
+  orders: () => new MongoRepository(Order, { user: () => adminRepos.users() }),
+  orderItems: () => new MongoRepository(OrderItem, { product: () => adminRepos.products(), vendor: () => adminRepos.vendors(), order: () => adminRepos.orders() }),
+  categories: () => new MongoRepository(Category),
+  payments: () => new MongoRepository(Payment, { order: () => adminRepos.orders() }),
+  logistics: () => new MongoRepository(Logistics, { order: () => adminRepos.orders(), driver: () => adminRepos.users() }),
+  negotiations: () => new MongoRepository(Negotiation, { user: () => adminRepos.users(), product: () => adminRepos.products() }),
+  settlements: () => new MongoRepository(Settlement, { vendor: () => adminRepos.vendors(), order: () => adminRepos.orders() }),
+  booths: () => new MongoRepository(Booth, { fieldAgent: () => adminRepos.fieldAgents() }),
+  fieldAgents: () => new MongoRepository(FieldAgent, { agent: () => adminRepos.users() }),
+  auditLogs: () => new MongoRepository(AdminAuditLog),
 };
 
 export { getPagination, paginated, routeParam };

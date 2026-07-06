@@ -1,4 +1,4 @@
-import { Repository } from 'typeorm';
+import type { MongoRepository as Repository } from '@lib/mongo-repository';
 import { LogisticsStatus, UserRole } from '@lib/constants';
 import { FieldAgent } from '@models/field-agents/field-agent.model';
 import { Logistics } from '@models/logistics/logistics.model';

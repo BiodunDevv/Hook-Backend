@@ -3,12 +3,12 @@ const path = require('path');
 
 let child;
 let restarting = false;
-const useEnvDatabase = process.env.HOOK_USE_ENV_DB === 'true';
+let startupFailed = false;
 
 function printBanner() {
   console.clear();
   console.log('Hook API dev');
-  console.log(`Database: ${useEnvDatabase ? 'from .env' : 'local SQLite'}`);
+  console.log('Database: MongoDB from .env');
   console.log('Press r to restart, Ctrl+C to stop');
   console.log('');
 }
@@ -25,20 +25,7 @@ function start() {
     cwd: path.join(__dirname, '..'),
     env: {
       ...process.env,
-      ...(useEnvDatabase
-        ? {}
-        : {
-            NODE_ENV: 'development',
-            DB_TYPE: 'sqlite',
-            DB_DATABASE: 'data/hook_dev.sqlite',
-            DB_SYNCHRONIZE: 'true',
-            DATABASE_URL: '',
-            DB_HOST: '',
-            DB_PORT: '',
-            DB_USERNAME: '',
-            DB_PASSWORD: '',
-            DB_SSL: 'false',
-          }),
+      NODE_ENV: process.env.NODE_ENV || 'development',
       DOTENV_CONFIG_QUIET: 'true',
       NODE_NO_WARNINGS: '1',
       TS_NODE_FILES: 'true',
@@ -53,12 +40,39 @@ function start() {
   child.stderr.on('data', (chunk) => {
     const text = chunk.toString();
     if (text.includes("SECURITY WARNING: The SSL modes 'prefer', 'require', and 'verify-ca'")) return;
+
+    if (text.includes('Cannot find module')) {
+      startupFailed = true;
+      const reason = text
+        .split('\n')
+        .map((line) => line.trim())
+        .find((line) => line.startsWith('Error: Cannot find module')) || text.trim();
+      console.error('Failed to start Hook API');
+      console.error(`Reason: ${reason.replace(/^Error:\s*/, '')}`);
+      return;
+    }
+
+    if (text.includes('NODE_MODULE_VERSION') || text.includes('compiled against a different Node.js version')) {
+      startupFailed = true;
+      const reason = text
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .join(' ');
+      console.error('Failed to start Hook API');
+      console.error(`Reason: ${reason.replace(/^Error:\s*/, '')}`);
+      return;
+    }
+
     process.stderr.write(chunk);
   });
 
   child.on('exit', (code, signal) => {
     if (restarting) return;
     if (signal === 'SIGTERM' || signal === 'SIGINT') return;
+    if (startupFailed) {
+      startupFailed = false;
+    }
     process.exit(code ?? 0);
   });
 }

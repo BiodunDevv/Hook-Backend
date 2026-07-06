@@ -1,4 +1,4 @@
-import { Repository } from 'typeorm';
+import type { MongoRepository as Repository } from '@lib/mongo-repository';
 import { NegotiationStatus } from '@lib/constants';
 import { Negotiation } from '@models/negotiations/negotiation.model';
 import { Product } from '@models/products/product.model';

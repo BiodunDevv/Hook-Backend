@@ -1,34 +1,26 @@
-﻿import { Entity, Column, ManyToOne, JoinColumn } from 'typeorm';
-import { BaseEntity } from '@models/base.model';
-import { Cart } from './cart.model';
-import { Product } from '@models/products/product.model';
+import { BaseEntity, createModel, createSchema } from '@models/base.model';
 
-@Entity('cart_items')
-export class CartItem extends BaseEntity {
-  @ManyToOne(() => Cart, (cart) => cart.items, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'cartId' })
-  cart!: Cart;
-
-  @Column()
-  cartId!: string;
-
-  @ManyToOne(() => Product)
-  @JoinColumn({ name: 'productId' })
-  product!: Product;
-
-  @Column()
-  productId!: string;
-
-  @Column()
-  quantity!: number;
-
-  @Column({ type: 'float' })
-  unitPrice!: number;
-
-  @Column({ type: 'float' })
-  totalPrice!: number;
-
-  @Column({ type: 'simple-json', nullable: true })
+export interface CartItem extends BaseEntity {
+  cartId: string;
+  productId: string;
+  quantity: number;
+  unitPrice: number;
+  totalPrice: number;
   selectedVariants?: { color?: string; size?: string };
+  product?: any;
+  cart?: any;
 }
 
+const CartItemSchema = createSchema<CartItem>({
+  cartId: { type: String, required: true, index: true },
+  productId: { type: String, required: true, index: true },
+  quantity: { type: Number, required: true },
+  unitPrice: { type: Number, required: true },
+  totalPrice: { type: Number, required: true },
+  selectedVariants: { type: Object },
+  deletedAt: { type: Date },
+});
+
+CartItemSchema.index({ cartId: 1, productId: 1 });
+
+export const CartItem = createModel<CartItem>('CartItem', CartItemSchema);

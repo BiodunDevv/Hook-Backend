@@ -1,4 +1,4 @@
-import { Repository } from 'typeorm';
+import type { MongoRepository as Repository } from '@lib/mongo-repository';
 import { Cart } from '@models/cart/cart.model';
 import { CartItem } from '@models/cart/cart-item.model';
 import { Product } from '@models/products/product.model';
@@ -12,7 +12,7 @@ export class CartService {
   ) {}
 
   async getCart(userId: string) {
-    let cart = await this.carts.findOne({
+    let cart: any = await this.carts.findOne({
       where: { userId, isCheckedOut: false },
       relations: { items: { product: true } },
     });
@@ -20,6 +20,7 @@ export class CartService {
       cart = await this.carts.save(this.carts.create({ userId, subtotal: 0, deliveryFee: 0, total: 0 }));
       cart.items = [];
     }
+    cart.items = cart.items || await this.items.find({ where: { cartId: cart.id }, relations: { product: true } });
     return cart;
   }
 
@@ -29,7 +30,7 @@ export class CartService {
     if (product.quantity < quantity) throw new HttpError(400, 'Insufficient stock for this product');
 
     const cart = await this.getCart(userId);
-    const existing = cart.items.find((item) => item.productId === productId);
+    const existing = (cart.items || []).find((item: any) => item.productId === productId);
     const unitPrice = product.discountedPrice || product.sellingPrice;
 
     if (existing) {
@@ -79,6 +80,7 @@ export class CartService {
       relations: { items: { product: true } },
     });
     if (!cart) throw new HttpError(404, 'Cart not found');
+    cart.items = cart.items || [];
     cart.subtotal = cart.items.reduce((sum, item) => sum + item.totalPrice, 0);
     cart.deliveryFee = cart.items.length ? Number(process.env.DEFAULT_DELIVERY_FEE || 1500) : 0;
     cart.total = cart.subtotal + cart.deliveryFee;

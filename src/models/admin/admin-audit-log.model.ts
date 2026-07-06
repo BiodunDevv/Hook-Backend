@@ -1,35 +1,30 @@
-import { Entity, Column, Index } from 'typeorm';
-import { BaseEntity } from '@models/base.model';
+import { BaseEntity, createModel, createSchema } from '@models/base.model';
 
-@Entity('admin_audit_logs')
-@Index(['action', 'createdAt'])
-@Index(['performedBy'])
-@Index(['resourceType', 'resourceId'])
-export class AdminAuditLog extends BaseEntity {
-  @Column({ type: 'varchar', length: 50 })
-  action!: string; // 'financial.view', 'settlement.trigger', 'settlement.view'
-
-  @Column({ type: 'varchar', length: 50 })
-  resourceType!: string; // 'financials', 'settlement'
-
-  @Column({ type: 'varchar', length: 100, nullable: true })
+export interface AdminAuditLog extends BaseEntity {
+  action: string;
+  resourceType: string;
   resourceId?: string;
-
-  @Column({ type: 'varchar', length: 100 })
-  performedBy!: string; // admin user ID
-
-  @Column({ type: 'varchar', length: 255, nullable: true })
+  performedBy: string;
   performedByEmail?: string;
-
-  @Column({ type: 'varchar', length: 45, nullable: true })
   ipAddress?: string;
-
-  @Column({ type: 'text', nullable: true })
-  details?: string; // JSON string of contextual data
-
-  @Column({ type: 'varchar', length: 50, nullable: true })
-  status?: string; // 'success', 'failure', 'denied'
-
-  @Column({ type: 'text', nullable: true })
+  details?: string;
+  status?: string;
   metadata?: string;
 }
+
+const AdminAuditLogSchema = createSchema<AdminAuditLog>({
+  action: { type: String, required: true, index: true },
+  resourceType: { type: String, required: true },
+  resourceId: { type: String },
+  performedBy: { type: String, required: true, index: true },
+  performedByEmail: { type: String },
+  ipAddress: { type: String },
+  details: { type: String },
+  status: { type: String },
+  metadata: { type: String },
+  deletedAt: { type: Date },
+});
+
+AdminAuditLogSchema.index({ resourceType: 1, resourceId: 1 });
+
+export const AdminAuditLog = createModel<AdminAuditLog>('AdminAuditLog', AdminAuditLogSchema);

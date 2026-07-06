@@ -1,80 +1,44 @@
-﻿import {
-  Entity,
-  Column,
-  OneToMany,
-  ManyToOne,
-  JoinColumn,
-  Index,
-} from 'typeorm';
-import { BaseEntity } from '@models/base.model';
-import { UserRole, VendorTier } from '@lib/constants';
-import { Product } from '@models/products/product.model';
-import { Order } from '@models/orders/order.model';
-import { Cart } from '@models/cart/cart.model';
-import { Negotiation } from '@models/negotiations/negotiation.model';
-import { Vendor } from '@models/vendors/vendor.model';
-import { FieldAgent } from '@models/field-agents/field-agent.model';
+import { UserRole } from '@lib/constants';
+import { BaseEntity, createModel, createSchema } from '@models/base.model';
 
-@Entity('users')
-export class User extends BaseEntity {
-  @Column({ unique: true, length: 255 })
-  email!: string;
-
-  @Column({ length: 15, unique: true, nullable: true })
+export interface User extends BaseEntity {
+  email: string;
   phone?: string;
-
-  @Column({ nullable: true })
   password?: string;
-
-  @Column({ length: 100 })
-  firstName!: string;
-
-  @Column({ length: 100 })
-  lastName!: string;
-
-  @Column({
-    type: 'varchar',
-    default: UserRole.SHOPPER,
-  })
-  role!: UserRole;
-
-  @Column({ default: false })
-  isEmailVerified!: boolean;
-
-  @Column({ default: false })
-  isPhoneVerified!: boolean;
-
-  @Column({ nullable: true })
+  firstName: string;
+  lastName: string;
+  role: UserRole;
+  isEmailVerified: boolean;
+  isPhoneVerified: boolean;
   avatarUrl?: string;
-
-  @Column({ type: 'simple-json', nullable: true })
   address?: Record<string, unknown>;
-
-  @Column({ type: 'simple-json', nullable: true })
   preferences?: Record<string, unknown>;
-
-  @Column({ default: true })
-  isActive!: boolean;
-
-  @Column({ nullable: true })
+  permissions?: string[];
+  isActive: boolean;
   lastLoginAt?: Date;
-
-  @Column({ nullable: true })
   refreshToken?: string;
-
-  // === Relationships ===
-
-  @OneToMany(() => Cart, (cart) => cart.user)
-  cart!: Cart[];
-
-  @OneToMany(() => Order, (order) => order.user)
-  orders!: Order[];
-
-  @OneToMany(() => Negotiation, (neg) => neg.user)
-  negotiations!: Negotiation[];
-
-  @OneToMany(() => Vendor, (vendor) => vendor.owner)
-  vendors!: Vendor[];
 }
 
+const UserSchema = createSchema<User>({
+  email: { type: String, required: true, unique: true, trim: true, lowercase: true },
+  phone: { type: String, sparse: true, trim: true },
+  password: { type: String },
+  firstName: { type: String, default: '' },
+  lastName: { type: String, default: '' },
+  role: { type: String, enum: Object.values(UserRole), default: UserRole.SHOPPER, index: true },
+  isEmailVerified: { type: Boolean, default: false },
+  isPhoneVerified: { type: Boolean, default: false },
+  avatarUrl: { type: String },
+  address: { type: Object },
+  preferences: { type: Object },
+  permissions: { type: [String], default: [] },
+  isActive: { type: Boolean, default: true, index: true },
+  lastLoginAt: { type: Date },
+  refreshToken: { type: String, index: true },
+  deletedAt: { type: Date },
+});
 
+UserSchema.index({ email: 1 }, { unique: true });
+UserSchema.index({ role: 1, isActive: 1 });
+
+export const User = createModel<User>('User', UserSchema);

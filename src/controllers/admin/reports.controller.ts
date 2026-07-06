@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
-import { sendCreated, sendSuccess } from '@utils/http';
-import { getPagination, paginated } from './admin.helpers';
+import { HttpError, sendCreated, sendSuccess } from '@utils/http';
+import { getPagination, paginated, routeParam } from './admin.helpers';
 
 const generatedReports: Array<Record<string, unknown>> = [];
 
@@ -21,5 +21,11 @@ export class AdminReportsController {
     };
     generatedReports.unshift(report);
     sendCreated(res, report);
+  };
+
+  detail = async (req: Request, res: Response) => {
+    const report = generatedReports.find((item) => item.id === routeParam(req.params.id));
+    if (!report) throw new HttpError(404, 'Report not found');
+    sendSuccess(res, report);
   };
 }

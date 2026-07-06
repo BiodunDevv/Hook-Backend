@@ -1,5 +1,4 @@
 import { Request, Response } from 'express';
-import { ILike } from 'typeorm';
 import { ProductStatus } from '@lib/constants';
 import { getPagination, paginated } from '@lib/api-utils';
 import { AppDataSource } from '@config/data-source';
@@ -20,33 +19,20 @@ export class PublicController {
 
   getProducts = async (req: Request, res: Response) => {
     const { page, limit, skip } = getPagination(req.query);
-    const qb = this.products
-      .createQueryBuilder('product')
-      .leftJoinAndSelect('product.vendor', 'vendor')
-      .leftJoinAndSelect('product.category', 'category')
-      .where('product.status = :status', { status: ProductStatus.APPROVED })
-      .orderBy('product.createdAt', 'DESC')
-      .skip(skip)
-      .take(limit);
-
-    if (typeof req.query.categoryId === 'string') {
-      qb.andWhere('product.categoryId = :categoryId', { categoryId: req.query.categoryId });
-    }
-    if (typeof req.query.vendorId === 'string') {
-      qb.andWhere('product.vendorId = :vendorId', { vendorId: req.query.vendorId });
-    }
-    if (typeof req.query.q === 'string') {
-      qb.andWhere('(product.title ILIKE :q OR product.description ILIKE :q)', { q: `%${req.query.q}%` });
-    }
-    if (typeof req.query.minPrice === 'string') {
-      qb.andWhere('product.sellingPrice >= :minPrice', { minPrice: Number(req.query.minPrice) });
-    }
-    if (typeof req.query.maxPrice === 'string') {
-      qb.andWhere('product.sellingPrice <= :maxPrice', { maxPrice: Number(req.query.maxPrice) });
-    }
-
-    const [data, total] = await qb.getManyAndCount();
-    sendSuccess(res, paginated(data, total, page, limit));
+    const where: Record<string, unknown> = { status: ProductStatus.APPROVED };
+    if (typeof req.query.categoryId === 'string') where.categoryId = req.query.categoryId;
+    if (typeof req.query.vendorId === 'string') where.vendorId = req.query.vendorId;
+    const q = typeof req.query.q === 'string' ? req.query.q.toLowerCase() : '';
+    const minPrice = typeof req.query.minPrice === 'string' ? Number(req.query.minPrice) : undefined;
+    const maxPrice = typeof req.query.maxPrice === 'string' ? Number(req.query.maxPrice) : undefined;
+    const all = await this.products.find({ where, relations: { vendor: true, category: true }, order: { createdAt: 'DESC' } });
+    const filtered = all.filter((product: any) => {
+      if (q && ![product.title, product.description].some((value) => String(value || '').toLowerCase().includes(q))) return false;
+      if (minPrice !== undefined && Number(product.sellingPrice) < minPrice) return false;
+      if (maxPrice !== undefined && Number(product.sellingPrice) > maxPrice) return false;
+      return true;
+    });
+    sendSuccess(res, paginated(filtered.slice(skip, skip + limit), filtered.length, page, limit));
   };
 
   getProduct = async (req: Request, res: Response) => {
@@ -117,17 +103,15 @@ export class PublicController {
     if (!q) return sendSuccess(res, { products: [], vendors: [] });
 
     const [products, vendors] = await Promise.all([
-      this.products.find({
-        where: { title: ILike(`%${q}%`), status: ProductStatus.APPROVED },
-        take: 20,
-      }),
-      this.vendors.find({
-        where: { businessName: ILike(`%${q}%`), isApproved: true },
-        take: 20,
-      }),
+      this.products.find({ where: { status: ProductStatus.APPROVED }, take: 100 }),
+      this.vendors.find({ where: { isApproved: true }, take: 100 }),
     ]);
 
-    return sendSuccess(res, { products, vendors });
+    const term = q.toLowerCase();
+    return sendSuccess(res, {
+      products: products.filter((product: any) => [product.title, product.description].some((value) => String(value || '').toLowerCase().includes(term))).slice(0, 20),
+      vendors: vendors.filter((vendor: any) => String(vendor.businessName || '').toLowerCase().includes(term)).slice(0, 20),
+    });
   };
 
   suggestions = async (req: Request, res: Response) => {
@@ -135,10 +119,13 @@ export class PublicController {
     if (!q) return sendSuccess(res, []);
 
     const products = await this.products.find({
-      where: { title: ILike(`%${q}%`) },
-      select: { id: true, title: true },
-      take: 8,
+      where: { status: ProductStatus.APPROVED },
+      take: 100,
     });
-    return sendSuccess(res, products.map((product) => product.title));
+    const term = q.toLowerCase();
+    return sendSuccess(res, products
+      .filter((product: any) => String(product.title || '').toLowerCase().includes(term))
+      .slice(0, 8)
+      .map((product) => product.title));
   };
 }

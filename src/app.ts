@@ -73,13 +73,13 @@ export function createApp() {
   }));
 
   app.use(`${apiPrefix}/auth`, createAuthRouter());
-  app.use(apiPrefix, createCustomerRouter());
+  app.use(`${apiPrefix}/admin`, createAdminRouter());
   app.use(`${apiPrefix}/vendors/me`, createVendorRouter());
   app.use(`${apiPrefix}/logistics`, createLogisticsRouter());
   app.use(`${apiPrefix}/upload`, createUploadRouter());
   app.use(`${apiPrefix}/webhooks`, createWebhookRouter());
   app.use(apiPrefix, createPublicRouter());
-  app.use(`${apiPrefix}/admin`, createAdminRouter());
+  app.use(apiPrefix, createCustomerRouter());
 
   app.use('/admin', (_req, res) => {
     res.redirect('http://localhost:3001/dashboard');

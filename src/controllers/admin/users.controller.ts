@@ -1,9 +1,10 @@
 import { Request, Response } from 'express';
-import { ILike } from 'typeorm';
 import { UserRole } from '@lib/constants';
 import { hashPassword } from '@lib/security';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
 import { adminRepos, getPagination, paginated, routeParam } from './admin.helpers';
+
+const STAFF_ROLES = [UserRole.SUPPORT, UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.FIELD_AGENT, UserRole.EV_DRIVER];
 
 function safeUser(user: any) {
   const { password, refreshToken, ...safe } = user;
@@ -14,17 +15,32 @@ export class AdminUsersController {
   list = async (req: Request, res: Response) => {
     const { page, limit, skip } = getPagination(req.query);
     const role = typeof req.query.role === 'string' ? req.query.role : undefined;
-    const search = typeof req.query.search === 'string' ? req.query.search : undefined;
-    const qb = adminRepos.users().createQueryBuilder('u').orderBy('u.createdAt', 'DESC');
-    if (role) qb.andWhere('u.role = :role', { role });
-    if (search) qb.andWhere('(u.email ILIKE :search OR u.firstName ILIKE :search OR u.lastName ILIKE :search)', { search: `%${search}%` });
-    const [data, total] = await qb.skip(skip).take(limit).getManyAndCount();
-    sendSuccess(res, paginated(data.map(safeUser), total, page, limit));
+    const search = typeof req.query.search === 'string' ? req.query.search.toLowerCase() : undefined;
+    const where: Record<string, unknown> = {};
+    if (role) where.role = role;
+    const all = await adminRepos.users().find({ where, order: { createdAt: 'DESC' } });
+    // Exclude staff roles unless a specific role filter was requested
+    const nonStaff = role ? all : all.filter((user: any) => !STAFF_ROLES.includes(user.role));
+    const filtered = search
+      ? nonStaff.filter((user: any) => [user.email, user.firstName, user.lastName].some((value) => String(value || '').toLowerCase().includes(search)))
+      : nonStaff;
+    const data = filtered.slice(skip, skip + limit);
+    sendSuccess(res, paginated(data.map(safeUser), filtered.length, page, limit));
   };
 
   customers = async (req: Request, res: Response) => {
-    req.query.role = UserRole.SHOPPER;
-    return this.list(req, res);
+    const { page, limit, skip } = getPagination(req.query);
+    const search = typeof req.query.search === 'string' ? req.query.search.toLowerCase() : undefined;
+    // Strictly shopper role only — never returns any staff accounts
+    const all = await adminRepos.users().find({
+      where: { role: UserRole.SHOPPER },
+      order: { createdAt: 'DESC' },
+    });
+    const filtered = search
+      ? all.filter((user: any) => [user.email, user.firstName, user.lastName].some((value) => String(value || '').toLowerCase().includes(search)))
+      : all;
+    const data = filtered.slice(skip, skip + limit);
+    sendSuccess(res, paginated(data.map(safeUser), filtered.length, page, limit));
   };
 
   detail = async (req: Request, res: Response) => {

@@ -6,6 +6,7 @@ declare global {
       sub: string;
       email: string;
       role: UserRole;
+      permissions: string[];
     }
 
     interface Request {

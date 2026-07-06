@@ -1,4 +1,4 @@
-import { Repository } from 'typeorm';
+import type { MongoRepository as Repository } from '@lib/mongo-repository';
 import { PaymentStatus } from '@lib/constants';
 import { Order } from '@models/orders/order.model';
 import { Payment } from '@models/payments/payment.model';

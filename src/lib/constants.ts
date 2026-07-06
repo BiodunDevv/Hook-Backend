@@ -6,6 +6,7 @@ export enum UserRole {
   VENDOR = 'vendor',
   FIELD_AGENT = 'field_agent',
   EV_DRIVER = 'ev_driver',
+  SUPPORT = 'support',
   ADMIN = 'admin',
   SUPER_ADMIN = 'super_admin',
 }

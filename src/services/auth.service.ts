@@ -1,4 +1,4 @@
-import { Repository } from 'typeorm';
+import type { MongoRepository as Repository } from '@lib/mongo-repository';
 import { UserRole } from '@lib/constants';
 import { comparePassword, hashPassword } from '@lib/security';
 import { Otp } from '@models/auth/otp.model';
@@ -38,7 +38,7 @@ export class AuthService {
 
     if (
       options?.adminOnly &&
-      ![UserRole.ADMIN, UserRole.SUPER_ADMIN].includes(user.role)
+      ![UserRole.SUPPORT, UserRole.ADMIN, UserRole.SUPER_ADMIN].includes(user.role)
     ) {
       throw new HttpError(403, 'Admin access required');
     }
@@ -117,7 +117,9 @@ export class AuthService {
   async refresh(refreshToken: string) {
     const user = await this.userRepo.findOne({ where: { refreshToken } });
     if (!user) throw new HttpError(401, 'Invalid refresh token');
-    return this.buildAuthResponse(user);
+    const response = this.buildAuthResponse(user);
+    await this.userRepo.update(user.id, { refreshToken: response.refreshToken });
+    return response;
   }
 
   async requestPasswordReset(email: string) {

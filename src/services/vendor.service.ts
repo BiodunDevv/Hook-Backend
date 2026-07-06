@@ -1,7 +1,8 @@
-import { Repository } from 'typeorm';
+import type { MongoRepository as Repository } from '@lib/mongo-repository';
 import { ProductStatus, UserRole, VendorTier } from '@lib/constants';
 import { Product } from '@models/products/product.model';
 import { Order } from '@models/orders/order.model';
+import { OrderItem } from '@models/orders/order-item.model';
 import { Settlement } from '@models/settlements/settlement.model';
 import { User } from '@models/users/user.model';
 import { Vendor } from '@models/vendors/vendor.model';
@@ -17,6 +18,7 @@ export class VendorService {
     private readonly vendors: Repository<Vendor>,
     private readonly products: Repository<Product>,
     private readonly orders: Repository<Order>,
+    private readonly orderItems: Repository<OrderItem>,
     private readonly settlements: Repository<Settlement>,
   ) {}
 
@@ -77,13 +79,10 @@ export class VendorService {
 
   async ordersForVendor(ownerId: string) {
     const vendor = await this.profile(ownerId);
-    return this.orders
-      .createQueryBuilder('order')
-      .leftJoinAndSelect('order.items', 'items')
-      .leftJoinAndSelect('order.user', 'user')
-      .where('items.vendorId = :vendorId', { vendorId: vendor.id })
-      .orderBy('order.createdAt', 'DESC')
-      .getMany();
+    const items = await this.orderItems.find({ where: { vendorId: vendor.id } });
+    const orderIds = [...new Set(items.map((item) => item.orderId))];
+    const orders = await Promise.all(orderIds.map((orderId) => this.orders.findOne({ where: { id: orderId }, relations: { user: true } })));
+    return orders.filter(Boolean).sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
   async settlementsForVendor(ownerId: string) {

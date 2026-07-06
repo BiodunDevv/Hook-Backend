@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { AppDataSource } from '@config/data-source';
 import { Order } from '@models/orders/order.model';
+import { OrderItem } from '@models/orders/order-item.model';
 import { Product } from '@models/products/product.model';
 import { Settlement } from '@models/settlements/settlement.model';
 import { User } from '@models/users/user.model';
@@ -15,6 +16,7 @@ export class VendorController {
     AppDataSource.getRepository(Vendor),
     AppDataSource.getRepository(Product),
     AppDataSource.getRepository(Order),
+    AppDataSource.getRepository(OrderItem),
     AppDataSource.getRepository(Settlement),
   );
 

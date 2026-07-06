@@ -1,26 +1,26 @@
-﻿import { Entity, Column, Index } from 'typeorm';
-import { BaseEntity } from '@models/base.model';
-import { dateTimeColumnType } from '@models/column-types';
+import { BaseEntity, createModel, createSchema } from '@models/base.model';
 
-@Entity('otps')
-@Index(['email', 'code'])
-export class Otp extends BaseEntity {
-  @Column({ length: 255 })
-  email!: string;
-
-  @Column({ length: 6 })
-  code!: string;
-
-  @Column({ length: 50, default: 'email_verification' })
-  type!: 'email_verification' | 'password_reset' | 'phone_verification';
-
-  @Column({ default: false })
-  isUsed!: boolean;
-
-  @Column({ type: dateTimeColumnType })
-  expiresAt!: Date;
-
-  get isValid(): boolean {
-    return !this.isUsed && new Date() < this.expiresAt;
-  }
+export interface Otp extends BaseEntity {
+  email: string;
+  code: string;
+  type: 'email_verification' | 'password_reset' | 'phone_verification';
+  isUsed: boolean;
+  expiresAt: Date;
+  isValid: boolean;
 }
+
+const OtpSchema = createSchema<Otp>({
+  email: { type: String, required: true, lowercase: true, trim: true, index: true },
+  code: { type: String, required: true },
+  type: { type: String, default: 'email_verification' },
+  isUsed: { type: Boolean, default: false },
+  expiresAt: { type: Date, required: true },
+  deletedAt: { type: Date },
+});
+
+OtpSchema.index({ email: 1, code: 1 });
+OtpSchema.virtual('isValid').get(function isValid(this: Otp) {
+  return !this.isUsed && new Date() < this.expiresAt;
+});
+
+export const Otp = createModel<Otp>('Otp', OtpSchema);

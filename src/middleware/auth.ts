@@ -1,5 +1,6 @@
 import { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
+import { jwtSecret } from '@config/env';
 import { UserRole } from '@lib/constants';
 import { MongoRepository } from '@lib/mongo-repository';
 import { User } from '@models/users/user.model';
@@ -10,8 +11,6 @@ interface TokenPayload {
   email: string;
   role: UserRole;
 }
-
-const JWT_SECRET = process.env.JWT_SECRET || 'hook-dev-jwt-secret-change-in-production-12345';
 
 async function resolvePermissions(role: UserRole, userId: string): Promise<string[]> {
   // super_admin and admin have all permissions implicitly — no DB hit needed
@@ -38,7 +37,7 @@ export function requireAuth(req: Request, _res: Response, next: NextFunction) {
   }
 
   try {
-    const payload = jwt.verify(token, JWT_SECRET) as TokenPayload;
+    const payload = jwt.verify(token, jwtSecret()) as TokenPayload;
 
     // Attach synchronously first so the request proceeds if permissions aren't needed
     req.user = { sub: payload.sub, email: payload.email, role: payload.role, permissions: [] };
@@ -63,11 +62,26 @@ export function optionalAuth(req: Request, _res: Response, next: NextFunction) {
   if (scheme !== 'Bearer' || !token) return next();
 
   try {
-    const payload = jwt.verify(token, JWT_SECRET) as TokenPayload;
+    const payload = jwt.verify(token, jwtSecret()) as TokenPayload;
     req.user = { sub: payload.sub, email: payload.email, role: payload.role, permissions: [] };
   } catch {
     req.user = undefined;
   }
 
   next();
+}
+
+export function optionalCustomerIdentity(req: Request, _res: Response, next: NextFunction) {
+  const guestId = req.header('x-guest-id')?.trim();
+  if (guestId && /^[a-zA-Z0-9_-]{12,80}$/.test(guestId)) {
+    req.guestId = guestId;
+  }
+  return optionalAuth(req, _res, next);
+}
+
+export function requireCustomerIdentity(req: Request, _res: Response, next: NextFunction) {
+  optionalCustomerIdentity(req, _res, () => {
+    if (req.user?.sub || req.guestId) return next();
+    return next(new HttpError(401, 'Authentication or guest session required'));
+  });
 }

@@ -1,18 +1,77 @@
 import type { MongoRepository as Repository } from '@lib/mongo-repository';
+import { createHash, randomBytes } from 'crypto';
 import { UserRole } from '@lib/constants';
 import { comparePassword, hashPassword } from '@lib/security';
+import { EmailService } from '@emails/email.service';
 import { Otp } from '@models/auth/otp.model';
+import { SignupSession } from '@models/auth/signup-session.model';
+import { Cart } from '@models/cart/cart.model';
+import { DeviceToken } from '@models/notifications/device-token.model';
+import { Notification } from '@models/notifications/notification.model';
+import { Order } from '@models/orders/order.model';
 import { User } from '@models/users/user.model';
+import { NotificationService } from '@services/notification.service';
 import { HttpError } from '@utils/http';
 import { AuthUserPayload, signAccessToken, signRefreshToken } from './token.service';
 
+function hashToken(token: string) {
+  return createHash('sha256').update(token).digest('hex');
+}
+
 export class AuthService {
+  private readonly notifications?: NotificationService;
+
   constructor(
     private readonly userRepo: Repository<User>,
     private readonly otpRepo?: Repository<Otp>,
-  ) {}
+    private readonly email = new EmailService(),
+    private readonly signupSessions?: Repository<SignupSession>,
+    private readonly carts?: Repository<Cart>,
+    private readonly orders?: Repository<Order>,
+    deviceTokens?: Repository<DeviceToken>,
+    notifications?: Repository<Notification>,
+  ) {
+    if (deviceTokens && notifications) {
+      this.notifications = new NotificationService(deviceTokens, notifications);
+    }
+  }
 
-  async login(email: string, password: string, options?: { adminOnly?: boolean }) {
+  async lookup(email: string) {
+    const normalizedEmail = email.toLowerCase().trim();
+    const existing = await this.userRepo.findOne({ where: { email: normalizedEmail } });
+    if (existing) {
+      return {
+        email: normalizedEmail,
+        exists: true,
+        nextStep: 'password',
+        message: 'Continue with your password.',
+      };
+    }
+
+    const session = await this.signupSessions?.findOne({
+      where: { email: normalizedEmail },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (session && new Date(session.expiresAt) > new Date()) {
+      return {
+        email: normalizedEmail,
+        exists: false,
+        nextStep: session.isEmailVerified ? 'complete_profile' : 'verify_email',
+        signupSessionToken: undefined,
+        message: 'Continue creating your account.',
+      };
+    }
+
+    return {
+      email: normalizedEmail,
+      exists: false,
+      nextStep: 'create_password',
+      message: 'Create a password to continue.',
+    };
+  }
+
+  async login(email: string, password: string, options?: { adminOnly?: boolean; guestId?: string }) {
     const user = await this.userRepo.findOne({
       where: { email },
       select: {
@@ -45,10 +104,15 @@ export class AuthService {
 
     user.lastLoginAt = new Date();
     const response = this.buildAuthResponse(user);
+    if (options?.guestId) await this.mergeGuestIntoUser(options.guestId, user.id);
     await this.userRepo.update(user.id, {
       lastLoginAt: user.lastLoginAt,
-      refreshToken: response.refreshToken,
+      refreshToken: hashToken(response.refreshToken),
     });
+    await this.notifications?.sendWelcome(
+      { userId: user.id },
+      `${user.firstName || ''} ${user.lastName || ''}`.trim() || undefined,
+    );
 
     return response;
   }
@@ -79,18 +143,130 @@ export class AuthService {
     };
   }
 
+  async startSignup(email: string, password: string, guestId?: string) {
+    if (!this.signupSessions) throw new HttpError(500, 'Signup sessions are not configured');
+    const normalizedEmail = email.toLowerCase().trim();
+    const existing = await this.userRepo.findOne({ where: { email: normalizedEmail } });
+    if (existing) throw new HttpError(400, 'An account with this email already exists. Please login.');
+
+    const rawToken = randomBytes(32).toString('hex');
+    const expiresInMinutes = Number(process.env.SIGNUP_SESSION_EXPIRY_MINUTES || 30);
+    const expiresAt = new Date(Date.now() + expiresInMinutes * 60 * 1000);
+
+    const previous = await this.signupSessions.findOne({ where: { email: normalizedEmail }, order: { createdAt: 'DESC' } });
+    if (previous) await this.signupSessions.delete({ id: previous.id });
+
+    const session = await this.signupSessions.save(this.signupSessions.create({
+      email: normalizedEmail,
+      passwordHash: await hashPassword(password),
+      sessionTokenHash: hashToken(rawToken),
+      isEmailVerified: false,
+      currentStep: 'password_created',
+      guestId,
+      expiresAt,
+    }));
+
+    await this.createOtp(normalizedEmail, 'email_verification');
+
+    return {
+      email: normalizedEmail,
+      signupSessionToken: rawToken,
+      nextStep: 'verify_email',
+      expiresAt: session.expiresAt,
+      message: 'Verification code sent to your email.',
+    };
+  }
+
+  async verifySignup(sessionToken: string, code: string) {
+    const session = await this.findSignupSession(sessionToken);
+    const otp = await this.findValidOtp(session.email, code, 'email_verification');
+    await Promise.all([
+      this.markOtpUsed(otp.id),
+      this.signupSessions!.update(session.id, {
+        isEmailVerified: true,
+        currentStep: 'email_verified',
+      }),
+    ]);
+    return {
+      email: session.email,
+      signupSessionToken: sessionToken,
+      nextStep: 'complete_profile',
+      message: 'Email verified.',
+    };
+  }
+
+  async resendSignupCode(sessionToken: string) {
+    const session = await this.findSignupSession(sessionToken);
+    if (session.isEmailVerified) {
+      return {
+        email: session.email,
+        signupSessionToken: sessionToken,
+        nextStep: 'complete_profile',
+        message: 'Email is already verified.',
+      };
+    }
+
+    await this.createOtp(session.email, 'email_verification');
+    return {
+      email: session.email,
+      signupSessionToken: sessionToken,
+      nextStep: 'verify_email',
+      message: 'A new verification code has been sent.',
+    };
+  }
+
+  async completeSignup(sessionToken: string, body: Partial<User> & { guestId?: string }) {
+    const session = await this.findSignupSession(sessionToken);
+    if (!session.isEmailVerified) throw new HttpError(400, 'Verify your email before completing signup');
+    const existing = await this.userRepo.findOne({ where: { email: session.email } });
+    if (existing) throw new HttpError(400, 'An account with this email already exists. Please login.');
+
+    const user = await this.userRepo.save(this.userRepo.create({
+      email: session.email,
+      password: session.passwordHash,
+      firstName: body.firstName || '',
+      lastName: body.lastName || '',
+      phone: body.phone,
+      avatarUrl: body.avatarUrl,
+      address: body.address,
+      preferences: body.preferences,
+      role: UserRole.SHOPPER,
+      isActive: true,
+      isEmailVerified: true,
+      isPhoneVerified: false,
+      lastLoginAt: new Date(),
+    }));
+
+    const response = this.buildAuthResponse(user);
+    await Promise.all([
+      this.userRepo.update(user.id, { refreshToken: hashToken(response.refreshToken) }),
+      this.signupSessions!.delete({ id: session.id }),
+      this.mergeGuestIntoUser(body.guestId || session.guestId, user.id),
+    ]);
+    const name = `${user.firstName || ''} ${user.lastName || ''}`.trim();
+    await Promise.all([
+      this.email.sendWelcome({ email: user.email, name }),
+      this.notifications?.sendWelcome({ userId: user.id }, name),
+    ]);
+
+    return response;
+  }
+
   async verifyOtp(email: string, code: string) {
     const otp = await this.findValidOtp(email, code, 'email_verification');
     const user = await this.userRepo.findOne({ where: { email } });
     if (!user) throw new HttpError(404, 'User not found');
 
-    otp.isUsed = true;
     user.isEmailVerified = true;
     user.isActive = true;
     await Promise.all([
-      this.otpRepo?.save(otp),
+      this.markOtpUsed(otp.id),
       this.userRepo.save(user),
     ]);
+    await this.email.sendWelcome({
+      email: user.email,
+      name: `${user.firstName || ''} ${user.lastName || ''}`.trim(),
+    });
 
     return this.buildAuthResponse(user);
   }
@@ -115,11 +291,24 @@ export class AuthService {
   }
 
   async refresh(refreshToken: string) {
-    const user = await this.userRepo.findOne({ where: { refreshToken } });
+    const user = await this.userRepo.findOne({ where: { refreshToken: hashToken(refreshToken) } });
     if (!user) throw new HttpError(401, 'Invalid refresh token');
+    if (!user.isActive) throw new HttpError(401, 'Invalid refresh token');
     const response = this.buildAuthResponse(user);
-    await this.userRepo.update(user.id, { refreshToken: response.refreshToken });
+    await this.userRepo.update(user.id, { refreshToken: hashToken(response.refreshToken) });
     return response;
+  }
+
+  async logout(refreshToken?: string, userId?: string) {
+    if (userId) {
+      await this.userRepo.update(userId, { refreshToken: undefined });
+      return { message: 'Logged out successfully.' };
+    }
+    if (refreshToken) {
+      const user = await this.userRepo.findOne({ where: { refreshToken: hashToken(refreshToken) } });
+      if (user) await this.userRepo.update(user.id, { refreshToken: undefined });
+    }
+    return { message: 'Logged out successfully.' };
   }
 
   async requestPasswordReset(email: string) {
@@ -128,20 +317,54 @@ export class AuthService {
     return { message: 'If the email exists, a password reset code has been sent.' };
   }
 
+  async verifyPasswordReset(email: string, code: string) {
+    await this.findValidOtp(email, code, 'password_reset');
+    return { email, resetToken: code, message: 'Code verified.' };
+  }
+
+  async requestAdminPasswordReset(email: string) {
+    const user = await this.userRepo.findOne({ where: { email } });
+    if (
+      user &&
+      [UserRole.SUPPORT, UserRole.ADMIN, UserRole.SUPER_ADMIN].includes(user.role) &&
+      user.isActive
+    ) {
+      await this.createOtp(email, 'password_reset');
+    }
+    return { message: 'If the admin email exists, a password reset code has been sent.' };
+  }
+
   async resetPassword(email: string, code: string, password: string) {
     const otp = await this.findValidOtp(email, code, 'password_reset');
     const user = await this.userRepo.findOne({ where: { email } });
     if (!user) throw new HttpError(404, 'User not found');
 
-    otp.isUsed = true;
     user.password = await hashPassword(password);
     user.refreshToken = undefined;
     await Promise.all([
-      this.otpRepo?.save(otp),
+      this.markOtpUsed(otp.id),
       this.userRepo.save(user),
     ]);
 
-    return { message: 'Password reset successfully.' };
+    const response = this.buildAuthResponse(user);
+    await this.userRepo.update(user.id, { refreshToken: hashToken(response.refreshToken) });
+    await this.notifications?.sendWelcome(
+      { userId: user.id },
+      `${user.firstName || ''} ${user.lastName || ''}`.trim() || undefined,
+    );
+    return { message: 'Password reset successfully.', ...response };
+  }
+
+  async resetAdminPassword(email: string, code: string, password: string) {
+    const user = await this.userRepo.findOne({ where: { email } });
+    if (
+      !user ||
+      ![UserRole.SUPPORT, UserRole.ADMIN, UserRole.SUPER_ADMIN].includes(user.role) ||
+      !user.isActive
+    ) {
+      throw new HttpError(400, 'Invalid or expired OTP code');
+    }
+    return this.resetPassword(email, code, password);
   }
 
   async changePassword(userId: string, currentPassword: string, newPassword: string) {
@@ -170,21 +393,69 @@ export class AuthService {
 
   private async createOtp(email: string, type: Otp['type']) {
     if (!this.otpRepo) return;
-    const code = process.env.NODE_ENV === 'production'
-      ? String(Math.floor(100000 + Math.random() * 900000))
-      : '123456';
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-    await this.otpRepo.save(this.otpRepo.create({ email, code, type, expiresAt }));
+    const normalizedEmail = email.toLowerCase().trim();
+    const code = String(Math.floor(1000 + Math.random() * 9000));
+    const expiresInMinutes = Number(process.env.OTP_EXPIRY_MINUTES || 10);
+    const expiresAt = new Date(Date.now() + expiresInMinutes * 60 * 1000);
+    await this.otpRepo.update({ email: normalizedEmail, type, isUsed: false }, { isUsed: true });
+    await this.otpRepo.save(this.otpRepo.create({ email: normalizedEmail, code, type, expiresAt }));
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`[otp:dev] ${type} for ${normalizedEmail}: ${code} (expires in ${expiresInMinutes}m)`);
+    }
+    await this.email.sendOtp({
+      email: normalizedEmail,
+      code,
+      purpose: type === 'password_reset' ? 'password_reset' : 'verification',
+      expiresInMinutes,
+    });
+  }
+
+  private async findSignupSession(sessionToken: string) {
+    if (!this.signupSessions) throw new HttpError(500, 'Signup sessions are not configured');
+    const session = await this.signupSessions.findOne({ where: { sessionTokenHash: hashToken(sessionToken) } });
+    if (!session || new Date(session.expiresAt) <= new Date()) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.log('[auth:verify] signup session not found or expired');
+      }
+      throw new HttpError(400, 'Signup session expired. Please start again.');
+    }
+    return session;
+  }
+
+  private async mergeGuestIntoUser(guestId: string | undefined, userId: string) {
+    if (!guestId) return;
+    await Promise.all([
+      this.carts?.update({ guestId, isCheckedOut: false } as any, { userId, guestId: undefined } as any),
+      this.orders?.update({ guestId } as any, { userId, guestId: undefined } as any),
+    ]);
   }
 
   private async findValidOtp(email: string, code: string, type: Otp['type']) {
     if (!this.otpRepo) throw new HttpError(500, 'OTP service is not configured');
-    const otp = await this.otpRepo.findOne({
-      where: { email, code, type, isUsed: false },
-      order: { createdAt: 'DESC' },
-    });
-    if (!otp || !otp.isValid) throw new HttpError(400, 'Invalid or expired OTP code');
+    const normalizedEmail = email.toLowerCase().trim();
+    const now = new Date();
+    const otp = await this.otpRepo.model
+      .findOne({
+        email: normalizedEmail,
+        code,
+        type,
+        isUsed: false,
+        expiresAt: { $gt: now },
+      })
+      .sort({ createdAt: -1 })
+      .lean({ virtuals: true });
+    if (!otp) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.log(`[auth:verify] otp not found or expired for ${normalizedEmail} (${type})`);
+      }
+      throw new HttpError(400, 'Invalid or expired OTP code');
+    }
     return otp;
+  }
+
+  private async markOtpUsed(id: string) {
+    if (!this.otpRepo) throw new HttpError(500, 'OTP service is not configured');
+    await this.otpRepo.update(id, { isUsed: true });
   }
 
   private buildAuthResponse(user: User) {

@@ -12,6 +12,7 @@ const tags = [
   ['Negotiations', 'Customer AI negotiation sessions.'],
   ['Payments', 'Customer payment initialization, verification, and status checks.'],
   ['Notifications', 'Authenticated customer notifications.'],
+  ['Devices', 'Customer and guest device token registration for push notifications.'],
   ['Vendor Portal', 'Vendor profile, catalog, order, settlement, and bank detail endpoints.'],
   ['Logistics', 'Driver, field-agent, and admin assignment workflows.'],
   ['Uploads', 'Authenticated image uploads.'],
@@ -56,6 +57,40 @@ const schemas = {
     properties: {
       email: { type: 'string', format: 'email', example: 'admin@gmail.com' },
       password: { type: 'string', example: '123456' },
+      guestId: { type: 'string', description: 'Optional guest id to merge guest cart/orders after login.' },
+    },
+  },
+  AuthLookupRequest: {
+    type: 'object',
+    required: ['email'],
+    properties: { email: { type: 'string', format: 'email', example: 'shopper@example.com' } },
+  },
+  SignupStartRequest: {
+    type: 'object',
+    required: ['email', 'password'],
+    properties: {
+      email: { type: 'string', format: 'email', example: 'shopper@example.com' },
+      password: { type: 'string', minLength: 6, example: '123456789' },
+      guestId: { type: 'string' },
+    },
+  },
+  SignupVerifyRequest: {
+    type: 'object',
+    required: ['signupSessionToken', 'code'],
+    properties: {
+      signupSessionToken: { type: 'string' },
+      code: { type: 'string', example: '1234' },
+    },
+  },
+  SignupCompleteRequest: {
+    type: 'object',
+    required: ['signupSessionToken', 'firstName', 'lastName'],
+    properties: {
+      signupSessionToken: { type: 'string' },
+      firstName: { type: 'string', example: 'Hook' },
+      lastName: { type: 'string', example: 'Shopper' },
+      phone: { type: 'string', example: '+2348012345678' },
+      guestId: { type: 'string' },
     },
   },
   RegisterRequest: {
@@ -71,7 +106,7 @@ const schemas = {
     required: ['email', 'code'],
     properties: {
       email: { type: 'string', format: 'email', example: 'shopper@example.com' },
-      code: { type: 'string', example: '123456' },
+      code: { type: 'string', example: '1234' },
     },
   },
   RefreshRequest: {
@@ -100,8 +135,16 @@ const schemas = {
     required: ['email', 'code', 'password'],
     properties: {
       email: { type: 'string', format: 'email' },
-      code: { type: 'string', example: '123456' },
+      code: { type: 'string', example: '1234' },
       password: { type: 'string', minLength: 6 },
+    },
+  },
+  PasswordVerifyRequest: {
+    type: 'object',
+    required: ['email', 'code'],
+    properties: {
+      email: { type: 'string', format: 'email' },
+      code: { type: 'string', example: '1234' },
     },
   },
   ChangePasswordRequest: {
@@ -136,6 +179,8 @@ const schemas = {
     type: 'object',
     required: ['deliveryAddress'],
     properties: {
+      guestEmail: { type: 'string', format: 'email', description: 'Required for guest checkout.' },
+      guestName: { type: 'string', description: 'Required for guest checkout.' },
       deliveryAddress: {
         type: 'object',
         required: ['street', 'city', 'state', 'phone'],
@@ -156,6 +201,21 @@ const schemas = {
       },
       deliveryNotes: { type: 'string' },
       scheduledDeliveryAt: { type: 'string', format: 'date-time' },
+    },
+  },
+  DeviceRegisterRequest: {
+    type: 'object',
+    required: ['expoPushToken'],
+    properties: {
+      expoPushToken: { type: 'string', example: 'ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]' },
+      platform: { type: 'string', enum: ['ios', 'android', 'web', 'unknown'], example: 'ios' },
+      deviceName: { type: 'string', example: 'iPhone 17' },
+    },
+  },
+  DeviceUnregisterRequest: {
+    type: 'object',
+    properties: {
+      expoPushToken: { type: 'string' },
     },
   },
   NegotiationRequest: {
@@ -371,6 +431,16 @@ function query(name, schema = { type: 'string' }, description = `${name} filter`
   return { name, in: 'query', required: false, schema, description };
 }
 
+function guestHeader() {
+  return {
+    name: 'X-Guest-Id',
+    in: 'header',
+    required: false,
+    schema: { type: 'string' },
+    description: 'Guest session id. Use this instead of Bearer auth for guest cart, checkout, orders, notifications, and device registration.',
+  };
+}
+
 function op(tag, summary, options = {}) {
   return {
     tags: [tag],
@@ -400,11 +470,16 @@ function add(method, path, operation) {
 add('get', '/health', op('System', 'Check API health', { public: true }));
 
 // Auth
+add('post', `${apiPrefix}/auth/lookup`, op('Authentication', 'Lookup email and return next auth step', { public: true, requestBody: body('AuthLookupRequest') }));
+add('post', `${apiPrefix}/auth/signup/start`, op('Authentication', 'Start staged signup and send email OTP', { public: true, requestBody: body('SignupStartRequest') }));
+add('post', `${apiPrefix}/auth/signup/verify`, op('Authentication', 'Verify staged signup OTP', { public: true, requestBody: body('SignupVerifyRequest') }));
+add('post', `${apiPrefix}/auth/signup/complete`, op('Authentication', 'Complete staged signup and issue tokens', { public: true, requestBody: body('SignupCompleteRequest') }));
 add('post', `${apiPrefix}/auth/register`, op('Authentication', 'Register shopper account', { public: true, requestBody: body('RegisterRequest') }));
 add('post', `${apiPrefix}/auth/login`, op('Authentication', 'Login shopper/mobile user', { public: true, requestBody: body('LoginRequest') }));
 add('post', `${apiPrefix}/auth/verify-otp`, op('Authentication', 'Verify email OTP', { public: true, requestBody: body('OtpRequest') }));
 add('post', `${apiPrefix}/auth/refresh`, op('Authentication', 'Refresh access token', { public: true, requestBody: body('RefreshRequest') }));
 add('post', `${apiPrefix}/auth/password/forgot`, op('Authentication', 'Request password reset code', { public: true, requestBody: body('PasswordForgotRequest') }));
+add('post', `${apiPrefix}/auth/password/verify`, op('Authentication', 'Verify password reset code', { public: true, requestBody: body('PasswordVerifyRequest') }));
 add('post', `${apiPrefix}/auth/password/reset`, op('Authentication', 'Reset password with code', { public: true, requestBody: body('PasswordResetRequest') }));
 add('get', `${apiPrefix}/auth/profile`, op('Authentication', 'Get current authenticated profile'));
 add('patch', `${apiPrefix}/auth/profile`, op('Authentication', 'Update current authenticated profile', { requestBody: body('ProfileRequest') }));
@@ -428,26 +503,28 @@ add('get', `${apiPrefix}/search`, op('Public Marketplace', 'Search products and 
 add('get', `${apiPrefix}/search/suggestions`, op('Public Marketplace', 'Get search suggestions', { public: true, parameters: [query('q')] }));
 
 // Customer
-add('get', `${apiPrefix}/cart`, op('Customer Cart', 'Get current cart'));
-add('post', `${apiPrefix}/cart/items`, op('Customer Cart', 'Add item to cart', { requestBody: body('CartItemRequest') }));
-add('patch', `${apiPrefix}/cart/items/{itemId}`, op('Customer Cart', 'Update cart item quantity', { parameters: [param('itemId', 'Cart item id')], requestBody: body('QuantityRequest') }));
-add('delete', `${apiPrefix}/cart/items/{itemId}`, op('Customer Cart', 'Remove item from cart', { parameters: [param('itemId', 'Cart item id')] }));
-add('delete', `${apiPrefix}/cart`, op('Customer Cart', 'Clear current cart'));
-add('post', `${apiPrefix}/checkout`, op('Customer Orders', 'Create order from current cart', { requestBody: body('CheckoutRequest') }));
-add('get', `${apiPrefix}/orders`, op('Customer Orders', 'List current shopper orders'));
-add('get', `${apiPrefix}/orders/{id}`, op('Customer Orders', 'Get current shopper order detail', { parameters: [param('id', 'Order id')] }));
-add('post', `${apiPrefix}/orders/{id}/cancel`, op('Customer Orders', 'Cancel current shopper order', { parameters: [param('id', 'Order id')], requestBody: { required: false, content: { 'application/json': { schema: { type: 'object', properties: { reason: { type: 'string' } } } } } } }));
-add('get', `${apiPrefix}/negotiations`, op('Negotiations', 'List current shopper negotiations'));
-add('post', `${apiPrefix}/negotiations`, op('Negotiations', 'Start negotiation', { requestBody: body('NegotiationRequest') }));
-add('get', `${apiPrefix}/negotiations/{id}`, op('Negotiations', 'Get negotiation detail', { parameters: [param('id', 'Negotiation id')] }));
-add('post', `${apiPrefix}/negotiations/{id}/counter`, op('Negotiations', 'Counter negotiation offer', { parameters: [param('id', 'Negotiation id')], requestBody: body('NegotiationCounterRequest') }));
-add('post', `${apiPrefix}/negotiations/{id}/accept`, op('Negotiations', 'Accept negotiation counter', { parameters: [param('id', 'Negotiation id')] }));
-add('post', `${apiPrefix}/payments/initialize`, op('Payments', 'Initialize payment with provider-ready stub', { requestBody: body('PaymentInitializeRequest') }));
-add('post', `${apiPrefix}/payments/verify/{reference}`, op('Payments', 'Verify payment reference', { parameters: [param('reference', 'Payment transaction reference')] }));
-add('get', `${apiPrefix}/payments/orders/{orderId}/status`, op('Payments', 'Get order payment status', { parameters: [param('orderId', 'Order id')] }));
-add('get', `${apiPrefix}/notifications`, op('Notifications', 'List notifications'));
-add('patch', `${apiPrefix}/notifications/{id}/read`, op('Notifications', 'Mark notification as read', { parameters: [param('id', 'Notification id')] }));
-add('delete', `${apiPrefix}/notifications/{id}`, op('Notifications', 'Delete notification', { parameters: [param('id', 'Notification id')] }));
+add('get', `${apiPrefix}/cart`, op('Customer Cart', 'Get current cart', { parameters: [guestHeader()] }));
+add('post', `${apiPrefix}/cart/items`, op('Customer Cart', 'Add item to cart', { parameters: [guestHeader()], requestBody: body('CartItemRequest') }));
+add('patch', `${apiPrefix}/cart/items/{itemId}`, op('Customer Cart', 'Update cart item quantity', { parameters: [guestHeader(), param('itemId', 'Cart item id')], requestBody: body('QuantityRequest') }));
+add('delete', `${apiPrefix}/cart/items/{itemId}`, op('Customer Cart', 'Remove item from cart', { parameters: [guestHeader(), param('itemId', 'Cart item id')] }));
+add('delete', `${apiPrefix}/cart`, op('Customer Cart', 'Clear current cart', { parameters: [guestHeader()] }));
+add('post', `${apiPrefix}/checkout`, op('Customer Orders', 'Create order from current cart', { parameters: [guestHeader()], requestBody: body('CheckoutRequest') }));
+add('get', `${apiPrefix}/orders`, op('Customer Orders', 'List current shopper or guest orders', { parameters: [guestHeader()] }));
+add('get', `${apiPrefix}/orders/{id}`, op('Customer Orders', 'Get current shopper or guest order detail', { parameters: [guestHeader(), param('id', 'Order id')] }));
+add('post', `${apiPrefix}/orders/{id}/cancel`, op('Customer Orders', 'Cancel current shopper or guest order', { parameters: [guestHeader(), param('id', 'Order id')], requestBody: { required: false, content: { 'application/json': { schema: { type: 'object', properties: { reason: { type: 'string' } } } } } } }));
+add('get', `${apiPrefix}/negotiations`, op('Negotiations', 'List current shopper or guest negotiations', { parameters: [guestHeader()] }));
+add('post', `${apiPrefix}/negotiations`, op('Negotiations', 'Start negotiation', { parameters: [guestHeader()], requestBody: body('NegotiationRequest') }));
+add('get', `${apiPrefix}/negotiations/{id}`, op('Negotiations', 'Get negotiation detail', { parameters: [guestHeader(), param('id', 'Negotiation id')] }));
+add('post', `${apiPrefix}/negotiations/{id}/counter`, op('Negotiations', 'Counter negotiation offer', { parameters: [guestHeader(), param('id', 'Negotiation id')], requestBody: body('NegotiationCounterRequest') }));
+add('post', `${apiPrefix}/negotiations/{id}/accept`, op('Negotiations', 'Accept negotiation counter', { parameters: [guestHeader(), param('id', 'Negotiation id')] }));
+add('post', `${apiPrefix}/payments/initialize`, op('Payments', 'Initialize payment with provider-ready stub', { parameters: [guestHeader()], requestBody: body('PaymentInitializeRequest') }));
+add('post', `${apiPrefix}/payments/verify/{reference}`, op('Payments', 'Verify payment reference', { parameters: [guestHeader(), param('reference', 'Payment transaction reference')] }));
+add('get', `${apiPrefix}/payments/orders/{orderId}/status`, op('Payments', 'Get order payment status', { parameters: [guestHeader(), param('orderId', 'Order id')] }));
+add('get', `${apiPrefix}/notifications`, op('Notifications', 'List notifications', { parameters: [guestHeader()] }));
+add('patch', `${apiPrefix}/notifications/{id}/read`, op('Notifications', 'Mark notification as read', { parameters: [guestHeader(), param('id', 'Notification id')] }));
+add('delete', `${apiPrefix}/notifications/{id}`, op('Notifications', 'Delete notification', { parameters: [guestHeader(), param('id', 'Notification id')] }));
+add('post', `${apiPrefix}/devices/register`, op('Devices', 'Register Expo push device token', { parameters: [guestHeader()], requestBody: body('DeviceRegisterRequest') }));
+add('post', `${apiPrefix}/devices/unregister`, op('Devices', 'Unregister Expo push device token', { parameters: [guestHeader()], requestBody: body('DeviceUnregisterRequest', false) }));
 
 // Vendor
 add('post', `${apiPrefix}/vendors/me/register`, op('Vendor Portal', 'Register current user as vendor', { requestBody: body('VendorRegistrationRequest') }));

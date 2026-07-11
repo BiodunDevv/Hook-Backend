@@ -2,7 +2,10 @@ import { NegotiationStatus } from '@lib/constants';
 import { BaseEntity, createModel, createSchema } from '@models/base.model';
 
 export interface Negotiation extends BaseEntity {
-  userId: string;
+  userId?: string;
+  guestId?: string;
+  guestEmail?: string;
+  guestName?: string;
   productId: string;
   round: number;
   offeredPrice: number;
@@ -21,7 +24,10 @@ export interface Negotiation extends BaseEntity {
 }
 
 const NegotiationSchema = createSchema<Negotiation>({
-  userId: { type: String, required: true, index: true },
+  userId: { type: String, index: true },
+  guestId: { type: String, index: true },
+  guestEmail: { type: String, lowercase: true, trim: true },
+  guestName: { type: String },
   productId: { type: String, required: true, index: true },
   round: { type: Number, default: 1 },
   offeredPrice: { type: Number, required: true },

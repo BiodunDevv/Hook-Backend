@@ -159,13 +159,20 @@ export class AdminDashboardController {
   };
 
   analytics = async (_req: Request, res: Response) => {
-    const period = typeof _req.query.period === 'string' ? _req.query.period : 'monthly';
-    const bucketCount = period === 'weekly' ? 7 : period === 'yearly' ? 12 : 30;
+    const requestedPeriod = typeof _req.query.period === 'string' ? _req.query.period : 'monthly';
+    const period = ['weekly', 'monthly', 'yearly'].includes(requestedPeriod) ? requestedPeriod : 'monthly';
     const now = new Date();
     const start = new Date(now);
-    if (period === 'yearly') start.setMonth(now.getMonth() - 11, 1);
-    else start.setDate(now.getDate() - (bucketCount - 1));
-    start.setHours(0, 0, 0, 0);
+    if (period === 'weekly') {
+      start.setDate(now.getDate() - 6);
+      start.setHours(0, 0, 0, 0);
+    } else if (period === 'monthly') {
+      start.setMonth(now.getMonth() - 11, 1);
+      start.setHours(0, 0, 0, 0);
+    } else {
+      start.setFullYear(now.getFullYear() - 4, 0, 1);
+      start.setHours(0, 0, 0, 0);
+    }
 
     const orders = await adminRepos.orders().find({
       where: { createdAt: mongoBetween(start, now) },
@@ -173,25 +180,48 @@ export class AdminDashboardController {
       order: { createdAt: 'ASC' },
     });
 
-    const buckets = new Map<string, { day: string; newUser: number; existingUser: number; orders: number; revenue: number }>();
-    for (let index = bucketCount - 1; index >= 0; index -= 1) {
+    const buckets = new Map<string, {
+      key: string;
+      label: string;
+      day: string;
+      rangeLabel: string;
+      newUser: number;
+      existingUser: number;
+      orders: number;
+      revenue: number;
+    }>();
+    const bucketTotal = period === 'weekly' ? 7 : period === 'monthly' ? 12 : 5;
+    for (let index = bucketTotal - 1; index >= 0; index -= 1) {
       const date = new Date(now);
-      if (period === 'yearly') date.setMonth(now.getMonth() - index, 1);
-      else date.setDate(now.getDate() - index);
-      const key = period === 'yearly'
-        ? `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
-        : date.toISOString().slice(0, 10);
-      const label = period === 'yearly'
-        ? date.toLocaleString('en', { month: 'short' })
-        : date.toLocaleString('en', { month: 'short', day: 'numeric' });
-      buckets.set(key, { day: label, newUser: 0, existingUser: 0, orders: 0, revenue: 0 });
+      if (period === 'weekly') date.setDate(now.getDate() - index);
+      if (period === 'monthly') date.setMonth(now.getMonth() - index, 1);
+      if (period === 'yearly') date.setFullYear(now.getFullYear() - index, 0, 1);
+
+      const key = period === 'weekly'
+        ? date.toISOString().slice(0, 10)
+        : period === 'monthly'
+          ? `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+          : `${date.getFullYear()}`;
+      const label = period === 'weekly'
+        ? date.toLocaleString('en', { weekday: 'short' })
+        : period === 'monthly'
+          ? date.toLocaleString('en', { month: 'short' })
+          : String(date.getFullYear());
+      const rangeLabel = period === 'weekly'
+        ? date.toLocaleDateString('en', { month: 'short', day: 'numeric' })
+        : period === 'monthly'
+          ? date.toLocaleDateString('en', { month: 'long', year: 'numeric' })
+          : String(date.getFullYear());
+      buckets.set(key, { key, label, day: label, rangeLabel, newUser: 0, existingUser: 0, orders: 0, revenue: 0 });
     }
 
     for (const order of orders as any[]) {
       const createdAt = new Date(order.createdAt);
-      const key = period === 'yearly'
-        ? `${createdAt.getFullYear()}-${String(createdAt.getMonth() + 1).padStart(2, '0')}`
-        : createdAt.toISOString().slice(0, 10);
+      const key = period === 'weekly'
+        ? createdAt.toISOString().slice(0, 10)
+        : period === 'monthly'
+          ? `${createdAt.getFullYear()}-${String(createdAt.getMonth() + 1).padStart(2, '0')}`
+          : `${createdAt.getFullYear()}`;
       const bucket = buckets.get(key);
       if (!bucket) continue;
       const userCreatedAt = order.user?.createdAt ? new Date(order.user.createdAt) : undefined;
@@ -206,10 +236,48 @@ export class AdminDashboardController {
     const salesTrend = Array.from(buckets.values());
     const totalRevenue = salesTrend.reduce((acc, item) => acc + item.revenue, 0);
     const totalOrders = salesTrend.reduce((acc, item) => acc + item.orders, 0);
+    const negotiations = await adminRepos.negotiations().find({
+      where: { createdAt: mongoBetween(start, now) },
+      order: { createdAt: 'ASC' },
+    });
+    const negotiationCounts = {
+      active: 0,
+      accepted: 0,
+      declined: 0,
+      expired: 0,
+      withdrawn: 0,
+    };
+    let savingsTotal = 0;
+    let savingsCount = 0;
+    for (const negotiation of negotiations as any[]) {
+      const status = String(negotiation.status || 'active') as keyof typeof negotiationCounts;
+      if (status in negotiationCounts) negotiationCounts[status] += 1;
+      if (negotiation.status === NegotiationStatus.ACCEPTED) {
+        const acceptedPrice = Number(negotiation.acceptedPrice || negotiation.counterPrice || 0);
+        const saved = Math.max(0, Number(negotiation.sellingPrice || 0) - acceptedPrice);
+        savingsTotal += saved;
+        savingsCount += 1;
+      }
+    }
+    const totalNegotiations = negotiations.length;
+    const negotiationPipeline = [
+      { label: 'Active', status: NegotiationStatus.ACTIVE, volume: negotiationCounts.active },
+      { label: 'Accepted', status: NegotiationStatus.ACCEPTED, volume: negotiationCounts.accepted },
+      { label: 'Declined', status: NegotiationStatus.DECLINED, volume: negotiationCounts.declined },
+      { label: 'Expired', status: NegotiationStatus.EXPIRED, volume: negotiationCounts.expired },
+      { label: 'Withdrawn', status: NegotiationStatus.WITHDRAWN, volume: negotiationCounts.withdrawn },
+    ];
     sendSuccess(res, {
+      period,
       salesTrend,
       salesSummary: { totalRevenue, totalOrders, period },
-      negotiationPipeline: [],
+      negotiationPipeline,
+      negotiationSummary: {
+        total: totalNegotiations,
+        accepted: negotiationCounts.accepted,
+        conversionRate: totalNegotiations ? Number(((negotiationCounts.accepted / totalNegotiations) * 100).toFixed(1)) : 0,
+        averageSavings: savingsCount ? Number((savingsTotal / savingsCount).toFixed(0)) : 0,
+      },
       message: salesTrend.some((item) => item.revenue > 0)
         ? 'Analytics ready.'
         : 'Analytics series will populate as orders and negotiations are created.',

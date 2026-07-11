@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { AdminBoothsController } from '@controllers/admin/booths.controller';
+import { AdminCategoriesController } from '@controllers/admin/categories.controller';
 import { AdminDashboardController } from '@controllers/admin/dashboard.controller';
 import { AdminDispatchController } from '@controllers/admin/dispatch.controller';
 import { AdminFieldAgentsController } from '@controllers/admin/field-agents.controller';
@@ -21,6 +22,9 @@ import { requirePermission } from '@middleware/permissions';
 import { validateBody } from '@middleware/validate';
 import {
   adminUserSchema,
+  categoryCreateSchema,
+  categoryUpdateSchema,
+  staffCategoriesSchema,
   staffCreateSchema,
   staffPermissionsSchema,
   staffUpdateSchema,
@@ -59,6 +63,7 @@ export function createAdminRouter() {
   const settings    = new AdminSettingsController();
   const staff       = new AdminStaffController();
   const search      = new AdminSearchController();
+  const categories  = new AdminCategoriesController();
 
   // ── Public admin auth (no token required) ──────────────────────────────
   router.use('/auth', createAdminAuthRouter());
@@ -88,6 +93,7 @@ export function createAdminRouter() {
   router.get('/staff/:id',               requireSuperAdmin, asyncHandler(staff.detail));
   router.patch('/staff/:id',             requireSuperAdmin, validateBody(staffUpdateSchema), asyncHandler(staff.update));
   router.patch('/staff/:id/permissions', requireSuperAdmin, validateBody(staffPermissionsSchema), asyncHandler(staff.updatePermissions));
+  router.patch('/staff/:id/categories',  requireSuperAdmin, validateBody(staffCategoriesSchema), asyncHandler(staff.updateCategories));
   router.patch('/staff/:id/toggle',      requireSuperAdmin, asyncHandler(staff.toggle));
   router.delete('/staff/:id',            requireSuperAdmin, asyncHandler(staff.remove));
 
@@ -101,6 +107,14 @@ export function createAdminRouter() {
   router.patch('/vendors/:id/reject',  requirePermission('vendors.approve'), validateBody(z.object({ reason: z.string().optional() })), asyncHandler(vendors.reject));
   router.patch('/vendors/:id/tier',    requireSuperAdmin, validateBody(vendorTierSchema), asyncHandler(vendors.tier));
   router.patch('/vendors/:id/toggle',  requirePermission('vendors.edit'), asyncHandler(vendors.toggle));
+
+  // ── Categories (taxonomy managed by super_admin, viewable with products.view) ──
+  router.get('/categories',              requirePermission('products.view'), asyncHandler(categories.list));
+  router.post('/categories',             requireSuperAdmin, validateBody(categoryCreateSchema), asyncHandler(categories.create));
+  router.get('/categories/:id',          requirePermission('products.view'), asyncHandler(categories.detail));
+  router.patch('/categories/:id',        requireSuperAdmin, validateBody(categoryUpdateSchema), asyncHandler(categories.update));
+  router.patch('/categories/:id/toggle', requireSuperAdmin, asyncHandler(categories.toggle));
+  router.delete('/categories/:id',       requireSuperAdmin, asyncHandler(categories.remove));
 
   // ── Products ───────────────────────────────────────────────────────────
   router.get('/products/review', requirePermission('products.review'), asyncHandler(products.reviewQueue));
@@ -132,6 +146,8 @@ export function createAdminRouter() {
 
   // ── Field Agents ──────────────────────────────────────────────────────
   router.get('/field-agents',         requirePermission('field_agents.view'), asyncHandler(fieldAgents.list));
+  router.get('/field-agents/stats',   requirePermission('field_agents.view'), asyncHandler(fieldAgents.stats));
+  router.get('/field-agents/queue',   requirePermission('field_agents.view'), asyncHandler(fieldAgents.queue));
   router.get('/field-agents/:id',     requirePermission('field_agents.view'), asyncHandler(fieldAgents.detail));
   router.patch('/field-agents/:id/toggle', requirePermission('field_agents.view'), asyncHandler(fieldAgents.toggle));
 

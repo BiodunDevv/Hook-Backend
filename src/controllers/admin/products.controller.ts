@@ -1,10 +1,35 @@
 import { Request, Response } from 'express';
-import { ProductStatus } from '@lib/constants';
+import { ProductStatus, UserRole } from '@lib/constants';
+import { auditAdminAction } from '@lib/audit';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
 import { adminRepos, getPagination, paginated, routeParam } from './admin.helpers';
 
 function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'product';
+}
+
+const MANAGER_ROLES: UserRole[] = [UserRole.SUPPORT, UserRole.ADMIN];
+
+// categoryId → managers, computed once per request (no N+1)
+async function categoryManagersMap(): Promise<Map<string, any[]>> {
+  const users = await adminRepos.users().find({});
+  const map = new Map<string, any[]>();
+  for (const user of users as any[]) {
+    if (!MANAGER_ROLES.includes(user.role) || !user.isActive) continue;
+    for (const categoryId of user.assignedCategoryIds || []) {
+      const bucket = map.get(categoryId) || [];
+      bucket.push({
+        id: user.id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        phone: user.phone || null,
+        role: user.role,
+      });
+      map.set(categoryId, bucket);
+    }
+  }
+  return map;
 }
 
 export class AdminProductsController {
@@ -34,7 +59,11 @@ export class AdminProductsController {
       if (search && ![product.title, product.vendor?.businessName].some((value) => String(value || '').toLowerCase().includes(search))) return false;
       return true;
     });
-    const data = filtered.slice(skip, skip + limit);
+    const managers = await categoryManagersMap();
+    const data = filtered.slice(skip, skip + limit).map((product: any) => ({
+      ...product,
+      managers: managers.get(product.categoryId) || [],
+    }));
     const stats = await this.statsData();
     sendSuccess(res, { ...paginated(data, filtered.length, page, limit), stats });
   };
@@ -44,12 +73,13 @@ export class AdminProductsController {
   };
 
   detail = async (req: Request, res: Response) => {
-    const product = await adminRepos.products().findOne({
+    const product: any = await adminRepos.products().findOne({
       where: { id: routeParam(req.params.id) },
       relations: { vendor: true, category: true, orderItems: true, negotiations: true },
     });
     if (!product) throw new HttpError(404, 'Product not found');
-    sendSuccess(res, product);
+    const managers = await categoryManagersMap();
+    sendSuccess(res, { ...product, categoryManagers: managers.get(product.categoryId) || [] });
   };
 
   create = async (req: Request, res: Response) => {
@@ -68,6 +98,7 @@ export class AdminProductsController {
       slug: `${baseSlug}-${Date.now().toString().slice(-6)}`,
       hookId: `HK-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
     } as any)) as any;
+    await auditAdminAction(req, 'product.create', 'product', product.id, { title: product.title });
     sendCreated(res, await products.findOne({ where: { id: product.id }, relations: { vendor: true, category: true } }));
   };
 
@@ -86,6 +117,7 @@ export class AdminProductsController {
     Object.assign(product, req.body);
     if (req.body.title && !req.body.slug) product.slug = `${slugify(req.body.title)}-${Date.now().toString().slice(-6)}`;
     await products.save(product);
+    await auditAdminAction(req, 'product.update', 'product', product.id, { fields: Object.keys(req.body) });
     sendSuccess(res, await products.findOne({ where: { id: product.id }, relations: { vendor: true, category: true } }));
   };
 
@@ -96,6 +128,7 @@ export class AdminProductsController {
     product.status = req.body.status || product.status;
     product.sellingPrice = req.body.adjustedSellingPrice ?? product.sellingPrice;
     await products.save(product);
+    await auditAdminAction(req, 'product.review', 'product', product.id, { status: product.status });
     sendSuccess(res, product);
   };
 
@@ -105,6 +138,7 @@ export class AdminProductsController {
     if (!product) throw new HttpError(404, 'Product not found');
     product.status = ProductStatus.DISABLED;
     await products.save(product);
+    await auditAdminAction(req, 'product.disable', 'product', product.id);
     sendSuccess(res, product);
   };
 

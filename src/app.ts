@@ -5,9 +5,12 @@ import morgan from 'morgan';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import swaggerUi from 'swagger-ui-express';
+import { apiDocsEnabled, parseOrigins } from '@config/env';
+import { authLimiter, generalLimiter, sanitizeRequest, uploadLimiter } from '@middleware/security';
 import { createAdminRouter } from './routes/admin';
 import { createAuthRouter } from './routes/auth';
 import { createCustomerRouter } from './routes/customer';
+import { createDeviceRouter } from './routes/devices';
 import { createLogisticsRouter } from './routes/logistics';
 import { createPublicRouter } from './routes/public';
 import { createUploadRouter } from './routes/upload';
@@ -20,16 +23,26 @@ export function createApp() {
   const apiPrefix = `/${process.env.API_PREFIX || 'api/v1'}`;
   const swaggerSpecPath = join(process.cwd(), 'swagger-spec.json');
   const swaggerSpec = JSON.parse(readFileSync(swaggerSpecPath, 'utf8'));
+  const docsEnabled = apiDocsEnabled();
 
-  app.use(helmet());
+  app.disable('x-powered-by');
+  app.set('trust proxy', 1);
+  app.use(helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+  }));
   app.use(cors({
-    origin: process.env.CORS_ORIGINS === '*' || !process.env.CORS_ORIGINS
-      ? true
-      : process.env.CORS_ORIGINS.split(','),
+    origin: (origin, callback) => {
+      const allowed = parseOrigins();
+      if (!origin && process.env.NODE_ENV !== 'production') return callback(null, true);
+      if (origin && (allowed.includes('*') || allowed.includes(origin))) return callback(null, true);
+      return callback(null, false);
+    },
     credentials: true,
   }));
-  app.use(express.json({ limit: '10mb' }));
-  app.use(express.urlencoded({ extended: true }));
+  app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '1mb' }));
+  app.use(express.urlencoded({ extended: true, limit: process.env.FORM_BODY_LIMIT || '1mb' }));
+  app.use(sanitizeRequest);
+  app.use(generalLimiter);
   app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
   app.use('/uploads', express.static(join(process.cwd(), 'uploads')));
 
@@ -38,16 +51,28 @@ export function createApp() {
   });
 
   app.get('/docs-json', (_req, res) => {
+    if (!docsEnabled) {
+      res.status(404).json({ success: false, message: 'Route not found', timestamp: new Date().toISOString() });
+      return;
+    }
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     res.json(swaggerSpec);
   });
 
   app.get(['/swagger-spec.json', '/docs/swagger-spec.json'], (_req, res) => {
+    if (!docsEnabled) {
+      res.status(404).json({ success: false, message: 'Route not found', timestamp: new Date().toISOString() });
+      return;
+    }
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     res.json(swaggerSpec);
   });
 
   app.use('/docs', (_req: Request, res: Response, next: NextFunction) => {
+    if (!docsEnabled) {
+      res.status(404).json({ success: false, message: 'Route not found', timestamp: new Date().toISOString() });
+      return;
+    }
     res.setHeader(
       'Content-Security-Policy',
       [
@@ -72,11 +97,12 @@ export function createApp() {
     },
   }));
 
-  app.use(`${apiPrefix}/auth`, createAuthRouter());
+  app.use(`${apiPrefix}/auth`, authLimiter, createAuthRouter());
+  app.use(`${apiPrefix}/devices`, createDeviceRouter());
   app.use(`${apiPrefix}/admin`, createAdminRouter());
   app.use(`${apiPrefix}/vendors/me`, createVendorRouter());
   app.use(`${apiPrefix}/logistics`, createLogisticsRouter());
-  app.use(`${apiPrefix}/upload`, createUploadRouter());
+  app.use(`${apiPrefix}/upload`, uploadLimiter, createUploadRouter());
   app.use(`${apiPrefix}/webhooks`, createWebhookRouter());
   app.use(apiPrefix, createPublicRouter());
   app.use(apiPrefix, createCustomerRouter());

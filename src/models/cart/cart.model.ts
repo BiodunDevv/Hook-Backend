@@ -1,7 +1,8 @@
 import { BaseEntity, createModel, createSchema } from '@models/base.model';
 
 export interface Cart extends BaseEntity {
-  userId: string;
+  userId?: string;
+  guestId?: string;
   items?: any[];
   subtotal: number;
   deliveryFee: number;
@@ -11,7 +12,8 @@ export interface Cart extends BaseEntity {
 }
 
 const CartSchema = createSchema<Cart>({
-  userId: { type: String, required: true, index: true },
+  userId: { type: String, index: true },
+  guestId: { type: String, index: true },
   subtotal: { type: Number, default: 0 },
   deliveryFee: { type: Number, default: 0 },
   total: { type: Number, default: 0 },
@@ -20,5 +22,6 @@ const CartSchema = createSchema<Cart>({
 });
 
 CartSchema.index({ userId: 1, isCheckedOut: 1 });
+CartSchema.index({ guestId: 1, isCheckedOut: 1 });
 
 export const Cart = createModel<Cart>('Cart', CartSchema);

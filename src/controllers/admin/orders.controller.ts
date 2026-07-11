@@ -1,9 +1,13 @@
 import { Request, Response } from 'express';
 import { DELIVERY_SLA_HOURS, OrderStatus, PaymentStatus, VENDOR_COMMISSION_PERCENTAGE } from '@lib/constants';
+import { auditAdminAction } from '@lib/audit';
+import { EmailService } from '@emails/email.service';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
 import { adminRepos, getPagination, paginated, routeParam } from './admin.helpers';
 
 export class AdminOrdersController {
+  private readonly email = new EmailService();
+
   private async enrichOrder(order: any) {
     if (!order) return order;
     const [items, payment, logistics] = await Promise.all([
@@ -41,6 +45,8 @@ export class AdminOrdersController {
     if (search) {
       filtered = filtered.filter((order) => [
         order.orderCode,
+        order.guestEmail,
+        order.guestName,
         order.user?.email,
         order.user?.firstName,
         order.user?.lastName,
@@ -71,6 +77,19 @@ export class AdminOrdersController {
     order.status = req.body.status || order.status;
     if (order.status === OrderStatus.DELIVERED) order.deliveredAt = new Date();
     await orders.save(order);
+    await auditAdminAction(req, 'order.status', 'order', order.id, { status: order.status });
+    const customer = order.userId ? await adminRepos.users().findOne({ where: { id: order.userId } }) : undefined;
+    const customerEmail = customer?.email || order.guestEmail;
+    const customerName = `${customer?.firstName || ''} ${customer?.lastName || ''}`.trim() || order.guestName;
+    if (customerEmail) {
+      await this.email.sendOrderStatusUpdate({
+        to: customerEmail,
+        name: customerName,
+        orderCode: order.orderCode,
+        amount: order.total,
+        status: order.status,
+      });
+    }
     sendSuccess(res, order);
   };
 
@@ -93,6 +112,7 @@ export class AdminOrdersController {
     });
     if (order.status === OrderStatus.DELIVERED && !order.deliveredAt) order.deliveredAt = new Date();
     await orders.save(order);
+    await auditAdminAction(req, 'order.update', 'order', order.id, { fields: Object.keys(req.body) });
     sendSuccess(res, await this.enrichOrder(await orders.findOne({
       where: { id: order.id },
       relations: { user: true },
@@ -108,7 +128,13 @@ export class AdminOrdersController {
     const customer = await users.findOne({ where: { id: req.body.userId } });
     if (!customer) throw new HttpError(404, 'Customer not found');
 
-    const lines = [];
+    const lines: Array<{
+      product: any;
+      quantity: number;
+      selectedVariants?: Record<string, unknown>;
+      unitPrice: number;
+      totalPrice: number;
+    }> = [];
     for (const item of req.body.items) {
       const product = await products.findOne({ where: { id: item.productId }, relations: { vendor: true } });
       if (!product) throw new HttpError(404, `Product not found: ${item.productId}`);
@@ -171,6 +197,42 @@ export class AdminOrdersController {
       },
       estimatedDeliveryAt: new Date(Date.now() + DELIVERY_SLA_HOURS * 60 * 60 * 1000),
     }));
+    await auditAdminAction(req, 'order.create', 'order', order.id, { orderCode: order.orderCode });
+    const itemCount = lines.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+    if (customer.email) {
+      await this.email.sendOrderConfirmation({
+        to: customer.email,
+        name: `${customer.firstName || ''} ${customer.lastName || ''}`.trim(),
+        orderCode: order.orderCode,
+        amount: order.total,
+        itemCount,
+      });
+    }
+    const hookOpsEmail = process.env.HOOK_OPS_EMAIL || process.env.BREVO_FROM_EMAIL;
+    if (hookOpsEmail) {
+      await this.email.sendHookNewOrder({
+        to: hookOpsEmail,
+        customerName: customer.email || 'Customer',
+        orderCode: order.orderCode,
+        amount: order.total,
+        itemCount,
+      });
+    }
+    await Promise.all(vendorIds.map(async (vendorId) => {
+      const vendor = await adminRepos.vendors().findOne({ where: { id: vendorId } });
+      const owner = vendor?.ownerId ? await adminRepos.users().findOne({ where: { id: vendor.ownerId } }) : undefined;
+      if (!vendor || !owner?.email) return;
+      const vendorLines = lines.filter((line) => line.product.vendorId === vendorId);
+      await this.email.sendVendorNewOrder({
+        to: owner.email,
+        name: `${owner.firstName || ''} ${owner.lastName || ''}`.trim(),
+        vendorName: vendor.businessName,
+        customerName: customer.email || 'Customer',
+        orderCode: order.orderCode,
+        amount: vendorLines.reduce((sum, line) => sum + Number(line.totalPrice || 0), 0),
+        itemCount: vendorLines.reduce((sum, line) => sum + Number(line.quantity || 0), 0),
+      });
+    }));
 
     sendCreated(res, await this.enrichOrder(await orders.findOne({
       where: { id: order.id },
@@ -196,6 +258,7 @@ export class AdminOrdersController {
     });
     logistics.driverId = driver.id;
     await logisticsRepo.save(logistics);
+    await auditAdminAction(req, 'order.assign_driver', 'order', order.id, { driverId: driver.id });
     sendSuccess(res, await logisticsRepo.findOne({ where: { orderId: order.id }, relations: { order: true, driver: true } }));
   };
 

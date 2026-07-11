@@ -4,6 +4,8 @@ import { CartItem } from '@models/cart/cart-item.model';
 import { Product } from '@models/products/product.model';
 import { HttpError } from '@utils/http';
 
+export type CustomerOwner = { userId?: string; guestId?: string };
+
 export class CartService {
   constructor(
     private readonly carts: Repository<Cart>,
@@ -11,25 +13,26 @@ export class CartService {
     private readonly products: Repository<Product>,
   ) {}
 
-  async getCart(userId: string) {
+  async getCart(owner: CustomerOwner) {
+    const where = this.ownerWhere(owner);
     let cart: any = await this.carts.findOne({
-      where: { userId, isCheckedOut: false },
+      where: { ...where, isCheckedOut: false },
       relations: { items: { product: true } },
     });
     if (!cart) {
-      cart = await this.carts.save(this.carts.create({ userId, subtotal: 0, deliveryFee: 0, total: 0 }));
+      cart = await this.carts.save(this.carts.create({ ...where, subtotal: 0, deliveryFee: 0, total: 0 }));
       cart.items = [];
     }
     cart.items = cart.items || await this.items.find({ where: { cartId: cart.id }, relations: { product: true } });
     return cart;
   }
 
-  async addItem(userId: string, productId: string, quantity: number, selectedVariants?: CartItem['selectedVariants']) {
+  async addItem(owner: CustomerOwner, productId: string, quantity: number, selectedVariants?: CartItem['selectedVariants']) {
     const product = await this.products.findOne({ where: { id: productId } });
     if (!product) throw new HttpError(404, 'Product not found');
     if (product.quantity < quantity) throw new HttpError(400, 'Insufficient stock for this product');
 
-    const cart = await this.getCart(userId);
+    const cart = await this.getCart(owner);
     const existing = (cart.items || []).find((item: any) => item.productId === productId);
     const unitPrice = product.discountedPrice || product.sellingPrice;
 
@@ -52,8 +55,8 @@ export class CartService {
     return this.recalculate(cart.id);
   }
 
-  async updateItem(userId: string, itemId: string, quantity: number) {
-    const cart = await this.getCart(userId);
+  async updateItem(owner: CustomerOwner, itemId: string, quantity: number) {
+    const cart = await this.getCart(owner);
     const item = await this.items.findOne({ where: { id: itemId, cartId: cart.id } });
     if (!item) throw new HttpError(404, 'Cart item not found');
     item.quantity = quantity;
@@ -62,14 +65,14 @@ export class CartService {
     return this.recalculate(cart.id);
   }
 
-  async removeItem(userId: string, itemId: string) {
-    const cart = await this.getCart(userId);
+  async removeItem(owner: CustomerOwner, itemId: string) {
+    const cart = await this.getCart(owner);
     await this.items.delete({ id: itemId, cartId: cart.id });
     return this.recalculate(cart.id);
   }
 
-  async clear(userId: string) {
-    const cart = await this.getCart(userId);
+  async clear(owner: CustomerOwner) {
+    const cart = await this.getCart(owner);
     await this.items.delete({ cartId: cart.id });
     return this.recalculate(cart.id);
   }
@@ -86,5 +89,11 @@ export class CartService {
     cart.total = cart.subtotal + cart.deliveryFee;
     await this.carts.save(cart);
     return cart;
+  }
+
+  private ownerWhere(owner: CustomerOwner) {
+    if (owner.userId) return { userId: owner.userId };
+    if (owner.guestId) return { guestId: owner.guestId };
+    throw new HttpError(401, 'Authentication or guest session required');
   }
 }

@@ -52,8 +52,10 @@ export class AdminStaffController {
         password: await hashPassword(req.body.password),
         firstName: req.body.firstName || '',
         lastName: req.body.lastName || '',
+        phone: req.body.phone,
         role: req.body.role,
         permissions: req.body.permissions || [],
+        assignedCategoryIds: [],
         isActive: true,
         isEmailVerified: true,
       }),
@@ -113,6 +115,42 @@ export class AdminStaffController {
     );
 
     sendSuccess(res, { id: (user as any).id, permissions: (user as any).permissions });
+  };
+
+  updateCategories = async (req: Request, res: Response) => {
+    const users = adminRepos.users();
+    const user = await users.findOne({ where: { id: routeParam(req.params.id) } });
+    if (!user || !STAFF_ROLES.includes((user as any).role)) throw new HttpError(404, 'Staff member not found');
+
+    if ((user as any).role === UserRole.SUPER_ADMIN) {
+      throw new HttpError(400, 'Super admins oversee all categories and cannot be assigned to specific ones');
+    }
+
+    // Every referenced category must exist
+    const categoryIds: string[] = req.body.categoryIds;
+    const categories = await adminRepos.categories().find({});
+    const validIds = new Set((categories as any[]).map((c) => c.id));
+    const missing = categoryIds.filter((id) => !validIds.has(id));
+    if (missing.length > 0) {
+      throw new HttpError(404, `Unknown category id(s): ${missing.join(', ')}`);
+    }
+
+    (user as any).assignedCategoryIds = categoryIds;
+    await users.save(user);
+
+    const auditLogs = adminRepos.auditLogs();
+    await auditLogs.save(
+      auditLogs.create({
+        action: 'staff.categories_update',
+        resourceType: 'user',
+        resourceId: (user as any).id,
+        details: `Assigned ${categoryIds.length} categor${categoryIds.length === 1 ? 'y' : 'ies'} to ${(user as any).email}`,
+        status: 'success',
+        ...actor(req),
+      }),
+    );
+
+    sendSuccess(res, { id: (user as any).id, assignedCategoryIds: categoryIds });
   };
 
   toggle = async (req: Request, res: Response) => {

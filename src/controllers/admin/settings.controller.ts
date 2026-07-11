@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { auditAdminAction } from '@lib/audit';
 import { sendSuccess } from '@utils/http';
 
 let settings: Record<string, unknown> = {
@@ -14,6 +15,7 @@ export class AdminSettingsController {
 
   update = async (req: Request, res: Response) => {
     settings = { ...settings, ...req.body };
+    await auditAdminAction(req, 'settings.update', 'settings', 'platform', { fields: Object.keys(req.body) });
     sendSuccess(res, { ...settings, updatedAt: new Date().toISOString() });
   };
 }

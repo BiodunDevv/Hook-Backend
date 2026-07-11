@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { CustomerController } from '@controllers/customer.controller';
-import { requireAuth } from '@middleware/auth';
+import { requireCustomerIdentity } from '@middleware/auth';
 import { validateBody } from '@middleware/validate';
 import {
   cartItemSchema,
@@ -16,7 +16,7 @@ export function createCustomerRouter() {
   const router = Router();
   const controller = new CustomerController();
 
-  router.use(requireAuth);
+  router.use(requireCustomerIdentity);
 
   router.get('/cart', asyncHandler(controller.getCart));
   router.post('/cart/items', validateBody(cartItemSchema), asyncHandler(controller.addCartItem));

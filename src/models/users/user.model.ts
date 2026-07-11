@@ -14,6 +14,7 @@ export interface User extends BaseEntity {
   address?: Record<string, unknown>;
   preferences?: Record<string, unknown>;
   permissions?: string[];
+  assignedCategoryIds?: string[];
   isActive: boolean;
   lastLoginAt?: Date;
   refreshToken?: string;
@@ -32,6 +33,7 @@ const UserSchema = createSchema<User>({
   address: { type: Object },
   preferences: { type: Object },
   permissions: { type: [String], default: [] },
+  assignedCategoryIds: { type: [String], default: [] },
   isActive: { type: Boolean, default: true, index: true },
   lastLoginAt: { type: Date },
   refreshToken: { type: String, index: true },

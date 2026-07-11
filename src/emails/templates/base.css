@@ -1,0 +1,20 @@
+body { margin: 0; background: #f4f4f5; font-family: Arial, Helvetica, sans-serif; color: #18181b; }
+.wrap { width: 100%; padding: 40px 16px; box-sizing: border-box; }
+.card { max-width: 680px; margin: 0 auto; background: #ffffff; border-radius: 0; padding: 48px 40px; box-sizing: border-box; }
+.brand { text-align: center; font-size: 36px; line-height: 1; font-weight: 800; letter-spacing: -1px; color: #064e3b; }
+.brand-dot { color: #f8c231; }
+.icon { width: 64px; height: 64px; border-radius: 999px; background: #dcfce7; color: #065f46; margin: 28px auto 24px; text-align: center; line-height: 64px; font-size: 28px; }
+h1 { margin: 0; text-align: center; font-size: 28px; line-height: 1.2; font-weight: 700; color: #09090b; }
+p { margin: 0; font-size: 14px; line-height: 1.65; color: #3f3f46; }
+.lead { max-width: 420px; margin: 12px auto 0; text-align: center; color: #18181b; }
+.code { margin: 28px auto 10px; max-width: 456px; padding: 24px; border: 1px solid #bbf7d0; border-radius: 8px; background: #ecfdf5; text-align: center; font-size: 64px; line-height: 1; letter-spacing: 22px; font-weight: 800; color: #065f46; }
+.meta { text-align: center; font-size: 12px; color: #065f46; }
+.notice { max-width: 500px; margin: 40px auto 0; border-radius: 8px; background: #fef3c7; padding: 18px 22px; color: #3f3f46; }
+.panel { margin: 28px 0; border: 1px solid #e4e4e7; border-radius: 8px; background: #fafafa; padding: 20px; }
+.row { display: flex; justify-content: space-between; gap: 16px; border-bottom: 1px solid #e4e4e7; padding: 12px 0; }
+.row:last-child { border-bottom: 0; }
+.label { color: #71717a; }
+.value { color: #18181b; font-weight: 700; text-align: right; }
+.button { display: inline-block; margin-top: 24px; border-radius: 8px; background: #f8c231; color: #18181b; font-weight: 700; text-decoration: none; padding: 12px 18px; }
+.footer { max-width: 680px; margin: 18px auto 0; text-align: center; color: #52525b; }
+@media (max-width: 560px) { .card { padding: 34px 20px; } h1 { font-size: 24px; } .code { font-size: 44px; letter-spacing: 12px; } .row { display: block; } .value { text-align: left; margin-top: 4px; } }

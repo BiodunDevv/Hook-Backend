@@ -1,5 +1,6 @@
 import jwt, { SignOptions } from 'jsonwebtoken';
 import { UserRole } from '@lib/constants';
+import { jwtSecret } from '@config/env';
 
 export interface AuthUserPayload {
   sub: string;
@@ -9,14 +10,10 @@ export interface AuthUserPayload {
 
 export function signAccessToken(payload: AuthUserPayload) {
   const options: SignOptions = {
-    expiresIn: (process.env.JWT_EXPIRY || '7d') as SignOptions['expiresIn'],
+    expiresIn: (process.env.JWT_EXPIRY || '15m') as SignOptions['expiresIn'],
   };
 
-  return jwt.sign(
-    payload,
-    process.env.JWT_SECRET || 'hook-dev-jwt-secret-change-in-production-12345',
-    options,
-  );
+  return jwt.sign(payload, jwtSecret(), options);
 }
 
 export function signRefreshToken(payload: AuthUserPayload) {
@@ -24,9 +21,5 @@ export function signRefreshToken(payload: AuthUserPayload) {
     expiresIn: (process.env.JWT_REFRESH_EXPIRY || '30d') as SignOptions['expiresIn'],
   };
 
-  return jwt.sign(
-    payload,
-    process.env.JWT_SECRET || 'hook-dev-jwt-secret-change-in-production-12345',
-    options,
-  );
+  return jwt.sign(payload, jwtSecret(), options);
 }

@@ -39,10 +39,29 @@ const PRODUCT_IMAGES = [
   'https://images.unsplash.com/photo-1556906781-9a412961c28c?w=800&auto=format&fit=crop&q=60',
 ];
 
+// Free Unsplash images used as the display icon for each category
 const categories = [
-  { name: 'Sneakers', slug: 'sneakers', description: 'Everyday, running, and fashion sneakers.', sortOrder: 1 },
-  { name: 'Streetwear', slug: 'streetwear', description: 'Urban apparel and casual fashion.', sortOrder: 2 },
-  { name: 'Accessories', slug: 'accessories', description: 'Bags, caps, socks, and finishing items.', sortOrder: 3 },
+  {
+    name: 'Sneakers',
+    slug: 'sneakers',
+    description: 'Everyday, running, and fashion sneakers.',
+    sortOrder: 1,
+    iconUrl: 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=400&auto=format&fit=crop&q=60',
+  },
+  {
+    name: 'Streetwear',
+    slug: 'streetwear',
+    description: 'Urban apparel and casual fashion.',
+    sortOrder: 2,
+    iconUrl: 'https://images.unsplash.com/photo-1523398002811-999ca8dec234?w=400&auto=format&fit=crop&q=60',
+  },
+  {
+    name: 'Accessories',
+    slug: 'accessories',
+    description: 'Bags, caps, socks, and finishing items.',
+    sortOrder: 3,
+    iconUrl: 'https://images.unsplash.com/photo-1553062407-98eeb64c6a62?w=400&auto=format&fit=crop&q=60',
+  },
 ];
 
 const vendors = [
@@ -81,6 +100,7 @@ const vendors = [
   },
 ];
 
+// [title, marketPrice, hookPlatformPrice, negotiationFloor, quantity]
 const products = [
   ['Air Pulse Runner', 39000, 52000, 45000, 25],
   ['Court Flex Low', 42000, 58000, 50000, 18],
@@ -111,43 +131,136 @@ const drivers = [
   ['driver.two@hook.africa', 'Sola', 'Adeyemi', '+2348030000102'],
 ] as const;
 
-// Staff seed — admin and support accounts for RBAC testing
+// Staff seed — admin and support accounts for RBAC testing.
+// categorySlugs are resolved to real category ids after categories are saved.
 const staffAccounts = [
   {
     email: 'admin.one@hook.africa',
     firstName: 'Chidi',
     lastName: 'Okeke',
+    phone: '+2348040000101',
     role: UserRole.ADMIN,
     permissions: ALL_PERMISSIONS, // admin gets all by default
+    categorySlugs: ['sneakers'],
   },
   {
     email: 'admin.two@hook.africa',
     firstName: 'Fatima',
     lastName: 'Yusuf',
+    phone: '+2348040000102',
     role: UserRole.ADMIN,
     permissions: ALL_PERMISSIONS,
+    categorySlugs: ['streetwear', 'accessories'],
   },
   {
     email: 'support.one@hook.africa',
     firstName: 'Temi',
     lastName: 'Adeyemi',
+    phone: '+2348040000103',
     role: UserRole.SUPPORT,
     permissions: ['orders.view', 'orders.edit', 'customers.view', 'customers.edit', 'products.view'],
+    categorySlugs: ['sneakers'],
   },
   {
     email: 'support.two@hook.africa',
     firstName: 'Kola',
     lastName: 'Balogun',
+    phone: '+2348040000104',
     role: UserRole.SUPPORT,
     permissions: ['vendors.view', 'vendors.approve', 'products.view', 'products.review', 'reports.view'],
+    categorySlugs: ['streetwear'],
   },
   {
     email: 'support.three@hook.africa',
     firstName: 'Amaka',
     lastName: 'Eze',
+    phone: '+2348040000105',
     role: UserRole.SUPPORT,
     permissions: ['orders.view', 'drivers.view', 'financials.view', 'reports.view', 'ai_negotiation.view'],
+    categorySlugs: ['accessories'],
   },
+] as const;
+
+// Field agents — people assigned to individual markets who upload listings for QA
+const fieldAgentAccounts = [
+  {
+    email: 'agent.one@hook.africa',
+    firstName: 'Chika',
+    lastName: 'Nwosu',
+    phone: '+2348050000101',
+    assignedMarket: 'Balogun Market',
+    coverageArea: { lat: 6.4541, lng: 3.3894, radiusKm: 2 },
+  },
+  {
+    email: 'agent.two@hook.africa',
+    firstName: 'Ibrahim',
+    lastName: 'Sani',
+    phone: '+2348050000102',
+    assignedMarket: 'Yaba (Tejuosho)',
+    coverageArea: { lat: 6.5095, lng: 3.3711, radiusKm: 3 },
+  },
+  {
+    email: 'agent.three@hook.africa',
+    firstName: 'Grace',
+    lastName: 'Okafor',
+    phone: '+2348050000103',
+    assignedMarket: 'Mandilas',
+    coverageArea: { lat: 6.4507, lng: 3.3903, radiusKm: 1.5 },
+  },
+] as const;
+
+// Physical booths — company-owned walk-in locations
+const boothSeeds = [
+  {
+    name: 'Balogun Phygital Booth',
+    description: 'Flagship walk-in booth inside Balogun Market with live catalog browsing.',
+    boothType: 'phygital',
+    location: { address: 'Balogun Market, Lagos Island', lat: 6.4541, lng: 3.3894 },
+    operatingHours: { open: '08:00', close: '19:00', days: 'Mon-Sat' },
+    previewImageUrl: 'https://images.unsplash.com/photo-1441986300917-64674bd600d8?w=600&auto=format&fit=crop&q=60',
+    isActive: true,
+    agentEmail: 'agent.one@hook.africa',
+  },
+  {
+    name: 'Yaba Micro Hub',
+    description: 'Pickup and dispatch micro hub serving Tejuosho and Yaba axis.',
+    boothType: 'micro_hub',
+    location: { address: 'Tejuosho Ultra Modern Market, Yaba', lat: 6.5095, lng: 3.3711 },
+    operatingHours: { open: '09:00', close: '18:00', days: 'Mon-Sat' },
+    previewImageUrl: 'https://images.unsplash.com/photo-1472851294608-062f824d29cc?w=600&auto=format&fit=crop&q=60',
+    isActive: true,
+    agentEmail: 'agent.two@hook.africa',
+  },
+  {
+    name: 'Ikeja City Mall Booth',
+    description: 'Experience booth for product discovery and instant checkout.',
+    boothType: 'phygital',
+    location: { address: 'Ikeja City Mall, Alausa, Ikeja', lat: 6.6142, lng: 3.3579 },
+    operatingHours: { open: '10:00', close: '21:00', days: 'Mon-Sun' },
+    previewImageUrl: 'https://images.unsplash.com/photo-1555529669-e69e7aa0ba9a?w=600&auto=format&fit=crop&q=60',
+    isActive: true,
+    agentEmail: 'agent.three@hook.africa',
+  },
+  {
+    name: 'Lekki Experience Booth',
+    description: 'Coming online soon — hardware installation in progress.',
+    boothType: 'micro_hub',
+    location: { address: 'Admiralty Way, Lekki Phase 1', lat: 6.4478, lng: 3.4723 },
+    operatingHours: { open: '09:00', close: '19:00', days: 'Mon-Sat' },
+    previewImageUrl: 'https://images.unsplash.com/photo-1556740738-b6a63e27c4df?w=600&auto=format&fit=crop&q=60',
+    isActive: false,
+    agentEmail: null,
+  },
+] as const;
+
+// Field uploads awaiting QA review — [title, marketPrice, hookPlatformPrice, negotiationFloor, qty, categorySlug, agentEmail]
+const pendingUploads = [
+  ["Nike Air Force 1 '07 - White", 18000, 22500, 20000, 12, 'sneakers', 'agent.one@hook.africa'],
+  ['Vintage Denim Jacket - Oversized', 6000, 9000, 7500, 4, 'streetwear', 'agent.two@hook.africa'],
+  ['Dior Replica Quilted Tote', 25000, 33000, 29000, 6, 'accessories', 'agent.three@hook.africa'],
+  ['New Balance 530 - Grey Matter', 28000, 36500, 32000, 8, 'sneakers', 'agent.one@hook.africa'],
+  ['Two-Piece Ankara Co-ord Set', 8500, 13000, 11000, 10, 'streetwear', 'agent.two@hook.africa'],
+  ['Leather Crossbody Mini Bag', 9000, 14500, 12000, 15, 'accessories', 'agent.three@hook.africa'],
 ] as const;
 
 function slugify(value: string) {
@@ -166,6 +279,14 @@ async function seed() {
 
   // All seeded accounts use the same password for easy local/QA testing
   const password = '123456';
+  if (
+    process.env.NODE_ENV === 'production' &&
+    email === 'admin@gmail.com' &&
+    password === '123456' &&
+    process.env.ALLOW_WEAK_PRODUCTION_SEED !== 'true'
+  ) {
+    throw new Error('Refusing to seed default weak admin credentials in production. Set ALLOW_WEAK_PRODUCTION_SEED=true only for controlled QA.');
+  }
 
   const [
     { hashPassword },
@@ -180,6 +301,8 @@ async function seed() {
     { Logistics },
     { Settlement },
     { Negotiation },
+    { FieldAgent },
+    { Booth },
   ] = await Promise.all([
     import('@lib/security'),
     import('@config/data-source'),
@@ -193,6 +316,8 @@ async function seed() {
     import('@models/logistics/logistics.model'),
     import('@models/settlements/settlement.model'),
     import('@models/negotiations/negotiation.model'),
+    import('@models/field-agents/field-agent.model'),
+    import('@models/booths/booth.model'),
   ]);
 
   await initializeDatabase();
@@ -206,6 +331,8 @@ async function seed() {
   const logisticsRepo = AppDataSource.getRepository(Logistics);
   const settlementRepo = AppDataSource.getRepository(Settlement);
   const negotiationRepo = AppDataSource.getRepository(Negotiation);
+  const fieldAgentRepo = AppDataSource.getRepository(FieldAgent);
+  const boothRepo = AppDataSource.getRepository(Booth);
 
   await resetSeedData();
 
@@ -305,9 +432,17 @@ async function seed() {
   console.log(`Vendors ready: ${savedVendors.length}`);
 
   const sneakerCategory = savedCategories.find((category) => category.slug === 'sneakers') || savedCategories[0];
+  const streetwearCategory = savedCategories.find((category) => category.slug === 'streetwear') || sneakerCategory;
+  const accessoriesCategory = savedCategories.find((category) => category.slug === 'accessories') || sneakerCategory;
+  // Indexes 0-9 are sneakers; 10+ are apparel/accessories items
+  const productCategoryByIndex = (index: number) => {
+    if (index === 10 || index === 13) return streetwearCategory; // jacket, tee
+    if (index === 11 || index === 12 || index === 14) return accessoriesCategory; // bag, socks, cap
+    return sneakerCategory;
+  };
   const savedProducts: any[] = [];
   for (let index = 0; index < products.length; index += 1) {
-    const [title, costPrice, sellingPrice, minAcceptablePrice, quantity] = products[index];
+    const [title, marketPrice, hookPlatformPrice, negotiationFloor, quantity] = products[index];
     const slug = slugify(title);
     const vendor = savedVendors[index % savedVendors.length];
     const hookId = `HK-SNK-${String(index + 1).padStart(3, '0')}`;
@@ -316,10 +451,10 @@ async function seed() {
       title,
       slug,
       description: `${title} seeded with a real sneaker image for admin product, catalog, upload, and detail page testing.`,
-      costPrice,
-      sellingPrice,
-      discountedPrice: Math.round(sellingPrice * 0.92),
-      minAcceptablePrice,
+      costPrice: marketPrice,
+      sellingPrice: hookPlatformPrice,
+      discountedPrice: undefined,
+      minAcceptablePrice: negotiationFloor,
       quantity,
       reservedQuantity: 0,
       colors: ['Black', 'White', 'Gold'],
@@ -332,7 +467,7 @@ async function seed() {
       hookId,
       status: ProductStatus.APPROVED,
       vendorId: vendor.id,
-      categoryId: sneakerCategory.id,
+      categoryId: productCategoryByIndex(index).id,
       viewCount: 120 + index * 17,
       orderCount: 9 + index * 3,
       averageRating: Number((4.4 + (index % 5) * 0.1).toFixed(1)),
@@ -346,35 +481,15 @@ async function seed() {
   }
   console.log(`Products ready: ${products.length}`);
 
-  const savedCustomers: any[] = [];
-  for (const [customerEmail, customerFirstName, customerLastName, phone] of customers) {
-    let customer: any = await userRepo.findOne({ where: { email: customerEmail } });
-    const customerPayload = {
-      email: customerEmail,
-      phone,
-      password: passwordHash,
-      firstName: customerFirstName,
-      lastName: customerLastName,
-      role: UserRole.SHOPPER,
-      isActive: true,
-      isEmailVerified: true,
-      isPhoneVerified: true,
-      address: {
-        street: '12 Admiralty Road',
-        city: 'Lekki',
-        state: 'Lagos',
-        country: 'Nigeria',
-      },
-      preferences: {
-        sizes: ['41', '42'],
-        categories: ['Sneakers', 'Streetwear'],
-      },
-    };
-    if (customer) Object.assign(customer, customerPayload);
-    else customer = userRepo.create(customerPayload as any) as any;
-    savedCustomers.push(await userRepo.save(customer as any));
-  }
-  console.log(`Customers ready: ${savedCustomers.length}`);
+  const seededCustomerProfiles = customers.map(([email, firstName, lastName, phone], index) => ({
+    guestId: `seed-guest-${String(index + 1).padStart(3, '0')}`,
+    email,
+    firstName,
+    lastName,
+    name: `${firstName} ${lastName}`,
+    phone,
+  }));
+  console.log(`Customer display profiles ready: ${seededCustomerProfiles.length} (no shopper users seeded)`);
 
   const savedDrivers: any[] = [];
   for (const [driverEmail, driverFirstName, driverLastName, phone] of drivers) {
@@ -397,18 +512,26 @@ async function seed() {
   console.log(`Drivers ready: ${savedDrivers.length}`);
 
   // ── Staff accounts (admin + support) ──────────────────────────────────────
+  const categoryIdBySlug = new Map<string, string>(
+    savedCategories.map((category: any) => [category.slug, category.id]),
+  );
   let staffCreated = 0;
   for (const staffSeed of staffAccounts) {
     let staffUser: any = await userRepo.findOne({ where: { email: staffSeed.email } });
     const staffPayload: any = {
       email: staffSeed.email,
+      phone: staffSeed.phone,
       password: passwordHash,
       firstName: staffSeed.firstName,
       lastName: staffSeed.lastName,
       role: staffSeed.role,
       permissions: staffSeed.permissions,
+      assignedCategoryIds: staffSeed.categorySlugs
+        .map((slug) => categoryIdBySlug.get(slug))
+        .filter(Boolean),
       isActive: true,
       isEmailVerified: true,
+      isPhoneVerified: true,
     };
     if (staffUser) {
       Object.assign(staffUser, staffPayload);
@@ -420,6 +543,100 @@ async function seed() {
   }
   console.log(`Staff accounts ready: ${staffCreated} (${staffAccounts.filter((s) => s.role === UserRole.ADMIN).length} admin, ${staffAccounts.filter((s) => s.role === UserRole.SUPPORT).length} support)`);
 
+  // ── Field agents (market-assigned uploaders) ──────────────────────────────
+  const fieldAgentByEmail = new Map<string, any>();
+  for (const agentSeed of fieldAgentAccounts) {
+    let agentUser: any = await userRepo.findOne({ where: { email: agentSeed.email } });
+    const agentUserPayload = {
+      email: agentSeed.email,
+      phone: agentSeed.phone,
+      password: passwordHash,
+      firstName: agentSeed.firstName,
+      lastName: agentSeed.lastName,
+      role: UserRole.FIELD_AGENT,
+      isActive: true,
+      isEmailVerified: true,
+      isPhoneVerified: true,
+    };
+    if (agentUser) Object.assign(agentUser, agentUserPayload);
+    else agentUser = userRepo.create(agentUserPayload as any) as any;
+    agentUser = await userRepo.save(agentUser);
+
+    let fieldAgent: any = await fieldAgentRepo.findOne({ where: { agentId: agentUser.id } });
+    const fieldAgentPayload = {
+      agentId: agentUser.id,
+      assignedMarket: agentSeed.assignedMarket,
+      coverageArea: agentSeed.coverageArea,
+      isActive: true,
+    };
+    if (fieldAgent) Object.assign(fieldAgent, fieldAgentPayload);
+    else fieldAgent = fieldAgentRepo.create(fieldAgentPayload as any) as any;
+    fieldAgent = await fieldAgentRepo.save(fieldAgent);
+    fieldAgentByEmail.set(agentSeed.email, fieldAgent);
+  }
+  console.log(`Field agents ready: ${fieldAgentAccounts.length}`);
+
+  // ── Physical booths (company-owned locations) ─────────────────────────────
+  for (const boothSeed of boothSeeds) {
+    const attendant = boothSeed.agentEmail ? fieldAgentByEmail.get(boothSeed.agentEmail) : undefined;
+    let booth: any = await boothRepo.findOne({ where: { name: boothSeed.name } });
+    const boothPayload = {
+      name: boothSeed.name,
+      description: boothSeed.description,
+      boothType: boothSeed.boothType,
+      location: boothSeed.location,
+      operatingHours: boothSeed.operatingHours,
+      previewImageUrl: boothSeed.previewImageUrl,
+      isActive: boothSeed.isActive,
+      fieldAgentId: attendant?.id,
+      featuredProductIds: [],
+    };
+    if (booth) Object.assign(booth, boothPayload);
+    else booth = boothRepo.create(boothPayload as any) as any;
+    await boothRepo.save(booth);
+  }
+  console.log(`Booths ready: ${boothSeeds.length}`);
+
+  // ── Field uploads awaiting QA (pending_approval products) ─────────────────
+  const categoryBySlug = new Map<string, any>(savedCategories.map((category: any) => [category.slug, category]));
+  for (let index = 0; index < pendingUploads.length; index += 1) {
+    const [title, marketPrice, hookPlatformPrice, negotiationFloor, quantity, categorySlug, agentEmail] = pendingUploads[index];
+    const agent = fieldAgentByEmail.get(agentEmail);
+    const category = categoryBySlug.get(categorySlug) || savedCategories[0];
+    const vendor = savedVendors[index % savedVendors.length];
+    const slug = slugify(title);
+    const hookId = `HK-FLD-${String(index + 1).padStart(3, '0')}`;
+
+    let product: any = await productRepo.findOne({ where: [{ slug }, { hookId }] as any });
+    const productPayload: any = {
+      title,
+      slug,
+      description: `${title} uploaded from ${agent?.assignedMarket || 'the field'} and awaiting QA review.`,
+      costPrice: marketPrice,
+      sellingPrice: hookPlatformPrice,
+      discountedPrice: undefined,
+      minAcceptablePrice: negotiationFloor,
+      quantity,
+      reservedQuantity: 0,
+      colors: index % 2 === 0 ? ['White', 'Black'] : ['Blue Wash'],
+      sizes: categorySlug === 'sneakers' ? ['41', '42', '43', '44'] : ['M', 'L', 'XL'],
+      images: [PRODUCT_IMAGES[(index + 3) % PRODUCT_IMAGES.length]],
+      hookId,
+      status: ProductStatus.PENDING_APPROVAL,
+      source: 'field_agent',
+      fieldAgentId: agent?.id,
+      vendorId: vendor.id,
+      categoryId: category.id,
+      viewCount: 0,
+      orderCount: 0,
+      averageRating: 0,
+    };
+    if (product) Object.assign(product, productPayload);
+    else product = productRepo.create(productPayload as any) as any;
+    await productRepo.save(product);
+  }
+  console.log(`Pending field uploads ready: ${pendingUploads.length}`);
+
   const orderStatuses = [
     OrderStatus.PENDING,
     OrderStatus.CONFIRMED,
@@ -429,7 +646,7 @@ async function seed() {
     OrderStatus.DELIVERED,
   ];
   for (let index = 0; index < 6; index += 1) {
-    const customer = savedCustomers[index % savedCustomers.length];
+    const customer = seededCustomerProfiles[index % seededCustomerProfiles.length];
     const firstProduct = savedProducts[index % savedProducts.length];
     const secondProduct = savedProducts[(index + 3) % savedProducts.length];
     const orderCode = `HK-ORD-${String(index + 1).padStart(4, '0')}`;
@@ -447,7 +664,10 @@ async function seed() {
     let order: any = await orderRepo.findOne({ where: { orderCode } });
     const orderPayload: any = {
       orderCode,
-      userId: customer.id,
+      userId: undefined,
+      guestId: customer.guestId,
+      guestEmail: customer.email,
+      guestName: customer.name,
       subtotal,
       deliveryFee,
       discount,
@@ -583,7 +803,7 @@ async function seed() {
   ];
   for (let index = 0; index < negotiationSeeds.length; index += 1) {
     const product = savedProducts[index % savedProducts.length];
-    const customer = savedCustomers[index % savedCustomers.length];
+    const customer = seededCustomerProfiles[index % seededCustomerProfiles.length];
     const negotiationSeed = negotiationSeeds[index];
     const offeredPrice = Math.round(Number(product.sellingPrice) * negotiationSeed.offeredRatio);
     const counterPrice = Math.round(Number(product.sellingPrice) * negotiationSeed.counterRatio);
@@ -591,7 +811,10 @@ async function seed() {
       ? Math.round(Number(product.sellingPrice) * negotiationSeed.acceptedRatio)
       : undefined;
     await negotiationRepo.save(negotiationRepo.create({
-      userId: customer.id,
+      userId: undefined,
+      guestId: customer.guestId,
+      guestEmail: customer.email,
+      guestName: customer.name,
       productId: product.id,
       round: negotiationSeed.round,
       offeredPrice,

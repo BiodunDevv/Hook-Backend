@@ -3,7 +3,10 @@ import { BaseEntity, createModel, createSchema } from '@models/base.model';
 
 export interface Order extends BaseEntity {
   orderCode: string;
-  userId: string;
+  userId?: string;
+  guestId?: string;
+  guestEmail?: string;
+  guestName?: string;
   items?: any[];
   payment?: any;
   logistics?: any;
@@ -32,7 +35,10 @@ export interface Order extends BaseEntity {
 
 const OrderSchema = createSchema<Order>({
   orderCode: { type: String, required: true, unique: true, index: true },
-  userId: { type: String, required: true, index: true },
+  userId: { type: String, index: true },
+  guestId: { type: String, index: true },
+  guestEmail: { type: String, lowercase: true, trim: true },
+  guestName: { type: String },
   subtotal: { type: Number, required: true },
   deliveryFee: { type: Number, default: 0 },
   discount: { type: Number, default: 0 },
@@ -50,5 +56,6 @@ const OrderSchema = createSchema<Order>({
 });
 
 OrderSchema.index({ userId: 1, status: 1 });
+OrderSchema.index({ guestId: 1, status: 1 });
 
 export const Order = createModel<Order>('Order', OrderSchema);

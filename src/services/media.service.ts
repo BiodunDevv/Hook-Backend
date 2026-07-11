@@ -21,18 +21,35 @@ interface CloudinaryUploadResponse {
   height?: number;
   format?: string;
   bytes?: number;
+  resource_type?: string;
   error?: { message?: string };
 }
 
 const imageExtensionPattern = /\.(avif|gif|jpe?g|png|svg|webp)(\?.*)?$/i;
-const knownImageHosts = [
+const defaultAllowedImageHosts = [
   'cloudinary.com',
   'images.unsplash.com',
   'plus.unsplash.com',
-  'images.pexels.com',
-  'cdn.shopify.com',
   'res.cloudinary.com',
 ];
+
+function allowedImageHosts() {
+  return (process.env.ALLOWED_EXTERNAL_IMAGE_HOSTS || defaultAllowedImageHosts.join(','))
+    .split(',')
+    .map((host) => host.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function isPrivateHostname(hostname: string) {
+  const host = hostname.toLowerCase();
+  if (['localhost', 'metadata.google.internal'].includes(host)) return true;
+  if (/^(127|10)\./.test(host)) return true;
+  if (/^192\.168\./.test(host)) return true;
+  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(host)) return true;
+  if (/^169\.254\./.test(host)) return true;
+  if (host === '::1' || host.startsWith('fc') || host.startsWith('fd')) return true;
+  return false;
+}
 
 function cloudName() {
   return process.env.CLOUDINARY_CLOUD_NAME || process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
@@ -59,7 +76,15 @@ function assertImageUrl(value: string) {
     throw new HttpError(400, 'Image URL must start with http or https');
   }
   const host = parsed.hostname.toLowerCase();
-  const looksLikeImage = imageExtensionPattern.test(parsed.pathname) || knownImageHosts.some((item) => host === item || host.endsWith(`.${item}`));
+  if (isPrivateHostname(host)) {
+    throw new HttpError(400, 'Private or internal image URLs are not allowed');
+  }
+  const allowed = allowedImageHosts();
+  const allowedHost = allowed.some((item) => host === item || host.endsWith(`.${item}`));
+  if (!allowedHost) {
+    throw new HttpError(400, `Image host is not allowed: ${host}`);
+  }
+  const looksLikeImage = imageExtensionPattern.test(parsed.pathname) || allowed.some((item) => host === item || host.endsWith(`.${item}`));
   if (!looksLikeImage) {
     throw new HttpError(400, `Image URL must point to a supported image resource: ${value}`);
   }
@@ -67,6 +92,7 @@ function assertImageUrl(value: string) {
 
 function parseCloudinaryAsset(payload: CloudinaryUploadResponse, file: Express.Multer.File): MediaAsset {
   if (payload.error?.message) throw new HttpError(502, payload.error.message);
+  if (payload.resource_type && payload.resource_type !== 'image') throw new HttpError(400, 'Only image uploads are allowed');
   const secureUrl = payload.secure_url || payload.url;
   if (!secureUrl) throw new HttpError(502, 'Cloudinary did not return an image URL');
   return {

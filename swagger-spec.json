@@ -49,6 +49,10 @@
       "description": "Authenticated customer notifications."
     },
     {
+      "name": "Devices",
+      "description": "Customer and guest device token registration for push notifications."
+    },
+    {
       "name": "Vendor Portal",
       "description": "Vendor profile, catalog, order, settlement, and bank detail endpoints."
     },
@@ -127,6 +131,338 @@
         "description": "Check API health",
         "security": [],
         "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiSuccess"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiSuccess"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required or token invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/lookup": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Lookup email and return next auth step",
+        "description": "Lookup email and return next auth step",
+        "security": [],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthLookupRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiSuccess"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiSuccess"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required or token invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/signup/start": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Start staged signup and send email OTP",
+        "description": "Start staged signup and send email OTP",
+        "security": [],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignupStartRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiSuccess"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiSuccess"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required or token invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/signup/verify": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Verify staged signup OTP",
+        "description": "Verify staged signup OTP",
+        "security": [],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignupVerifyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiSuccess"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiSuccess"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required or token invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/signup/complete": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Complete staged signup and issue tokens",
+        "description": "Complete staged signup and issue tokens",
+        "security": [],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignupCompleteRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful response",
@@ -538,6 +874,89 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/PasswordForgotRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiSuccess"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiSuccess"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required or token invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/password/verify": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Verify password reset code",
+        "description": "Verify password reset code",
+        "security": [],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordVerifyRequest"
               }
             }
           }
@@ -2221,7 +2640,17 @@
             "bearerAuth": []
           }
         ],
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "X-Guest-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Guest session id. Use this instead of Bearer auth for guest cart, checkout, orders, notifications, and device registration."
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful response",
@@ -2296,7 +2725,17 @@
             "bearerAuth": []
           }
         ],
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "X-Guest-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Guest session id. Use this instead of Bearer auth for guest cart, checkout, orders, notifications, and device registration."
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful response",
@@ -2373,7 +2812,17 @@
             "bearerAuth": []
           }
         ],
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "X-Guest-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Guest session id. Use this instead of Bearer auth for guest cart, checkout, orders, notifications, and device registration."
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -2461,6 +2910,15 @@
           }
         ],
         "parameters": [
+          {
+            "name": "X-Guest-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Guest session id. Use this instead of Bearer auth for guest cart, checkout, orders, notifications, and device registration."
+          },
           {
             "name": "itemId",
             "in": "path",
@@ -2557,6 +3015,15 @@
         ],
         "parameters": [
           {
+            "name": "X-Guest-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Guest session id. Use this instead of Bearer auth for guest cart, checkout, orders, notifications, and device registration."
+          },
+          {
             "name": "itemId",
             "in": "path",
             "required": true,
@@ -2642,7 +3109,17 @@
             "bearerAuth": []
           }
         ],
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "X-Guest-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Guest session id. Use this instead of Bearer auth for guest cart, checkout, orders, notifications, and device registration."
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -2722,14 +3199,24 @@
         "tags": [
           "Customer Orders"
         ],
-        "summary": "List current shopper orders",
-        "description": "List current shopper orders",
+        "summary": "List current shopper or guest orders",
+        "description": "List current shopper or guest orders",
         "security": [
           {
             "bearerAuth": []
           }
         ],
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "X-Guest-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Guest session id. Use this instead of Bearer auth for guest cart, checkout, orders, notifications, and device registration."
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful response",
@@ -2799,14 +3286,23 @@
         "tags": [
           "Customer Orders"
         ],
-        "summary": "Get current shopper order detail",
-        "description": "Get current shopper order detail",
+        "summary": "Get current shopper or guest order detail",
+        "description": "Get current shopper or guest order detail",
         "security": [
           {
             "bearerAuth": []
           }
         ],
         "parameters": [
+          {
+            "name": "X-Guest-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Guest session id. Use this instead of Bearer auth for guest cart, checkout, orders, notifications, and device registration."
+          },
           {
             "name": "id",
             "in": "path",
@@ -2886,14 +3382,23 @@
         "tags": [
           "Customer Orders"
         ],
-        "summary": "Cancel current shopper order",
-        "description": "Cancel current shopper order",
+        "summary": "Cancel current shopper or guest order",
+        "description": "Cancel current shopper or guest order",
         "security": [
           {
             "bearerAuth": []
           }
         ],
         "parameters": [
+          {
+            "name": "X-Guest-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Guest session id. Use this instead of Bearer auth for guest cart, checkout, orders, notifications, and device registration."
+          },
           {
             "name": "id",
             "in": "path",
@@ -2988,14 +3493,24 @@
         "tags": [
           "Negotiations"
         ],
-        "summary": "List current shopper negotiations",
-        "description": "List current shopper negotiations",
+        "summary": "List current shopper or guest negotiations",
+        "description": "List current shopper or guest negotiations",
         "security": [
           {
             "bearerAuth": []
           }
         ],
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "X-Guest-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Guest session id. Use this instead of Bearer auth for guest cart, checkout, orders, notifications, and device registration."
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful response",
@@ -3070,7 +3585,17 @@
             "bearerAuth": []
           }
         ],
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "X-Guest-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Guest session id. Use this instead of Bearer auth for guest cart, checkout, orders, notifications, and device registration."
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -3159,6 +3684,15 @@
         ],
         "parameters": [
           {
+            "name": "X-Guest-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Guest session id. Use this instead of Bearer auth for guest cart, checkout, orders, notifications, and device registration."
+          },
+          {
             "name": "id",
             "in": "path",
             "required": true,
@@ -3245,6 +3779,15 @@
           }
         ],
         "parameters": [
+          {
+            "name": "X-Guest-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Guest session id. Use this instead of Bearer auth for guest cart, checkout, orders, notifications, and device registration."
+          },
           {
             "name": "id",
             "in": "path",
@@ -3343,6 +3886,15 @@
         ],
         "parameters": [
           {
+            "name": "X-Guest-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Guest session id. Use this instead of Bearer auth for guest cart, checkout, orders, notifications, and device registration."
+          },
+          {
             "name": "id",
             "in": "path",
             "required": true,
@@ -3428,7 +3980,17 @@
             "bearerAuth": []
           }
         ],
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "X-Guest-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Guest session id. Use this instead of Bearer auth for guest cart, checkout, orders, notifications, and device registration."
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -3517,6 +4079,15 @@
         ],
         "parameters": [
           {
+            "name": "X-Guest-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Guest session id. Use this instead of Bearer auth for guest cart, checkout, orders, notifications, and device registration."
+          },
+          {
             "name": "reference",
             "in": "path",
             "required": true,
@@ -3604,6 +4175,15 @@
         ],
         "parameters": [
           {
+            "name": "X-Guest-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Guest session id. Use this instead of Bearer auth for guest cart, checkout, orders, notifications, and device registration."
+          },
+          {
             "name": "orderId",
             "in": "path",
             "required": true,
@@ -3689,7 +4269,17 @@
             "bearerAuth": []
           }
         ],
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "X-Guest-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Guest session id. Use this instead of Bearer auth for guest cart, checkout, orders, notifications, and device registration."
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful response",
@@ -3767,6 +4357,15 @@
           }
         ],
         "parameters": [
+          {
+            "name": "X-Guest-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Guest session id. Use this instead of Bearer auth for guest cart, checkout, orders, notifications, and device registration."
+          },
           {
             "name": "id",
             "in": "path",
@@ -3855,6 +4454,15 @@
         ],
         "parameters": [
           {
+            "name": "X-Guest-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Guest session id. Use this instead of Bearer auth for guest cart, checkout, orders, notifications, and device registration."
+          },
+          {
             "name": "id",
             "in": "path",
             "required": true,
@@ -3864,6 +4472,200 @@
             "description": "Notification id"
           }
         ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiSuccess"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiSuccess"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required or token invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/devices/register": {
+      "post": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "Register Expo push device token",
+        "description": "Register Expo push device token",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-Guest-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Guest session id. Use this instead of Bearer auth for guest cart, checkout, orders, notifications, and device registration."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceRegisterRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiSuccess"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiSuccess"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required or token invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/devices/unregister": {
+      "post": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "Unregister Expo push device token",
+        "description": "Unregister Expo push device token",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-Guest-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Guest session id. Use this instead of Bearer auth for guest cart, checkout, orders, notifications, and device registration."
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceUnregisterRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful response",
@@ -9188,6 +9990,89 @@
           "password": {
             "type": "string",
             "example": "123456"
+          },
+          "guestId": {
+            "type": "string",
+            "description": "Optional guest id to merge guest cart/orders after login."
+          }
+        }
+      },
+      "AuthLookupRequest": {
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "example": "shopper@example.com"
+          }
+        }
+      },
+      "SignupStartRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "example": "shopper@example.com"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 6,
+            "example": "123456789"
+          },
+          "guestId": {
+            "type": "string"
+          }
+        }
+      },
+      "SignupVerifyRequest": {
+        "type": "object",
+        "required": [
+          "signupSessionToken",
+          "code"
+        ],
+        "properties": {
+          "signupSessionToken": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "example": "1234"
+          }
+        }
+      },
+      "SignupCompleteRequest": {
+        "type": "object",
+        "required": [
+          "signupSessionToken",
+          "firstName",
+          "lastName"
+        ],
+        "properties": {
+          "signupSessionToken": {
+            "type": "string"
+          },
+          "firstName": {
+            "type": "string",
+            "example": "Hook"
+          },
+          "lastName": {
+            "type": "string",
+            "example": "Shopper"
+          },
+          "phone": {
+            "type": "string",
+            "example": "+2348012345678"
+          },
+          "guestId": {
+            "type": "string"
           }
         }
       },
@@ -9224,7 +10109,7 @@
           },
           "code": {
             "type": "string",
-            "example": "123456"
+            "example": "1234"
           }
         }
       },
@@ -9294,11 +10179,28 @@
           },
           "code": {
             "type": "string",
-            "example": "123456"
+            "example": "1234"
           },
           "password": {
             "type": "string",
             "minLength": 6
+          }
+        }
+      },
+      "PasswordVerifyRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "code"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "code": {
+            "type": "string",
+            "example": "1234"
           }
         }
       },
@@ -9368,6 +10270,15 @@
           "deliveryAddress"
         ],
         "properties": {
+          "guestEmail": {
+            "type": "string",
+            "format": "email",
+            "description": "Required for guest checkout."
+          },
+          "guestName": {
+            "type": "string",
+            "description": "Required for guest checkout."
+          },
           "deliveryAddress": {
             "type": "object",
             "required": [
@@ -9418,6 +10329,40 @@
           "scheduledDeliveryAt": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "DeviceRegisterRequest": {
+        "type": "object",
+        "required": [
+          "expoPushToken"
+        ],
+        "properties": {
+          "expoPushToken": {
+            "type": "string",
+            "example": "ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]"
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "ios",
+              "android",
+              "web",
+              "unknown"
+            ],
+            "example": "ios"
+          },
+          "deviceName": {
+            "type": "string",
+            "example": "iPhone 17"
+          }
+        }
+      },
+      "DeviceUnregisterRequest": {
+        "type": "object",
+        "properties": {
+          "expoPushToken": {
+            "type": "string"
           }
         }
       },

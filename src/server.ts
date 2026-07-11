@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
 import { createApp } from './app';
+import { assertSafeEnvironment } from './config/env';
 import { initializeDatabase } from './config/data-source';
 
 dotenv.config({ quiet: true });
@@ -40,6 +41,7 @@ function printReady(port: number, apiPrefix: string) {
 }
 
 async function bootstrap() {
+  assertSafeEnvironment();
   await initializeDatabase();
 
   const app = createApp();

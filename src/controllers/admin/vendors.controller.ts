@@ -1,10 +1,14 @@
 import { Request, Response } from 'express';
 import { UserRole } from '@lib/constants';
+import { auditAdminAction } from '@lib/audit';
+import { EmailService } from '@emails/email.service';
 import { hashPassword } from '@lib/security';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
 import { adminRepos, getPagination, paginated, routeParam } from './admin.helpers';
 
 export class AdminVendorsController {
+  private readonly email = new EmailService();
+
   list = async (req: Request, res: Response) => {
     const { page, limit, skip } = getPagination(req.query);
     const approved = req.query.approved === 'true' ? true : req.query.approved === 'false' ? false : undefined;
@@ -116,6 +120,7 @@ export class AdminVendorsController {
       approvedAt: req.body.isApproved ? new Date() : undefined,
       isActive: req.body.isActive,
     }));
+    await auditAdminAction(req, 'vendor.create', 'vendor', vendor.id, { businessName: vendor.businessName });
     sendCreated(res, await vendors.findOne({ where: { id: vendor.id }, relations: { owner: true } }));
   };
 
@@ -126,6 +131,7 @@ export class AdminVendorsController {
     Object.assign(vendor, req.body);
     if (req.body.isApproved === true && !vendor.approvedAt) vendor.approvedAt = new Date();
     await vendors.save(vendor);
+    await auditAdminAction(req, 'vendor.update', 'vendor', vendor.id, { fields: Object.keys(req.body) });
     sendSuccess(res, await vendors.findOne({ where: { id: vendor.id }, relations: { owner: true } }));
   };
 
@@ -136,6 +142,11 @@ export class AdminVendorsController {
     vendor.isApproved = true;
     vendor.approvedAt = new Date();
     await vendors.save(vendor);
+    await auditAdminAction(req, 'vendor.approve', 'vendor', vendor.id);
+    const owner = vendor.ownerId ? await adminRepos.users().findOne({ where: { id: vendor.ownerId } }) : undefined;
+    if (owner?.email) {
+      await this.email.sendVendorApproved({ to: owner.email, vendorName: vendor.businessName });
+    }
     sendSuccess(res, vendor);
   };
 
@@ -145,6 +156,15 @@ export class AdminVendorsController {
     if (!vendor) throw new HttpError(404, 'Vendor not found');
     vendor.isApproved = false;
     await vendors.save(vendor);
+    await auditAdminAction(req, 'vendor.reject', 'vendor', vendor.id, { reason: req.body.reason });
+    const owner = vendor.ownerId ? await adminRepos.users().findOne({ where: { id: vendor.ownerId } }) : undefined;
+    if (owner?.email) {
+      await this.email.sendVendorRejected({
+        to: owner.email,
+        vendorName: vendor.businessName,
+        reason: req.body.reason,
+      });
+    }
     sendSuccess(res, { id: vendor.id, businessName: vendor.businessName, isApproved: false, reason: req.body.reason });
   };
 
@@ -155,6 +175,7 @@ export class AdminVendorsController {
     vendor.tier = req.body.tier || vendor.tier;
     vendor.commissionPercentage = req.body.commissionPercentage ?? vendor.commissionPercentage;
     await vendors.save(vendor);
+    await auditAdminAction(req, 'vendor.tier', 'vendor', vendor.id, { tier: vendor.tier, commissionPercentage: vendor.commissionPercentage });
     sendSuccess(res, vendor);
   };
 
@@ -164,6 +185,7 @@ export class AdminVendorsController {
     if (!vendor) throw new HttpError(404, 'Vendor not found');
     vendor.isActive = !vendor.isActive;
     await vendors.save(vendor);
+    await auditAdminAction(req, 'vendor.toggle', 'vendor', vendor.id, { isActive: vendor.isActive });
     sendSuccess(res, { id: vendor.id, isActive: vendor.isActive });
   };
 

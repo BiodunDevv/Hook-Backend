@@ -10,9 +10,16 @@ import {
   VendorTier,
 } from '@lib/constants';
 
+// Entity ids are Mongo ObjectIds (24-char hex); accept UUIDs too for portability
+export const idSchema = z.string().regex(
+  /^([a-f0-9]{24}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i,
+  'Invalid id format',
+);
+
 export const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
+  guestId: z.string().min(12).optional(),
 });
 
 export const registerSchema = z.object({
@@ -41,7 +48,7 @@ export const changePasswordSchema = z.object({
 });
 
 export const cartItemSchema = z.object({
-  productId: z.string().uuid(),
+  productId: idSchema,
   quantity: z.coerce.number().int().positive(),
   selectedVariants: z.object({
     color: z.string().optional(),
@@ -52,6 +59,8 @@ export const cartItemSchema = z.object({
 export const cartQuantitySchema = z.object({ quantity: z.coerce.number().int().positive() });
 
 export const checkoutSchema = z.object({
+  guestEmail: z.string().email().optional(),
+  guestName: z.string().min(2).optional(),
   deliveryAddress: z.object({
     street: z.string().min(1),
     city: z.string().min(1),
@@ -65,13 +74,13 @@ export const checkoutSchema = z.object({
 });
 
 export const negotiationSchema = z.object({
-  productId: z.string().uuid(),
+  productId: idSchema,
   offeredPrice: z.coerce.number().positive(),
   message: z.string().optional(),
 });
 
 export const paymentInitializeSchema = z.object({
-  orderId: z.string().uuid(),
+  orderId: idSchema,
   gateway: z.enum(['paystack', 'nomba']).default('paystack'),
   paymentMethod: z.enum(['card', 'bank_transfer', 'ussd']).default('card'),
 });
@@ -91,19 +100,38 @@ export const vendorBankSchema = z.object({
   bankCode: z.string().min(1),
 });
 
-export const productSchema = z.object({
+const productBaseSchema = z.object({
   title: z.string().min(2),
   description: z.string().optional(),
-  costPrice: z.coerce.number().nonnegative(),
+  costPrice: z.coerce.number().positive(),
   sellingPrice: z.coerce.number().positive(),
   discountedPrice: z.coerce.number().positive().optional(),
   minAcceptablePrice: z.coerce.number().positive(),
   quantity: z.coerce.number().int().nonnegative().default(0),
-  categoryId: z.string().uuid(),
+  categoryId: idSchema,
   images: z.array(z.string().url()).default([]),
   colors: z.array(z.string()).optional(),
   sizes: z.array(z.string()).optional(),
 });
+
+function validateNegotiationFloor(
+  data: { minAcceptablePrice?: number; sellingPrice?: number },
+  ctx: z.RefinementCtx,
+) {
+  if (
+    data.minAcceptablePrice !== undefined &&
+    data.sellingPrice !== undefined &&
+    data.minAcceptablePrice > data.sellingPrice
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['minAcceptablePrice'],
+      message: 'Negotiation floor cannot exceed the Hook platform price',
+    });
+  }
+}
+
+export const productSchema = productBaseSchema.superRefine(validateNegotiationFloor);
 
 export const adminVendorCreateSchema = z.object({
   ownerEmail: z.string().email(),
@@ -130,17 +158,20 @@ export const adminVendorUpdateSchema = adminVendorCreateSchema.omit({
   password: true,
 }).partial();
 
-export const adminProductCreateSchema = productSchema.extend({
-  vendorId: z.string().uuid(),
+export const adminProductCreateSchema = productBaseSchema.extend({
+  vendorId: idSchema,
   status: z.nativeEnum(ProductStatus).default(ProductStatus.PENDING_APPROVAL),
-});
+}).superRefine(validateNegotiationFloor);
 
-export const adminProductUpdateSchema = adminProductCreateSchema.partial();
+export const adminProductUpdateSchema = productBaseSchema.extend({
+  vendorId: idSchema,
+  status: z.nativeEnum(ProductStatus).default(ProductStatus.PENDING_APPROVAL),
+}).partial().superRefine(validateNegotiationFloor);
 
 export const adminOrderCreateSchema = z.object({
-  userId: z.string().uuid(),
+  userId: idSchema,
   items: z.array(z.object({
-    productId: z.string().uuid(),
+    productId: idSchema,
     quantity: z.coerce.number().int().positive(),
     selectedVariants: z.object({
       color: z.string().optional(),
@@ -167,7 +198,7 @@ export const adminOrderUpdateSchema = z.object({
 });
 
 export const adminAssignDriverSchema = z.object({
-  driverId: z.string().uuid(),
+  driverId: idSchema,
 });
 
 export const adminDriverCreateSchema = z.object({
@@ -188,7 +219,7 @@ export const adminBoothCreateSchema = z.object({
     lat: z.coerce.number().default(0),
     lng: z.coerce.number().default(0),
   }),
-  fieldAgentId: z.string().uuid().optional(),
+  fieldAgentId: idSchema.optional(),
   previewImageUrl: z.string().url().optional(),
   isActive: z.boolean().default(true),
 });
@@ -201,24 +232,51 @@ export const adminUserSchema = z.object({
   role: z.nativeEnum(UserRole).default(UserRole.SHOPPER),
 });
 
-export const staffCreateSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(6),
-  firstName: z.string().min(1),
-  lastName: z.string().min(1),
-  role: z.enum([UserRole.SUPPORT, UserRole.ADMIN, UserRole.SUPER_ADMIN]),
-  permissions: z.array(z.string()).default([]),
-});
+const PHONE_REGEX = /^\+?[0-9\s-]{7,20}$/;
+
+export const staffCreateSchema = z
+  .object({
+    email: z.string().email(),
+    password: z.string().min(6),
+    firstName: z.string().min(1),
+    lastName: z.string().min(1),
+    phone: z.string().regex(PHONE_REGEX, 'Enter a valid phone number').optional(),
+    role: z.enum([UserRole.SUPPORT, UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+    permissions: z.array(z.string()).default([]),
+  })
+  .superRefine((data, ctx) => {
+    // Admin and support staff are reachable contacts for categories — phone required
+    if (data.role !== UserRole.SUPER_ADMIN && !data.phone) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['phone'],
+        message: 'Phone number is required for admin and support staff',
+      });
+    }
+  });
 
 export const staffUpdateSchema = z.object({
   firstName: z.string().min(1).optional(),
   lastName: z.string().min(1).optional(),
-  phone: z.string().optional(),
+  phone: z.string().regex(PHONE_REGEX, 'Enter a valid phone number').optional(),
 });
 
 export const staffPermissionsSchema = z.object({
   permissions: z.array(z.string()),
 });
+
+export const staffCategoriesSchema = z.object({
+  categoryIds: z.array(idSchema),
+});
+
+export const categoryCreateSchema = z.object({
+  name: z.string().min(2).max(60),
+  description: z.string().max(300).optional(),
+  iconUrl: z.string().url().optional(),
+  sortOrder: z.coerce.number().int().min(0).optional(),
+});
+
+export const categoryUpdateSchema = categoryCreateSchema.partial();
 
 export const roleSchema = z.object({ role: z.nativeEnum(UserRole) });
 export const orderStatusSchema = z.object({ status: z.nativeEnum(OrderStatus) });

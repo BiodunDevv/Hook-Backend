@@ -22,6 +22,8 @@ export interface Product extends BaseEntity {
   averageRating: number;
   vendorId: string;
   categoryId: string;
+  fieldAgentId?: string;
+  source?: 'vendor' | 'field_agent' | 'admin';
   vendor?: any;
   category?: any;
 }
@@ -47,6 +49,8 @@ const ProductSchema = createSchema<Product>({
   averageRating: { type: Number, default: 0 },
   vendorId: { type: String, required: true, index: true },
   categoryId: { type: String, required: true, index: true },
+  fieldAgentId: { type: String, index: true, sparse: true },
+  source: { type: String, enum: ['vendor', 'field_agent', 'admin'], default: 'vendor' },
   deletedAt: { type: Date },
 });
 

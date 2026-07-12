@@ -15,6 +15,8 @@ export interface Vendor extends BaseEntity {
   paystackSubaccountCode?: string;
   nombaMerchantId?: string;
   bankDetails?: { bankName: string; accountNumber: string; accountName: string; bankCode: string };
+  stateCode?: string;
+  stateName?: string;
   imsType?: string;
   imsConfig?: Record<string, unknown>;
   isActive: boolean;
@@ -38,6 +40,8 @@ const VendorSchema = createSchema<Vendor>({
   paystackSubaccountCode: { type: String },
   nombaMerchantId: { type: String },
   bankDetails: { type: Object },
+  stateCode: { type: String, uppercase: true, trim: true, index: true },
+  stateName: { type: String, trim: true },
   imsType: { type: String },
   imsConfig: { type: Object },
   isActive: { type: Boolean, default: true, index: true },
@@ -47,5 +51,6 @@ const VendorSchema = createSchema<Vendor>({
 
 VendorSchema.index({ ownerId: 1 }, { unique: true });
 VendorSchema.index({ isActive: 1, isApproved: 1 });
+VendorSchema.index({ stateCode: 1, isActive: 1 });
 
 export const Vendor = createModel<Vendor>('Vendor', VendorSchema);

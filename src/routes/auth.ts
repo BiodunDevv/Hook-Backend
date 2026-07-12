@@ -37,6 +37,10 @@ const signupCompleteSchema = z.object({
   guestId: z.string().min(12).optional(),
 });
 const passwordVerifySchema = z.object({ email: z.string().email(), code: z.string().min(4) });
+const googleAuthSchema = z.object({
+  idToken: z.string().min(20),
+  guestId: z.string().min(12).optional(),
+});
 
 export function createAuthRouter() {
   const router = Router();
@@ -49,6 +53,7 @@ export function createAuthRouter() {
   router.post('/signup/complete', validateBody(signupCompleteSchema), asyncHandler(controller.completeSignup));
   router.post('/register', validateBody(registerSchema), asyncHandler(controller.register));
   router.post('/login', validateBody(loginSchema), asyncHandler(controller.login));
+  router.post('/google', validateBody(googleAuthSchema), asyncHandler(controller.googleLogin));
   router.post('/verify-otp', validateBody(otpSchema), asyncHandler(controller.verifyOtp));
   router.post('/refresh', validateBody(refreshSchema), asyncHandler(controller.refresh));
   router.post('/logout', validateBody(logoutSchema), asyncHandler(controller.logout));
@@ -59,13 +64,6 @@ export function createAuthRouter() {
   router.patch('/profile', requireAuth, validateBody(profileSchema), asyncHandler(controller.updateProfile));
   router.post('/complete-profile', requireAuth, validateBody(profileSchema), asyncHandler(controller.completeProfile));
   router.post('/password/change', requireAuth, validateBody(changePasswordSchema), asyncHandler(controller.changePassword));
-  router.post('/social', asyncHandler(async (_req, res) => {
-    res.status(501).json({
-      success: false,
-      message: 'Social login is not configured yet.',
-      timestamp: new Date().toISOString(),
-    });
-  }));
 
   return router;
 }

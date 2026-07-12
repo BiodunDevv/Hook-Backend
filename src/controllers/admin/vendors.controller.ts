@@ -3,6 +3,7 @@ import { UserRole } from '@lib/constants';
 import { auditAdminAction } from '@lib/audit';
 import { EmailService } from '@emails/email.service';
 import { hashPassword } from '@lib/security';
+import { normalizeStateCode, resolveActiveOperationalState } from '@services/operational-state.service';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
 import { adminRepos, getPagination, paginated, routeParam } from './admin.helpers';
 
@@ -15,9 +16,11 @@ export class AdminVendorsController {
     const search = typeof req.query.search === 'string' ? req.query.search.toLowerCase() : undefined;
     const tier = typeof req.query.tier === 'string' ? req.query.tier : undefined;
     const status = typeof req.query.status === 'string' ? req.query.status : undefined;
+    const stateCode = normalizeStateCode(req.query.stateCode);
     const where: Record<string, unknown> = {};
     if (approved !== undefined) where.isApproved = approved;
     if (tier) where.tier = tier;
+    if (stateCode) where.stateCode = stateCode;
     if (status === 'active') Object.assign(where, { isActive: true, isApproved: true });
     if (status === 'pending') where.isApproved = false;
     if (status === 'inactive') where.isActive = false;
@@ -107,12 +110,15 @@ export class AdminVendorsController {
     if (!owner) throw new HttpError(500, 'Vendor owner could not be created');
     const existing = await vendors.findOne({ where: { ownerId: owner.id } });
     if (existing) throw new HttpError(400, 'This owner already has a vendor profile');
+    const state = req.body.stateCode ? await resolveActiveOperationalState(req.body.stateCode) : undefined;
     const vendor = await vendors.save(vendors.create({
       ownerId: owner.id,
       businessName: req.body.businessName,
       businessEmail: req.body.businessEmail,
       businessPhone: req.body.businessPhone,
       businessAddress: req.body.businessAddress,
+      stateCode: state?.stateCode,
+      stateName: state?.stateName,
       description: req.body.description,
       tier: req.body.tier,
       commissionPercentage: req.body.commissionPercentage,
@@ -128,7 +134,13 @@ export class AdminVendorsController {
     const vendors = adminRepos.vendors();
     const vendor = await vendors.findOne({ where: { id: routeParam(req.params.id) } });
     if (!vendor) throw new HttpError(404, 'Vendor not found');
-    Object.assign(vendor, req.body);
+    const payload = { ...req.body };
+    if ('stateCode' in payload) {
+      const state = payload.stateCode ? await resolveActiveOperationalState(payload.stateCode) : undefined;
+      payload.stateCode = state?.stateCode;
+      payload.stateName = state?.stateName;
+    }
+    Object.assign(vendor, payload);
     if (req.body.isApproved === true && !vendor.approvedAt) vendor.approvedAt = new Date();
     await vendors.save(vendor);
     await auditAdminAction(req, 'vendor.update', 'vendor', vendor.id, { fields: Object.keys(req.body) });

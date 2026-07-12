@@ -10,6 +10,7 @@ import {
   UserRole,
   VendorTier,
 } from '@lib/constants';
+import { DEFAULT_OPERATIONAL_STATE_CODE, NIGERIAN_STATES } from '@lib/nigeria-states';
 
 // All granular permissions — mirrors lib/permissions.ts on the frontend
 const ALL_PERMISSIONS = [
@@ -303,6 +304,7 @@ async function seed() {
     { Negotiation },
     { FieldAgent },
     { Booth },
+    { OperationalState },
   ] = await Promise.all([
     import('@lib/security'),
     import('@config/data-source'),
@@ -318,6 +320,7 @@ async function seed() {
     import('@models/negotiations/negotiation.model'),
     import('@models/field-agents/field-agent.model'),
     import('@models/booths/booth.model'),
+    import('@models/operations/operational-state.model'),
   ]);
 
   await initializeDatabase();
@@ -333,10 +336,24 @@ async function seed() {
   const negotiationRepo = AppDataSource.getRepository(Negotiation);
   const fieldAgentRepo = AppDataSource.getRepository(FieldAgent);
   const boothRepo = AppDataSource.getRepository(Booth);
+  const operationalStateRepo = AppDataSource.getRepository(OperationalState);
 
   await resetSeedData();
 
   const passwordHash = await hashPassword(password);
+  const now = new Date();
+  const defaultState = NIGERIAN_STATES.find((state) => state.code === DEFAULT_OPERATIONAL_STATE_CODE) || NIGERIAN_STATES[0];
+
+  for (const stateSeed of NIGERIAN_STATES) {
+    await operationalStateRepo.save(operationalStateRepo.create({
+      ...stateSeed,
+      countryCode: 'NG',
+      countryName: 'Nigeria',
+      isEnabled: stateSeed.code === DEFAULT_OPERATIONAL_STATE_CODE,
+      enabledAt: stateSeed.code === DEFAULT_OPERATIONAL_STATE_CODE ? now : undefined,
+    } as any));
+  }
+  console.log(`Operating states ready: ${NIGERIAN_STATES.length} (${defaultState.name} enabled)`);
 
   const existingAdmin = await userRepo.findOne({ where: { email } });
   if (existingAdmin) {
@@ -409,6 +426,8 @@ async function seed() {
       businessEmail: vendorSeed.businessEmail,
       businessPhone: vendorSeed.businessPhone,
       businessAddress: vendorSeed.businessAddress,
+      stateCode: defaultState.code,
+      stateName: defaultState.name,
       description: `${vendorSeed.businessName} is seeded for Hook admin QA, catalog testing, and onboarding flows.`,
       tier: vendorSeed.tier,
       commissionPercentage: vendorSeed.commissionPercentage,
@@ -501,6 +520,8 @@ async function seed() {
       firstName: driverFirstName,
       lastName: driverLastName,
       role: UserRole.EV_DRIVER,
+      operationalStateCode: defaultState.code,
+      operationalStateName: defaultState.name,
       isActive: true,
       isEmailVerified: true,
       isPhoneVerified: true,
@@ -566,6 +587,8 @@ async function seed() {
     const fieldAgentPayload = {
       agentId: agentUser.id,
       assignedMarket: agentSeed.assignedMarket,
+      stateCode: defaultState.code,
+      stateName: defaultState.name,
       coverageArea: agentSeed.coverageArea,
       isActive: true,
     };
@@ -584,7 +607,7 @@ async function seed() {
       name: boothSeed.name,
       description: boothSeed.description,
       boothType: boothSeed.boothType,
-      location: boothSeed.location,
+      location: { ...boothSeed.location, stateCode: defaultState.code, stateName: defaultState.name },
       operatingHours: boothSeed.operatingHours,
       previewImageUrl: boothSeed.previewImageUrl,
       isActive: boothSeed.isActive,

@@ -67,6 +67,12 @@ export class NotificationService {
     return { data, unread, total: data.length };
   }
 
+  async detail(owner: NotificationOwner, id: string) {
+    const notification = await this.notifications.findOne({ where: { id, ...this.ownerWhere(owner) } });
+    if (!notification) throw new HttpError(404, 'Notification not found');
+    return notification;
+  }
+
   async markRead(owner: NotificationOwner, id: string) {
     const notification = await this.notifications.findOne({ where: { id, ...this.ownerWhere(owner) } });
     if (!notification) throw new HttpError(404, 'Notification not found');
@@ -74,11 +80,22 @@ export class NotificationService {
     return this.notifications.findOne({ where: { id: notification.id } });
   }
 
+  async markAllRead(owner: NotificationOwner) {
+    const where = this.ownerWhere(owner);
+    await this.notifications.update({ ...where, isRead: false }, { isRead: true, readAt: new Date() });
+    return this.list(owner);
+  }
+
   async delete(owner: NotificationOwner, id: string) {
     const notification = await this.notifications.findOne({ where: { id, ...this.ownerWhere(owner) } });
     if (!notification) throw new HttpError(404, 'Notification not found');
     await this.notifications.delete({ id: notification.id });
     return { message: 'Notification deleted.' };
+  }
+
+  async clearAll(owner: NotificationOwner) {
+    await this.notifications.delete(this.ownerWhere(owner));
+    return { message: 'Notifications cleared.', data: [], unread: 0, total: 0 };
   }
 
   async sendWelcome(owner: NotificationOwner, name?: string) {

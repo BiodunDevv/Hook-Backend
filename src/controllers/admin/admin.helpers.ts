@@ -7,6 +7,7 @@ import { Category } from '@models/categories/category.model';
 import { FieldAgent } from '@models/field-agents/field-agent.model';
 import { Logistics } from '@models/logistics/logistics.model';
 import { Negotiation } from '@models/negotiations/negotiation.model';
+import { OperationalState } from '@models/operations/operational-state.model';
 import { OrderItem } from '@models/orders/order-item.model';
 import { Order } from '@models/orders/order.model';
 import { Payment } from '@models/payments/payment.model';
@@ -29,6 +30,7 @@ export const adminRepos = {
   booths: () => new MongoRepository(Booth, { fieldAgent: () => adminRepos.fieldAgents() }),
   fieldAgents: () => new MongoRepository(FieldAgent, { agent: () => adminRepos.users() }),
   auditLogs: () => new MongoRepository(AdminAuditLog),
+  operationalStates: () => new MongoRepository(OperationalState),
 };
 
 export { getPagination, paginated, routeParam };

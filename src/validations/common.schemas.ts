@@ -143,6 +143,7 @@ export const adminVendorCreateSchema = z.object({
   businessEmail: z.string().email().optional(),
   businessPhone: z.string().optional(),
   businessAddress: z.string().optional(),
+  stateCode: z.string().trim().min(2).max(3).optional(),
   description: z.string().optional(),
   tier: z.nativeEnum(VendorTier).default(VendorTier.TIER_3),
   commissionPercentage: z.coerce.number().min(0).max(100).default(15),
@@ -207,6 +208,7 @@ export const adminDriverCreateSchema = z.object({
   firstName: z.string().min(1),
   lastName: z.string().min(1),
   phone: z.string().optional(),
+  stateCode: z.string().trim().min(2).max(3).optional(),
   isActive: z.boolean().default(true),
 });
 
@@ -218,10 +220,19 @@ export const adminBoothCreateSchema = z.object({
     address: z.string().min(1),
     lat: z.coerce.number().default(0),
     lng: z.coerce.number().default(0),
+    stateCode: z.string().trim().min(2).max(3).optional(),
   }),
   fieldAgentId: idSchema.optional(),
   previewImageUrl: z.string().url().optional(),
   isActive: z.boolean().default(true),
+});
+
+export const operationalStateToggleSchema = z.object({
+  isEnabled: z.boolean(),
+});
+
+export const operationalStateAssignSchema = z.object({
+  stateCode: z.string().trim().min(2).max(3),
 });
 
 export const adminUserSchema = z.object({

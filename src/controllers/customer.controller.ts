@@ -127,19 +127,27 @@ export class CustomerController {
     sendSuccess(res, await this.payments.status(ownerId(req), routeParam(req.params.orderId)));
   };
 
-  notifications = async (req: Request, res: Response) => {
-    if (req.method === 'GET') {
-      sendSuccess(res, await this.notificationService.list(owner(req)));
-      return;
-    }
-    if (req.method === 'PATCH') {
-      sendSuccess(res, await this.notificationService.markRead(owner(req), routeParam(req.params.id)));
-      return;
-    }
-    if (req.method === 'DELETE') {
-      sendSuccess(res, await this.notificationService.delete(owner(req), routeParam(req.params.id)));
-      return;
-    }
-    sendSuccess(res, { data: [], unread: 0, total: 0 });
+  listNotifications = async (req: Request, res: Response) => {
+    sendSuccess(res, await this.notificationService.list(owner(req)));
+  };
+
+  getNotification = async (req: Request, res: Response) => {
+    sendSuccess(res, await this.notificationService.detail(owner(req), routeParam(req.params.id)));
+  };
+
+  markNotificationRead = async (req: Request, res: Response) => {
+    sendSuccess(res, await this.notificationService.markRead(owner(req), routeParam(req.params.id)));
+  };
+
+  markAllNotificationsRead = async (req: Request, res: Response) => {
+    sendSuccess(res, await this.notificationService.markAllRead(owner(req)));
+  };
+
+  deleteNotification = async (req: Request, res: Response) => {
+    sendSuccess(res, await this.notificationService.delete(owner(req), routeParam(req.params.id)));
+  };
+
+  clearNotifications = async (req: Request, res: Response) => {
+    sendSuccess(res, await this.notificationService.clearAll(owner(req)));
   };
 }

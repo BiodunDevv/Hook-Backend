@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { normalizeStateCode, resolveActiveOperationalState } from '@services/operational-state.service';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
 import { adminRepos, getPagination, paginated, routeParam } from './admin.helpers';
 
@@ -16,7 +17,11 @@ async function attachAgents(booths: any[]): Promise<any[]> {
 export class AdminBoothsController {
   list = async (req: Request, res: Response) => {
     const { page, limit, skip } = getPagination(req.query);
+    const stateCode = normalizeStateCode(req.query.stateCode);
+    const where: Record<string, unknown> = {};
+    if (stateCode) where['location.stateCode'] = stateCode;
     const [data, total] = await adminRepos.booths().findAndCount({
+      where,
       order: { createdAt: 'DESC' },
       skip,
       take: limit,
@@ -57,6 +62,12 @@ export class AdminBoothsController {
 
   create = async (req: Request, res: Response) => {
     const repo = adminRepos.booths();
-    sendCreated(res, await repo.save(repo.create(req.body)));
+    const payload = { ...req.body, location: { ...req.body.location } };
+    if (payload.location?.stateCode) {
+      const state = await resolveActiveOperationalState(payload.location.stateCode);
+      payload.location.stateCode = state.stateCode;
+      payload.location.stateName = state.stateName;
+    }
+    sendCreated(res, await repo.save(repo.create(payload)));
   };
 }

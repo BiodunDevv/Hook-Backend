@@ -5,7 +5,7 @@ export interface Booth extends BaseEntity {
   name: string;
   description?: string;
   boothType: BoothType;
-  location: { address: string; lat: number; lng: number };
+  location: { address: string; lat: number; lng: number; stateCode?: string; stateName?: string };
   operatingHours?: { weekday: { open: string; close: string }; weekend?: { open: string; close: string } };
   isActive: boolean;
   featuredProductIds: string[];
@@ -28,5 +28,6 @@ const BoothSchema = createSchema<Booth>({
 });
 
 BoothSchema.index({ isActive: 1 });
+BoothSchema.index({ 'location.stateCode': 1, isActive: 1 });
 
 export const Booth = createModel<Booth>('Booth', BoothSchema);

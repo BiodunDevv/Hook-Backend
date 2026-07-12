@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { LogisticsStatus, UserRole } from '@lib/constants';
 import { hashPassword } from '@lib/security';
 import { mongoIn } from '@lib/mongo-repository';
+import { normalizeStateCode, resolveActiveOperationalState } from '@services/operational-state.service';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
 import { adminRepos, getPagination, paginated, routeParam } from './admin.helpers';
 
@@ -42,9 +43,11 @@ export class AdminDispatchController {
   drivers = async (req: Request, res: Response) => {
     const search = typeof req.query.search === 'string' ? req.query.search.toLowerCase() : undefined;
     const status = typeof req.query.status === 'string' ? req.query.status : undefined;
+    const stateCode = normalizeStateCode(req.query.stateCode);
     const where: Record<string, unknown> = { role: UserRole.EV_DRIVER };
     if (status === 'active') where.isActive = true;
     if (status === 'inactive') where.isActive = false;
+    if (stateCode) where.operationalStateCode = stateCode;
     const allDrivers = await adminRepos.users().find({ where, order: { createdAt: 'DESC' } });
     const drivers = search
       ? allDrivers.filter((driver: any) => [driver.email, driver.firstName, driver.lastName].some((value) => String(value || '').toLowerCase().includes(search)))
@@ -73,6 +76,7 @@ export class AdminDispatchController {
     const users = adminRepos.users();
     const existing = await users.findOne({ where: { email: req.body.email } });
     if (existing) throw new HttpError(400, 'Email already in use');
+    const state = req.body.stateCode ? await resolveActiveOperationalState(req.body.stateCode) : undefined;
     const driver = await users.save(users.create({
       email: req.body.email,
       phone: req.body.phone,
@@ -80,6 +84,8 @@ export class AdminDispatchController {
       firstName: req.body.firstName,
       lastName: req.body.lastName,
       role: UserRole.EV_DRIVER,
+      operationalStateCode: state?.stateCode,
+      operationalStateName: state?.stateName,
       isActive: req.body.isActive,
       isEmailVerified: true,
     }));

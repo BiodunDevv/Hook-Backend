@@ -60,6 +60,17 @@ const schemas = {
       guestId: { type: 'string', description: 'Optional guest id to merge guest cart/orders after login.' },
     },
   },
+  GoogleAuthRequest: {
+    type: 'object',
+    required: ['idToken'],
+    properties: {
+      idToken: {
+        type: 'string',
+        description: 'Google ID token returned by the iOS or Android Google OAuth client.',
+      },
+      guestId: { type: 'string', description: 'Optional guest id to merge guest cart/orders after Google sign-in.' },
+    },
+  },
   AuthLookupRequest: {
     type: 'object',
     required: ['email'],
@@ -476,6 +487,7 @@ add('post', `${apiPrefix}/auth/signup/verify`, op('Authentication', 'Verify stag
 add('post', `${apiPrefix}/auth/signup/complete`, op('Authentication', 'Complete staged signup and issue tokens', { public: true, requestBody: body('SignupCompleteRequest') }));
 add('post', `${apiPrefix}/auth/register`, op('Authentication', 'Register shopper account', { public: true, requestBody: body('RegisterRequest') }));
 add('post', `${apiPrefix}/auth/login`, op('Authentication', 'Login shopper/mobile user', { public: true, requestBody: body('LoginRequest') }));
+add('post', `${apiPrefix}/auth/google`, op('Authentication', 'Login or create shopper account with a verified Google ID token', { public: true, requestBody: body('GoogleAuthRequest') }));
 add('post', `${apiPrefix}/auth/verify-otp`, op('Authentication', 'Verify email OTP', { public: true, requestBody: body('OtpRequest') }));
 add('post', `${apiPrefix}/auth/refresh`, op('Authentication', 'Refresh access token', { public: true, requestBody: body('RefreshRequest') }));
 add('post', `${apiPrefix}/auth/password/forgot`, op('Authentication', 'Request password reset code', { public: true, requestBody: body('PasswordForgotRequest') }));
@@ -485,7 +497,6 @@ add('get', `${apiPrefix}/auth/profile`, op('Authentication', 'Get current authen
 add('patch', `${apiPrefix}/auth/profile`, op('Authentication', 'Update current authenticated profile', { requestBody: body('ProfileRequest') }));
 add('post', `${apiPrefix}/auth/complete-profile`, op('Authentication', 'Complete shopper profile', { requestBody: body('ProfileRequest') }));
 add('post', `${apiPrefix}/auth/password/change`, op('Authentication', 'Change authenticated user password', { requestBody: body('ChangePasswordRequest') }));
-add('post', `${apiPrefix}/auth/social`, op('Authentication', 'Social login placeholder', { public: true }));
 
 // Public marketplace
 add('get', `${apiPrefix}/feed`, op('Public Marketplace', 'Get homepage feed', { public: true }));
@@ -521,6 +532,9 @@ add('post', `${apiPrefix}/payments/initialize`, op('Payments', 'Initialize payme
 add('post', `${apiPrefix}/payments/verify/{reference}`, op('Payments', 'Verify payment reference', { parameters: [guestHeader(), param('reference', 'Payment transaction reference')] }));
 add('get', `${apiPrefix}/payments/orders/{orderId}/status`, op('Payments', 'Get order payment status', { parameters: [guestHeader(), param('orderId', 'Order id')] }));
 add('get', `${apiPrefix}/notifications`, op('Notifications', 'List notifications', { parameters: [guestHeader()] }));
+add('patch', `${apiPrefix}/notifications/read-all`, op('Notifications', 'Mark all notifications as read', { parameters: [guestHeader()] }));
+add('delete', `${apiPrefix}/notifications/clear`, op('Notifications', 'Clear all notifications', { parameters: [guestHeader()] }));
+add('get', `${apiPrefix}/notifications/{id}`, op('Notifications', 'Get notification detail', { parameters: [guestHeader(), param('id', 'Notification id')] }));
 add('patch', `${apiPrefix}/notifications/{id}/read`, op('Notifications', 'Mark notification as read', { parameters: [guestHeader(), param('id', 'Notification id')] }));
 add('delete', `${apiPrefix}/notifications/{id}`, op('Notifications', 'Delete notification', { parameters: [guestHeader(), param('id', 'Notification id')] }));
 add('post', `${apiPrefix}/devices/register`, op('Devices', 'Register Expo push device token', { parameters: [guestHeader()], requestBody: body('DeviceRegisterRequest') }));
@@ -552,13 +566,15 @@ add('post', `${apiPrefix}/admin/auth/login`, op('Admin Auth', 'Login admin or su
 add('get', `${apiPrefix}/admin/dashboard`, op('Admin Dashboard', 'Get admin dashboard summary'));
 add('get', `${apiPrefix}/admin/analytics`, op('Admin Dashboard', 'Get admin analytics series'));
 add('get', `${apiPrefix}/admin/health`, op('Admin Dashboard', 'Check admin API health'));
+add('get', `${apiPrefix}/admin/operations/states`, op('Admin Settings', 'List Nigerian operating states', { parameters: [query('active', { type: 'boolean' })] }));
+add('patch', `${apiPrefix}/admin/operations/states/{code}`, op('Admin Settings', 'Enable or disable an operating state (super-admin)', { parameters: [param('code', 'State code, for example LA')], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['isEnabled'], properties: { isEnabled: { type: 'boolean' } } } } } } }));
 add('get', `${apiPrefix}/admin/users`, op('Admin Users', 'List users', { parameters: [query('page', { type: 'integer' }), query('limit', { type: 'integer' }), query('role'), query('search')] }));
 add('get', `${apiPrefix}/admin/customers`, op('Admin Users', 'List shopper customers', { parameters: [query('page', { type: 'integer' }), query('limit', { type: 'integer' }), query('search')] }));
 add('get', `${apiPrefix}/admin/users/{id}`, op('Admin Users', 'Get user detail', { parameters: [param('id', 'User id')] }));
 add('post', `${apiPrefix}/admin/users`, op('Admin Users', 'Create user (super-admin)', { requestBody: body('AdminUserRequest') }));
 add('patch', `${apiPrefix}/admin/users/{id}/toggle`, op('Admin Users', 'Toggle user active status', { parameters: [param('id', 'User id')] }));
 add('patch', `${apiPrefix}/admin/users/{id}/role`, op('Admin Users', 'Change user role (super-admin)', { parameters: [param('id', 'User id')], requestBody: body('RoleRequest') }));
-add('get', `${apiPrefix}/admin/vendors`, op('Admin Vendors', 'List vendors', { parameters: [query('page', { type: 'integer' }), query('limit', { type: 'integer' }), query('approved', { type: 'boolean' })] }));
+add('get', `${apiPrefix}/admin/vendors`, op('Admin Vendors', 'List vendors', { parameters: [query('page', { type: 'integer' }), query('limit', { type: 'integer' }), query('approved', { type: 'boolean' }), query('stateCode')] }));
 add('patch', `${apiPrefix}/admin/vendors/{id}/approve`, op('Admin Vendors', 'Approve vendor', { parameters: [param('id', 'Vendor id')] }));
 add('patch', `${apiPrefix}/admin/vendors/{id}/reject`, op('Admin Vendors', 'Reject vendor', { parameters: [param('id', 'Vendor id')], requestBody: { required: false, content: { 'application/json': { schema: { type: 'object', properties: { reason: { type: 'string' } } } } } } }));
 add('patch', `${apiPrefix}/admin/vendors/{id}/tier`, op('Admin Vendors', 'Update vendor tier/commission (super-admin)', { parameters: [param('id', 'Vendor id')], requestBody: body('VendorTierRequest') }));
@@ -570,11 +586,12 @@ add('get', `${apiPrefix}/admin/orders/{id}`, op('Admin Orders', 'Get order detai
 add('patch', `${apiPrefix}/admin/orders/{id}/status`, op('Admin Orders', 'Update order status', { parameters: [param('id', 'Order id')], requestBody: body('OrderStatusRequest') }));
 add('get', `${apiPrefix}/admin/dispatch/active`, op('Admin Dispatch', 'List active deliveries'));
 add('get', `${apiPrefix}/admin/dispatch`, op('Admin Dispatch', 'List delivery records', { parameters: [query('page', { type: 'integer' }), query('limit', { type: 'integer' })] }));
-add('get', `${apiPrefix}/admin/dispatch/drivers`, op('Admin Dispatch', 'List active drivers'));
-add('get', `${apiPrefix}/admin/field-agents`, op('Admin Field Agents', 'List field agents', { parameters: [query('page', { type: 'integer' }), query('limit', { type: 'integer' })] }));
+add('get', `${apiPrefix}/admin/dispatch/drivers`, op('Admin Dispatch', 'List active drivers', { parameters: [query('stateCode')] }));
+add('get', `${apiPrefix}/admin/field-agents`, op('Admin Field Agents', 'List field agents', { parameters: [query('page', { type: 'integer' }), query('limit', { type: 'integer' }), query('stateCode')] }));
 add('get', `${apiPrefix}/admin/field-agents/{id}`, op('Admin Field Agents', 'Get field-agent detail', { parameters: [param('id', 'Field-agent id')] }));
 add('patch', `${apiPrefix}/admin/field-agents/{id}/toggle`, op('Admin Field Agents', 'Toggle field-agent active status', { parameters: [param('id', 'Field-agent id')] }));
-add('get', `${apiPrefix}/admin/booths`, op('Admin Booths', 'List booths', { parameters: [query('page', { type: 'integer' }), query('limit', { type: 'integer' })] }));
+add('patch', `${apiPrefix}/admin/field-agents/{id}/state`, op('Admin Field Agents', 'Assign field agent to an active operating state', { parameters: [param('id', 'Field-agent id')], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['stateCode'], properties: { stateCode: { type: 'string', example: 'LA' } } } } } } }));
+add('get', `${apiPrefix}/admin/booths`, op('Admin Booths', 'List booths', { parameters: [query('page', { type: 'integer' }), query('limit', { type: 'integer' }), query('stateCode')] }));
 add('get', `${apiPrefix}/admin/booths/analytics`, op('Admin Booths', 'Get booth analytics'));
 add('get', `${apiPrefix}/admin/booths/{id}`, op('Admin Booths', 'Get booth detail', { parameters: [param('id', 'Booth id')] }));
 add('post', `${apiPrefix}/admin/booths`, op('Admin Booths', 'Provision booth (super-admin)', { requestBody: body('BoothRequest') }));

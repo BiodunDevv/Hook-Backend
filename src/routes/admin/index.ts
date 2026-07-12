@@ -8,6 +8,7 @@ import { AdminFieldAgentsController } from '@controllers/admin/field-agents.cont
 import { AdminFinancialsController } from '@controllers/admin/financials.controller';
 import { AdminNegotiationsController } from '@controllers/admin/negotiations.controller';
 import { AdminOrdersController } from '@controllers/admin/orders.controller';
+import { AdminOperationsController } from '@controllers/admin/operations.controller';
 import { AdminSearchController } from '@controllers/admin/search.controller';
 import { AdminProductsController } from '@controllers/admin/products.controller';
 import { AdminReportsController } from '@controllers/admin/reports.controller';
@@ -38,6 +39,8 @@ import {
   adminVendorCreateSchema,
   adminVendorUpdateSchema,
   orderStatusSchema,
+  operationalStateAssignSchema,
+  operationalStateToggleSchema,
   productReviewSchema,
   reportSchema,
   roleSchema,
@@ -64,6 +67,7 @@ export function createAdminRouter() {
   const staff       = new AdminStaffController();
   const search      = new AdminSearchController();
   const categories  = new AdminCategoriesController();
+  const operations  = new AdminOperationsController();
 
   // ── Public admin auth (no token required) ──────────────────────────────
   router.use('/auth', createAdminAuthRouter());
@@ -78,6 +82,11 @@ export function createAdminRouter() {
   router.get('/dashboard', asyncHandler(dashboard.dashboard));
   router.get('/analytics',  asyncHandler(dashboard.analytics));
   router.get('/health',     asyncHandler(dashboard.health));
+
+  // ── Operations catalog (Nigeria-first operating states) ───────────────
+  router.get('/operations/states', asyncHandler(operations.listStates));
+  router.patch('/operations/states/:code', requireSuperAdmin, validateBody(operationalStateToggleSchema), asyncHandler(operations.setStateStatus));
+  router.post('/operations/states/reset', requireSuperAdmin, asyncHandler(operations.resetCatalog));
 
   // ── Users / Customers ──────────────────────────────────────────────────
   router.get('/users',             requirePermission('customers.view'), asyncHandler(users.list));
@@ -150,6 +159,7 @@ export function createAdminRouter() {
   router.get('/field-agents/queue',   requirePermission('field_agents.view'), asyncHandler(fieldAgents.queue));
   router.get('/field-agents/:id',     requirePermission('field_agents.view'), asyncHandler(fieldAgents.detail));
   router.patch('/field-agents/:id/toggle', requirePermission('field_agents.view'), asyncHandler(fieldAgents.toggle));
+  router.patch('/field-agents/:id/state', requirePermission('field_agents.view'), validateBody(operationalStateAssignSchema), asyncHandler(fieldAgents.setState));
 
   // ── Booths ─────────────────────────────────────────────────────────────
   router.get('/booths',           requirePermission('booths.view'), asyncHandler(booths.list));

@@ -12,6 +12,7 @@ import { Order } from '@models/orders/order.model';
 import { User } from '@models/users/user.model';
 import { NotificationService } from '@services/notification.service';
 import { HttpError } from '@utils/http';
+import { verifyGoogleIdToken } from './google-auth.service';
 import { AuthUserPayload, signAccessToken, signRefreshToken } from './token.service';
 
 function hashToken(token: string) {
@@ -117,6 +118,61 @@ export class AuthService {
     return response;
   }
 
+  async loginWithGoogle(input: { idToken: string; guestId?: string }) {
+    const payload = await verifyGoogleIdToken(input.idToken);
+    const email = payload.email!.toLowerCase().trim();
+    const firstName = payload.given_name || '';
+    const lastName = payload.family_name || '';
+    const avatarUrl = payload.picture;
+
+    let user = await this.userRepo.findOne({ where: [{ email }, { googleId: payload.sub }] });
+    const isNewUser = !user;
+
+    if (user) {
+      if (!user.isActive) throw new HttpError(401, 'Account not activated. Complete your profile first.');
+      user.googleId = user.googleId || payload.sub;
+      user.email = user.email || email;
+      user.authProvider = user.authProvider === 'google' ? 'google' : user.authProvider || 'password';
+      user.firstName = user.firstName || firstName;
+      user.lastName = user.lastName || lastName;
+      user.avatarUrl = user.avatarUrl || avatarUrl;
+      user.isEmailVerified = true;
+      user.lastLoginAt = new Date();
+      await this.userRepo.save(user);
+    } else {
+      user = await this.userRepo.save(this.userRepo.create({
+        email,
+        password: undefined,
+        authProvider: 'google',
+        googleId: payload.sub,
+        firstName,
+        lastName,
+        avatarUrl,
+        role: UserRole.SHOPPER,
+        isActive: true,
+        isEmailVerified: true,
+        isPhoneVerified: false,
+        lastLoginAt: new Date(),
+      }));
+    }
+
+    if (!user) throw new HttpError(401, 'Google sign-in could not be completed');
+    const authUser = user;
+    const response = this.buildAuthResponse(authUser);
+    await Promise.all([
+      this.userRepo.update(authUser.id, { refreshToken: hashToken(response.refreshToken), lastLoginAt: new Date() }),
+      this.mergeGuestIntoUser(input.guestId, authUser.id),
+    ]);
+
+    const name = `${authUser.firstName || ''} ${authUser.lastName || ''}`.trim();
+    await Promise.allSettled([
+      isNewUser ? this.email.sendWelcome({ email: authUser.email, name }) : Promise.resolve(),
+      this.notifications?.sendWelcome({ userId: authUser.id }, name || undefined),
+    ]);
+
+    return response;
+  }
+
   async register(email: string, password: string) {
     const existing = await this.userRepo.findOne({ where: { email } });
     if (existing) {
@@ -126,6 +182,7 @@ export class AuthService {
     const user = this.userRepo.create({
       email,
       password: await hashPassword(password),
+      authProvider: 'password',
       firstName: '',
       lastName: '',
       role: UserRole.SHOPPER,
@@ -224,6 +281,7 @@ export class AuthService {
     const user = await this.userRepo.save(this.userRepo.create({
       email: session.email,
       password: session.passwordHash,
+      authProvider: 'password',
       firstName: body.firstName || '',
       lastName: body.lastName || '',
       phone: body.phone,

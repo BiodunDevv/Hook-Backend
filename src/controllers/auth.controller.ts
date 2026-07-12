@@ -35,6 +35,13 @@ export class AuthController {
     sendSuccess(res, await this.auth.login(req.body.email, req.body.password, { guestId: req.body.guestId }));
   };
 
+  googleLogin = async (req: Request, res: Response) => {
+    sendSuccess(res, await this.auth.loginWithGoogle({
+      idToken: req.body.idToken,
+      guestId: req.body.guestId,
+    }));
+  };
+
   adminLogin = async (req: Request, res: Response) => {
     sendSuccess(
       res,

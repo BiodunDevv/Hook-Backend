@@ -39,9 +39,12 @@ export function createCustomerRouter() {
   router.post('/payments/verify/:reference', asyncHandler(controller.verifyPayment));
   router.get('/payments/orders/:orderId/status', asyncHandler(controller.paymentStatus));
 
-  router.get('/notifications', asyncHandler(controller.notifications));
-  router.patch('/notifications/:id/read', asyncHandler(controller.notifications));
-  router.delete('/notifications/:id', asyncHandler(controller.notifications));
+  router.get('/notifications', asyncHandler(controller.listNotifications));
+  router.patch('/notifications/read-all', asyncHandler(controller.markAllNotificationsRead));
+  router.delete('/notifications/clear', asyncHandler(controller.clearNotifications));
+  router.get('/notifications/:id', asyncHandler(controller.getNotification));
+  router.patch('/notifications/:id/read', asyncHandler(controller.markNotificationRead));
+  router.delete('/notifications/:id', asyncHandler(controller.deleteNotification));
 
   return router;
 }

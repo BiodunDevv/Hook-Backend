@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { ProductStatus } from '@lib/constants';
+import { normalizeStateCode, resolveActiveOperationalState } from '@services/operational-state.service';
 import { HttpError, sendSuccess } from '@utils/http';
 import { adminRepos, getPagination, paginated, routeParam } from './admin.helpers';
 
@@ -19,7 +20,11 @@ function startOfToday(): Date {
 export class AdminFieldAgentsController {
   list = async (req: Request, res: Response) => {
     const { page, limit, skip } = getPagination(req.query);
+    const stateCode = normalizeStateCode(req.query.stateCode);
+    const where: Record<string, unknown> = {};
+    if (stateCode) where.stateCode = stateCode;
     const [agents, total] = await adminRepos.fieldAgents().findAndCount({
+      where,
       relations: { agent: true },
       order: { createdAt: 'DESC' },
       skip,
@@ -139,5 +144,16 @@ export class AdminFieldAgentsController {
     agent.isActive = !agent.isActive;
     await repo.save(agent);
     sendSuccess(res, { id: agent.id, isActive: agent.isActive });
+  };
+
+  setState = async (req: Request, res: Response) => {
+    const repo = adminRepos.fieldAgents();
+    const agent = await repo.findOne({ where: { id: routeParam(req.params.id) } });
+    if (!agent) throw new HttpError(404, 'Field agent not found');
+    const state = await resolveActiveOperationalState(req.body.stateCode);
+    agent.stateCode = state.stateCode;
+    agent.stateName = state.stateName;
+    await repo.save(agent);
+    sendSuccess(res, { id: agent.id, stateCode: agent.stateCode, stateName: agent.stateName });
   };
 }

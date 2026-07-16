@@ -1,5 +1,6 @@
 import { ProductStatus } from '@lib/constants';
 import { BaseEntity, createModel, createSchema } from '@models/base.model';
+import { normalizeProductColors } from '@lib/product-color';
 
 export interface Product extends BaseEntity {
   title: string;
@@ -57,5 +58,9 @@ const ProductSchema = createSchema<Product>({
 ProductSchema.index({ vendorId: 1, status: 1 });
 ProductSchema.index({ categoryId: 1 });
 ProductSchema.index({ title: 'text', description: 'text' });
+
+ProductSchema.pre('validate', function normalizeColors() {
+  this.colors = normalizeProductColors(this.colors);
+});
 
 export const Product = createModel<Product>('Product', ProductSchema);

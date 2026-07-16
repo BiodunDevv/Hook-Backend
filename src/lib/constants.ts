@@ -15,16 +15,48 @@ export enum UserRole {
 // Order lifecycle
 // ============================================================
 export enum OrderStatus {
+  AWAITING_PAYMENT = 'awaiting_payment',
   PENDING = 'pending',
   CONFIRMED = 'confirmed',
-  PROCESSING = 'processing',
-  PACKED = 'packed',
-  PICKED_UP = 'picked_up',
-  IN_TRANSIT = 'in_transit',
+  SHIPPED = 'shipped',
+  // Legacy aliases keep older callers source-compatible while the public
+  // lifecycle remains pending -> confirmed -> shipped -> delivered.
+  PROCESSING = 'confirmed',
+  PACKED = 'confirmed',
+  PICKED_UP = 'shipped',
+  IN_TRANSIT = 'shipped',
   DELIVERED = 'delivered',
   CANCELLED = 'cancelled',
   RETURNED = 'returned',
   REFUNDED = 'refunded',
+}
+
+export enum PaymentMode {
+  PAY_NOW = 'pay_now',
+  PAY_ON_DELIVERY = 'pay_on_delivery',
+}
+
+export enum OrderType {
+  STANDARD = 'standard',
+  GIFT = 'gift',
+}
+
+export enum VendorFulfilmentStatus {
+  AWAITING_CONFIRMATION = 'awaiting_confirmation',
+  CONFIRMED = 'confirmed',
+  REJECTED = 'rejected',
+  SHIPPED = 'shipped',
+  DELIVERED = 'delivered',
+}
+
+export enum EscrowEventType {
+  PAYMENT_RECEIVED = 'payment_received',
+  HELD = 'held',
+  PARTIALLY_REFUNDED = 'partially_refunded',
+  REFUND_PENDING = 'refund_pending',
+  ELIGIBLE_FOR_PAYOUT = 'eligible_for_payout',
+  PAID_OUT = 'paid_out',
+  DISPUTED = 'disputed',
 }
 
 export enum PaymentStatus {
@@ -94,3 +126,6 @@ export const PAGINATION_DEFAULTS = {
 export const VENDOR_COMMISSION_PERCENTAGE = 15;
 export const ESCROW_HOLD_HOURS = 24;
 export const DELIVERY_SLA_HOURS = 24;
+export const DEFAULT_DELIVERY_FEE = 3000;
+export const VENDOR_CONFIRMATION_HOURS = 2;
+export const GIFT_EXPIRY_DAYS = 7;

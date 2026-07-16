@@ -11,7 +11,16 @@ export interface Booth extends BaseEntity {
   featuredProductIds: string[];
   previewImageUrl?: string;
   fieldAgentId?: string;
+  attendantUserId?: string;
   fieldAgent?: any;
+  qrTokenHash?: string;
+  qrPublicId?: string;
+  qrRotatedAt?: Date;
+  qrVersion: number;
+  accessCodeDigest?: string;
+  accessCodeVersion: number;
+  accessCodeRotatedAt?: Date;
+  lastCredentialRotationActorId?: string;
 }
 
 const BoothSchema = createSchema<Booth>({
@@ -24,6 +33,15 @@ const BoothSchema = createSchema<Booth>({
   featuredProductIds: [{ type: String }],
   previewImageUrl: { type: String },
   fieldAgentId: { type: String, index: true },
+  attendantUserId: { type: String, index: true },
+  qrTokenHash: { type: String, unique: true, sparse: true, select: false },
+  qrPublicId: { type: String, unique: true, sparse: true, index: true },
+  qrRotatedAt: { type: Date },
+  qrVersion: { type: Number, default: 1 },
+  accessCodeDigest: { type: String, unique: true, sparse: true, index: true, select: false },
+  accessCodeVersion: { type: Number, default: 1 },
+  accessCodeRotatedAt: { type: Date },
+  lastCredentialRotationActorId: { type: String },
   deletedAt: { type: Date },
 });
 

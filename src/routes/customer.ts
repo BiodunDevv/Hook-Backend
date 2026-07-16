@@ -9,6 +9,9 @@ import {
   checkoutSchema,
   negotiationSchema,
   paymentInitializeSchema,
+  customerRefundRequestSchema,
+  deletionRequestSchema,
+  checkoutEventSchema,
 } from '@validations/common.schemas';
 import { asyncHandler } from '@utils/http';
 
@@ -28,6 +31,7 @@ export function createCustomerRouter() {
   router.get('/orders', asyncHandler(controller.listOrders));
   router.get('/orders/:id', asyncHandler(controller.getOrder));
   router.post('/orders/:id/cancel', validateBody(z.object({ reason: z.string().optional() })), asyncHandler(controller.cancelOrder));
+  router.post('/orders/:id/refunds', validateBody(customerRefundRequestSchema), asyncHandler(controller.requestRefund));
 
   router.get('/negotiations', asyncHandler(controller.listNegotiations));
   router.post('/negotiations', validateBody(negotiationSchema), asyncHandler(controller.startNegotiation));
@@ -38,6 +42,13 @@ export function createCustomerRouter() {
   router.post('/payments/initialize', validateBody(paymentInitializeSchema), asyncHandler(controller.initializePayment));
   router.post('/payments/verify/:reference', asyncHandler(controller.verifyPayment));
   router.get('/payments/orders/:orderId/status', asyncHandler(controller.paymentStatus));
+  router.get('/payment-methods/capability', asyncHandler(controller.paymentMethodCapability));
+  router.get('/payment-methods', asyncHandler(controller.listPaymentMethods));
+  router.post('/payment-methods', validateBody(z.object({ providerToken: z.string().min(16).max(512), brand: z.string().max(30).optional(), last4: z.string().regex(/^\d{4}$/), expiryDisplay: z.string().max(10).optional(), isDefault: z.boolean().default(false) }).strict()), asyncHandler(controller.savePaymentMethod));
+  router.delete('/payment-methods/:id', asyncHandler(controller.removePaymentMethod));
+
+  router.post('/support/account-deletion', validateBody(deletionRequestSchema), asyncHandler(controller.requestDeletion));
+  router.post('/analytics/checkout-events', validateBody(checkoutEventSchema), asyncHandler(controller.recordCheckoutEvent));
 
   router.get('/notifications', asyncHandler(controller.listNotifications));
   router.patch('/notifications/read-all', asyncHandler(controller.markAllNotificationsRead));

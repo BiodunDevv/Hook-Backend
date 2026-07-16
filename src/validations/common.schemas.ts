@@ -1,9 +1,12 @@
 import { z } from 'zod';
+import { normalizeProductColor } from '@lib/product-color';
 import {
   BoothType,
   LogisticsStatus,
   NegotiationStatus,
   OrderStatus,
+  OrderType,
+  PaymentMode,
   PaymentStatus,
   ProductStatus,
   UserRole,
@@ -54,6 +57,7 @@ export const cartItemSchema = z.object({
     color: z.string().optional(),
     size: z.string().optional(),
   }).optional(),
+  boothSessionToken: z.string().min(20).optional(),
 });
 
 export const cartQuantitySchema = z.object({ quantity: z.coerce.number().int().positive() });
@@ -71,18 +75,40 @@ export const checkoutSchema = z.object({
   }),
   deliveryNotes: z.string().optional(),
   scheduledDeliveryAt: z.coerce.date().optional(),
+  paymentMode: z.nativeEnum(PaymentMode).default(PaymentMode.PAY_NOW),
+  orderType: z.nativeEnum(OrderType).default(OrderType.STANDARD),
+  giftRecipient: z.object({
+    name: z.string().trim().min(2),
+    email: z.string().email(),
+    phone: z.string().trim().min(7),
+    address: z.object({
+      street: z.string().min(1), city: z.string().min(1), state: z.string().min(1),
+      landmark: z.string().optional(), coordinates: z.object({ lat: z.number(), lng: z.number() }).optional(),
+      phone: z.string().min(6),
+    }),
+    message: z.string().trim().max(500).optional(),
+  }).optional(),
+  boothSessionToken: z.string().min(20).optional(),
+}).superRefine((data, ctx) => {
+  if (data.orderType === OrderType.GIFT && !data.giftRecipient) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['giftRecipient'], message: 'Gift recipient delivery details are required' });
+  }
+  if (data.orderType === OrderType.GIFT && data.paymentMode !== PaymentMode.PAY_NOW) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['paymentMode'], message: 'Gift orders must be paid before fulfilment' });
+  }
 });
 
 export const negotiationSchema = z.object({
   productId: idSchema,
   offeredPrice: z.coerce.number().positive(),
   message: z.string().optional(),
-});
+}).strict();
 
 export const paymentInitializeSchema = z.object({
   orderId: idSchema,
-  gateway: z.enum(['paystack', 'nomba']).default('paystack'),
-  paymentMethod: z.enum(['card', 'bank_transfer', 'ussd']).default('card'),
+  gateway: z.literal('opay').default('opay'),
+  paymentMethod: z.enum(['card', 'bank_transfer', 'ussd', 'pos']).default('card'),
+  savePaymentMethod: z.boolean().default(false),
 });
 
 export const vendorRegistrationSchema = z.object({
@@ -109,8 +135,15 @@ const productBaseSchema = z.object({
   minAcceptablePrice: z.coerce.number().positive(),
   quantity: z.coerce.number().int().nonnegative().default(0),
   categoryId: idSchema,
-  images: z.array(z.string().url()).default([]),
-  colors: z.array(z.string()).optional(),
+  images: z.array(z.string().url()).min(1, 'At least one product image is required'),
+  colors: z.array(z.string().transform((value, ctx) => {
+    const normalized = normalizeProductColor(value);
+    if (!normalized) {
+      ctx.addIssue({ code: 'custom', message: 'Colors must be a valid hex value such as #FFC809' });
+      return z.NEVER;
+    }
+    return normalized;
+  })).optional(),
   sizes: z.array(z.string()).optional(),
 });
 
@@ -145,6 +178,7 @@ export const adminVendorCreateSchema = z.object({
   businessAddress: z.string().optional(),
   stateCode: z.string().trim().min(2).max(3).optional(),
   description: z.string().optional(),
+  imageUrl: z.string().url().optional(),
   tier: z.nativeEnum(VendorTier).default(VendorTier.TIER_3),
   commissionPercentage: z.coerce.number().min(0).max(100).default(15),
   isApproved: z.boolean().default(false),
@@ -223,9 +257,16 @@ export const adminBoothCreateSchema = z.object({
     stateCode: z.string().trim().min(2).max(3).optional(),
   }),
   fieldAgentId: idSchema.optional(),
+  attendantUserId: idSchema.optional(),
+  newAttendant: z.object({ firstName: z.string().min(1), lastName: z.string().min(1), email: z.string().email(), phone: z.string().regex(/^\+?[0-9\s-]{7,20}$/) }).optional(),
   previewImageUrl: z.string().url().optional(),
   isActive: z.boolean().default(true),
 });
+
+export const boothAttendantSchema = z.union([
+  z.object({ attendantUserId: idSchema }),
+  z.object({ firstName: z.string().min(1), lastName: z.string().min(1), email: z.string().email(), phone: z.string().regex(/^\+?[0-9\s-]{7,20}$/, 'Enter a valid phone number'), password: z.string().min(8).optional() }),
+]);
 
 export const operationalStateToggleSchema = z.object({
   isEnabled: z.boolean(),
@@ -291,6 +332,30 @@ export const categoryUpdateSchema = categoryCreateSchema.partial();
 
 export const roleSchema = z.object({ role: z.nativeEnum(UserRole) });
 export const orderStatusSchema = z.object({ status: z.nativeEnum(OrderStatus) });
+export const fulfilmentDecisionSchema = z.object({
+  reason: z.string().trim().min(3).max(500).optional(),
+  idempotencyKey: z.string().trim().min(8).max(100),
+});
+export const giftCreateSchema = z.object({
+  productId: idSchema,
+  recipientEmail: z.string().email(),
+  quantity: z.coerce.number().int().positive().default(1),
+  message: z.string().trim().max(500).optional(),
+});
+export const giftClaimSchema = z.object({ token: z.string().min(32) });
+export const boothInventorySchema = z.object({ productIds: z.array(idSchema).max(500) });
+export const deletionRequestSchema = z.object({ reason: z.string().trim().max(1000).optional() });
+export const deletionUpdateSchema = z.object({
+  status: z.enum(['identity_verified', 'cooling_off', 'approved', 'anonymized', 'cancelled']),
+  assignedTo: idSchema.optional(),
+});
+export const checkoutEventSchema = z.object({
+  sessionId: z.string().min(8).max(100),
+  orderId: idSchema.optional(),
+  event: z.enum(['payment_options_shown', 'payment_method_selected', 'checkout_abandoned', 'payment_initiated', 'payment_completed', 'refund_requested', 'order_cancelled', 'delivered']),
+  paymentMode: z.nativeEnum(PaymentMode).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
 export const logisticsStatusSchema = z.object({ status: z.nativeEnum(LogisticsStatus) });
 export const productReviewSchema = z.object({
   status: z.nativeEnum(ProductStatus),
@@ -303,6 +368,23 @@ export const vendorTierSchema = z.object({
 export const settlementTriggerSchema = z.object({
   reason: z.string().optional(),
   idempotencyKey: z.string().optional(),
+});
+export const refundSchema = z.object({
+  amount: z.coerce.number().positive(),
+  reason: z.string().trim().min(3).max(500),
+  idempotencyKey: z.string().trim().min(8).max(100),
+});
+export const customerRefundRequestSchema = z.object({
+  reasonType: z.enum(['not_delivered', 'damaged', 'wrong_item', 'other']),
+  reason: z.string().trim().min(10).max(1000),
+  evidenceUrls: z.array(z.string().url()).max(8).default([]),
+  amount: z.coerce.number().positive().optional(),
+  idempotencyKey: z.string().trim().min(8).max(100),
+});
+export const adminRefundReviewSchema = z.object({
+  status: z.enum(['under_review', 'rejected']),
+  assignedSupportUserId: idSchema.optional(),
+  decisionNote: z.string().trim().min(3).max(1000),
 });
 export const settingsSchema = z.record(z.string(), z.unknown());
 export const reportSchema = z.object({ type: z.string().default('sales') });

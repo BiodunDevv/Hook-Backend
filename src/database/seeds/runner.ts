@@ -1,14 +1,19 @@
 import dotenv from 'dotenv';
 import mongoose from 'mongoose';
+import { createHash } from 'crypto';
 import {
   LogisticsStatus,
+  EscrowEventType,
   NegotiationStatus,
   OrderStatus,
+  OrderType,
+  PaymentMode,
   PaymentStatus,
   ProductStatus,
   SettlementStatus,
   UserRole,
   VendorTier,
+  VendorFulfilmentStatus,
 } from '@lib/constants';
 import { DEFAULT_OPERATIONAL_STATE_CODE, NIGERIAN_STATES } from '@lib/nigeria-states';
 
@@ -22,6 +27,11 @@ const ALL_PERMISSIONS = [
   'field_agents.view',
   'booths.view', 'booths.edit',
   'financials.view',
+  'financials.refund', 'financials.reconcile',
+  'refunds.view', 'refunds.manage',
+  'booths.inventory', 'booths.qr.rotate',
+  'deletions.view', 'deletions.manage',
+  'analytics.checkout',
   'reports.view',
   'ai_negotiation.view',
   'settings.view',
@@ -63,6 +73,20 @@ const categories = [
     sortOrder: 3,
     iconUrl: 'https://images.unsplash.com/photo-1553062407-98eeb64c6a62?w=400&auto=format&fit=crop&q=60',
   },
+  {
+    name: 'Dresses',
+    slug: 'dresses',
+    description: 'Everyday, evening, and occasion dresses.',
+    sortOrder: 4,
+    iconUrl: 'https://images.unsplash.com/photo-1595777457583-95e059d581b8?w=400&auto=format&fit=crop&q=60',
+  },
+  {
+    name: 'Bags',
+    slug: 'bags',
+    description: 'Handbags, totes, and everyday carry.',
+    sortOrder: 5,
+    iconUrl: 'https://images.unsplash.com/photo-1566150905458-1bf1fc113f0d?w=400&auto=format&fit=crop&q=60',
+  },
 ];
 
 const vendors = [
@@ -70,34 +94,94 @@ const vendors = [
     ownerEmail: 'vendor.one@hook.africa',
     ownerFirstName: 'Ada',
     ownerLastName: 'Okafor',
-    businessName: 'Lagos Sneaker Lab',
-    businessEmail: 'sales@lagossneakerlab.africa',
+    businessName: 'Balogun Sneaker Market',
+    businessEmail: 'sales@balogunsneakers.africa',
     businessPhone: '+2348010000101',
     businessAddress: 'Admiralty Way, Lekki Phase 1, Lagos',
+    description: 'Sneakers, trainers, and street footwear',
     tier: VendorTier.TIER_1,
     commissionPercentage: 12,
+    imageUrl: 'https://images.unsplash.com/photo-1555529771-835f59fc5efe?w=800&auto=format&fit=crop&q=80',
   },
   {
     ownerEmail: 'vendor.two@hook.africa',
     ownerFirstName: 'Tunde',
     ownerLastName: 'Balogun',
-    businessName: 'Mainland Kicks Depot',
-    businessEmail: 'ops@mainlandkicks.africa',
+    businessName: 'Allen Avenue Fashion Hub',
+    businessEmail: 'ops@allenavenuehub.africa',
     businessPhone: '+2348010000102',
     businessAddress: 'Allen Avenue, Ikeja, Lagos',
+    description: 'Streetwear, jackets, and everyday fashion',
     tier: VendorTier.TIER_2,
     commissionPercentage: 15,
+    imageUrl: 'https://images.unsplash.com/photo-1607083206968-13611e3d76db?w=800&auto=format&fit=crop&q=80',
   },
   {
     ownerEmail: 'vendor.three@hook.africa',
     ownerFirstName: 'Mariam',
     ownerLastName: 'Bello',
-    businessName: 'Balogun Market Select',
-    businessEmail: 'hello@balogunselect.africa',
+    businessName: 'Yaba Fabric & Textile Market',
+    businessEmail: 'hello@yabatextiles.africa',
     businessPhone: '+2348010000103',
     businessAddress: 'Balogun Market, Lagos Island',
+    description: 'Fabrics, bags, and accessories',
     tier: VendorTier.TIER_3,
     commissionPercentage: 18,
+    imageUrl: 'https://images.unsplash.com/photo-1567401893414-76b7b1e5a7a5?w=800&auto=format&fit=crop&q=80',
+  },
+  {
+    ownerEmail: 'vendor.four@hook.africa',
+    ownerFirstName: 'Chinedu',
+    ownerLastName: 'Eze',
+    businessName: 'Computer Village Gadget Mart',
+    businessEmail: 'sales@cvgadgetmart.africa',
+    businessPhone: '+2348010000104',
+    businessAddress: 'Otigba Street, Computer Village, Ikeja',
+    description: 'Bags, cases, and everyday accessories',
+    tier: VendorTier.TIER_2,
+    commissionPercentage: 15,
+    imageUrl: 'https://images.unsplash.com/photo-1441984904996-e0b6ba687e04?w=800&auto=format&fit=crop&q=80',
+  },
+  {
+    ownerEmail: 'vendor.five@hook.africa',
+    ownerFirstName: 'Blessing',
+    ownerLastName: 'Adeyinka',
+    businessName: 'Surulere Dress & Style House',
+    businessEmail: 'hello@surulerestyle.africa',
+    businessPhone: '+2348010000105',
+    businessAddress: 'Adeniran Ogunsanya Street, Surulere, Lagos',
+    description: 'Dresses, occasion wear, and tailoring',
+    tier: VendorTier.TIER_3,
+    commissionPercentage: 18,
+    imageUrl: 'https://images.unsplash.com/photo-1560243563-062bfc001d68?w=800&auto=format&fit=crop&q=80',
+  },
+  {
+    ownerEmail: 'vendor.six@hook.africa',
+    ownerFirstName: 'Kunle',
+    ownerLastName: 'Adebayo',
+    businessName: 'Sango Ota Trade Fair',
+    businessEmail: 'hello@sangotradefair.africa',
+    businessPhone: '+2348010000106',
+    businessAddress: 'Idiroko Road, Sango Ota, Ogun State',
+    description: 'Wholesale fashion and footwear',
+    tier: VendorTier.TIER_2,
+    commissionPercentage: 15,
+    imageUrl: 'https://images.unsplash.com/photo-1445205170230-053b83016050?w=800&auto=format&fit=crop&q=80',
+    stateOverride: 'OG',
+  },
+  {
+    ownerEmail: 'vendor.seven@hook.africa',
+    ownerFirstName: 'Ibiere',
+    ownerLastName: 'Wokoma',
+    businessName: 'Port Harcourt Waterfront Market',
+    businessEmail: 'hello@phwaterfront.africa',
+    businessPhone: '+2348010000107',
+    businessAddress: 'Aggrey Road, Port Harcourt, Rivers State',
+    description: 'Sneakers, bags, and streetwear',
+    tier: VendorTier.TIER_3,
+    commissionPercentage: 18,
+    imageUrl: 'https://images.unsplash.com/photo-1483985988355-763728e1935b?w=800&auto=format&fit=crop&q=80',
+    stateOverride: 'RI',
   },
 ];
 
@@ -305,6 +389,14 @@ async function seed() {
     { FieldAgent },
     { Booth },
     { OperationalState },
+    { VendorFulfilment },
+    { EscrowLedger },
+    { BoothInventory },
+    { BoothAttendantAssignment },
+    { RefundRequest },
+    { BoothAccessService },
+    { AccountDeletionRequest },
+    { CheckoutEvent },
   ] = await Promise.all([
     import('@lib/security'),
     import('@config/data-source'),
@@ -321,6 +413,14 @@ async function seed() {
     import('@models/field-agents/field-agent.model'),
     import('@models/booths/booth.model'),
     import('@models/operations/operational-state.model'),
+    import('@models/orders/vendor-fulfilment.model'),
+    import('@models/payments/escrow-ledger.model'),
+    import('@models/booths/booth-inventory.model'),
+    import('@models/booths/booth-attendant-assignment.model'),
+    import('@models/orders/refund-request.model'),
+    import('@services/booth-access.service'),
+    import('@models/support/account-deletion-request.model'),
+    import('@models/analytics/checkout-event.model'),
   ]);
 
   await initializeDatabase();
@@ -337,23 +437,35 @@ async function seed() {
   const fieldAgentRepo = AppDataSource.getRepository(FieldAgent);
   const boothRepo = AppDataSource.getRepository(Booth);
   const operationalStateRepo = AppDataSource.getRepository(OperationalState);
+  const fulfilmentRepo = AppDataSource.getRepository(VendorFulfilment);
+  const ledgerRepo = AppDataSource.getRepository(EscrowLedger);
+  const boothInventoryRepo = AppDataSource.getRepository(BoothInventory);
+  const deletionRepo = AppDataSource.getRepository(AccountDeletionRequest);
+  const checkoutEventRepo = AppDataSource.getRepository(CheckoutEvent);
+  const boothAssignmentRepo = AppDataSource.getRepository(BoothAttendantAssignment);
+  const refundRequestRepo = AppDataSource.getRepository(RefundRequest);
+  const boothAccess = new BoothAccessService();
 
   await resetSeedData();
 
   const passwordHash = await hashPassword(password);
   const now = new Date();
   const defaultState = NIGERIAN_STATES.find((state) => state.code === DEFAULT_OPERATIONAL_STATE_CODE) || NIGERIAN_STATES[0];
+  // Lagos plus a handful of major commercial hubs — enough for the mobile state
+  // dropdown to demonstrate real multi-state filtering, not just Lagos-vs-empty.
+  const enabledStateCodes = new Set([DEFAULT_OPERATIONAL_STATE_CODE, 'OG', 'OY', 'RI', 'FC']);
 
   for (const stateSeed of NIGERIAN_STATES) {
+    const isEnabled = enabledStateCodes.has(stateSeed.code);
     await operationalStateRepo.save(operationalStateRepo.create({
       ...stateSeed,
       countryCode: 'NG',
       countryName: 'Nigeria',
-      isEnabled: stateSeed.code === DEFAULT_OPERATIONAL_STATE_CODE,
-      enabledAt: stateSeed.code === DEFAULT_OPERATIONAL_STATE_CODE ? now : undefined,
+      isEnabled,
+      enabledAt: isEnabled ? now : undefined,
     } as any));
   }
-  console.log(`Operating states ready: ${NIGERIAN_STATES.length} (${defaultState.name} enabled)`);
+  console.log(`Operating states ready: ${NIGERIAN_STATES.length} (${enabledStateCodes.size} enabled: ${Array.from(enabledStateCodes).join(', ')})`);
 
   const existingAdmin = await userRepo.findOne({ where: { email } });
   if (existingAdmin) {
@@ -420,15 +532,19 @@ async function seed() {
     if (!owner) throw new Error(`Unable to create vendor owner ${vendorSeed.ownerEmail}`);
 
     let vendor: any = await vendorRepo.findOne({ where: { ownerId: owner.id } });
+    const vendorState = (vendorSeed as any).stateOverride
+      ? NIGERIAN_STATES.find((state) => state.code === (vendorSeed as any).stateOverride) || defaultState
+      : defaultState;
     const vendorPayload: any = {
       ownerId: owner.id,
       businessName: vendorSeed.businessName,
       businessEmail: vendorSeed.businessEmail,
       businessPhone: vendorSeed.businessPhone,
       businessAddress: vendorSeed.businessAddress,
-      stateCode: defaultState.code,
-      stateName: defaultState.name,
-      description: `${vendorSeed.businessName} is seeded for Hook admin QA, catalog testing, and onboarding flows.`,
+      stateCode: vendorState.code,
+      stateName: vendorState.name,
+      description: vendorSeed.description,
+      imageUrl: vendorSeed.imageUrl,
       tier: vendorSeed.tier,
       commissionPercentage: vendorSeed.commissionPercentage,
       isApproved: true,
@@ -476,7 +592,7 @@ async function seed() {
       minAcceptablePrice: negotiationFloor,
       quantity,
       reservedQuantity: 0,
-      colors: ['Black', 'White', 'Gold'],
+      colors: ['#000000', '#FFFFFF', '#FFD700'],
       sizes: ['40', '41', '42', '43', '44'],
       images: [
         PRODUCT_IMAGES[index % PRODUCT_IMAGES.length],
@@ -600,6 +716,7 @@ async function seed() {
   console.log(`Field agents ready: ${fieldAgentAccounts.length}`);
 
   // ── Physical booths (company-owned locations) ─────────────────────────────
+  const savedBooths: any[] = [];
   for (const boothSeed of boothSeeds) {
     const attendant = boothSeed.agentEmail ? fieldAgentByEmail.get(boothSeed.agentEmail) : undefined;
     let booth: any = await boothRepo.findOne({ where: { name: boothSeed.name } });
@@ -612,11 +729,17 @@ async function seed() {
       previewImageUrl: boothSeed.previewImageUrl,
       isActive: boothSeed.isActive,
       fieldAgentId: attendant?.id,
+      attendantUserId: attendant?.agentId,
       featuredProductIds: [],
     };
     if (booth) Object.assign(booth, boothPayload);
     else booth = boothRepo.create(boothPayload as any) as any;
-    await boothRepo.save(booth);
+    booth = await boothRepo.save(booth);
+    savedBooths.push(booth);
+    if (attendant?.agentId) {
+      const user = await userRepo.findOne({ where: { id: attendant.agentId } });
+      if (user) await boothAssignmentRepo.save(boothAssignmentRepo.create({ boothId: booth.id, attendantUserId: user.id, attendantName: `${user.firstName} ${user.lastName}`, attendantEmail: user.email, attendantPhone: user.phone || '', assignedAt: now, assignedBy: 'seed-system' } as any));
+    }
   }
   console.log(`Booths ready: ${boothSeeds.length}`);
 
@@ -641,7 +764,7 @@ async function seed() {
       minAcceptablePrice: negotiationFloor,
       quantity,
       reservedQuantity: 0,
-      colors: index % 2 === 0 ? ['White', 'Black'] : ['Blue Wash'],
+      colors: index % 2 === 0 ? ['#FFFFFF', '#000000'] : ['#6F8FAF'],
       sizes: categorySlug === 'sneakers' ? ['41', '42', '43', '44'] : ['M', 'L', 'XL'],
       images: [PRODUCT_IMAGES[(index + 3) % PRODUCT_IMAGES.length]],
       hookId,
@@ -668,6 +791,8 @@ async function seed() {
     OrderStatus.DELIVERED,
     OrderStatus.DELIVERED,
   ];
+  const seededOrders: any[] = [];
+  const seededPayments: any[] = [];
   for (let index = 0; index < 6; index += 1) {
     const customer = seededCustomerProfiles[index % seededCustomerProfiles.length];
     const firstProduct = savedProducts[index % savedProducts.length];
@@ -678,7 +803,7 @@ async function seed() {
       { product: secondProduct, quantity: 1 },
     ];
     const subtotal = lineItems.reduce((sum, item) => sum + Number(item.product.sellingPrice) * item.quantity, 0);
-    const deliveryFee = 2500 + index * 250;
+    const deliveryFee = 3000;
     const discount = index % 2 === 0 ? 1500 : 0;
     const total = subtotal + deliveryFee - discount;
     const status = orderStatuses[index];
@@ -693,11 +818,19 @@ async function seed() {
       guestName: customer.name,
       subtotal,
       deliveryFee,
+      deliverySubsidy: 1500,
       discount,
       total,
       vendorCount: new Set(lineItems.map((item) => item.product.vendorId)).size,
       status,
       paymentStatus,
+      paymentMode: index % 3 === 2 ? PaymentMode.PAY_ON_DELIVERY : PaymentMode.PAY_NOW,
+      orderType: index === 1 ? OrderType.GIFT : OrderType.STANDARD,
+      giftRecipient: index === 1 ? { name: 'Ada Gift Recipient', email: 'ada.gift@example.com', phone: '+2348030000099', address: { street: '18 Admiralty Way', city: 'Lekki', state: 'Lagos', phone: '+2348030000099' }, message: 'A Hook gift, delivered with care.' } : undefined,
+      boothId: savedBooths[index % savedBooths.length].id,
+      boothSnapshot: { name: savedBooths[index % savedBooths.length].name, accessCodeMasked: `***${String(index + 1).padStart(3, '0')}`, source: index % 2 ? 'qr' : 'code' },
+      partialFulfilment: index === 0,
+      vendorConfirmationDeadline: new Date(Date.now() + 2 * 60 * 60 * 1000),
       deliveryAddress: {
         street: `${10 + index} Admiralty Way`,
         city: index % 2 === 0 ? 'Lekki' : 'Ikeja',
@@ -712,11 +845,13 @@ async function seed() {
     if (order) Object.assign(order, orderPayload);
     else order = orderRepo.create(orderPayload);
     order = await orderRepo.save(order);
+    seededOrders.push(order);
 
     await orderItemRepo.delete({ orderId: order.id } as any);
+    const savedLineItems: Array<{ id: string; vendorId: string; totalPrice: number }> = [];
     for (const item of lineItems) {
       const itemTotal = Number(item.product.sellingPrice) * item.quantity;
-      await orderItemRepo.save(orderItemRepo.create({
+      const savedItem = await orderItemRepo.save(orderItemRepo.create({
         orderId: order.id,
         productId: item.product.id,
         productTitle: item.product.title,
@@ -728,15 +863,17 @@ async function seed() {
         selectedVariants: { color: 'Black', size: '42' },
         commissionAmount: itemTotal * 0.15,
       } as any));
+      savedLineItems.push({ id: savedItem.id, vendorId: item.product.vendorId, totalPrice: itemTotal });
     }
 
     let payment: any = await paymentRepo.findOne({ where: { orderId: order.id } });
     const paymentPayload = {
       orderId: order.id,
       transactionRef: `HK-PAY-${String(index + 1).padStart(4, '0')}`,
-      gatewayRef: `PSK-SEED-${String(index + 1).padStart(4, '0')}`,
-      gateway: 'paystack',
-      paymentMethod: index % 2 === 0 ? 'card' : 'bank_transfer',
+      gatewayRef: `OPAY-SEED-${String(index + 1).padStart(4, '0')}`,
+      gateway: 'opay',
+      resourceType: 'order',
+      paymentMethod: orderPayload.paymentMode === PaymentMode.PAY_ON_DELIVERY ? 'pos' : index % 2 === 0 ? 'card' : 'bank_transfer',
       amount: total,
       gatewayFee: Math.round(total * 0.015),
       amountSettled: paymentStatus === PaymentStatus.SUCCESSFUL ? total - Math.round(total * 0.015) : 0,
@@ -748,11 +885,12 @@ async function seed() {
         deliveryFee,
         commission: Math.round(subtotal * 0.15),
       },
-      gatewayResponse: { seeded: true, authorizationUrl: 'https://checkout.paystack.com/seeded-hook-payment' },
+      gatewayResponse: { seeded: true, provider: 'opay', verified: paymentStatus === PaymentStatus.SUCCESSFUL },
     };
     if (payment) Object.assign(payment, paymentPayload);
     else payment = paymentRepo.create(paymentPayload as any);
-    await paymentRepo.save(payment);
+    payment = await paymentRepo.save(payment);
+    seededPayments.push(payment);
 
     let logistics: any = await logisticsRepo.findOne({ where: { orderId: order.id } });
     const driver = savedDrivers[index % savedDrivers.length];
@@ -794,10 +932,27 @@ async function seed() {
     await logisticsRepo.save(logistics);
 
     await settlementRepo.delete({ orderId: order.id } as any);
+    await fulfilmentRepo.delete({ orderId: order.id } as any);
     for (const vendorId of Array.from(new Set(lineItems.map((item) => item.product.vendorId)))) {
       const vendorTotal = lineItems.filter((item) => item.product.vendorId === vendorId).reduce((sum, item) => sum + Number(item.product.sellingPrice) * item.quantity, 0);
       const commissionAmount = Math.round(vendorTotal * 0.15);
-      await settlementRepo.save(settlementRepo.create({
+      const fulfilmentStatus = index === 0 && vendorId === lineItems[1].product.vendorId
+        ? VendorFulfilmentStatus.REJECTED
+        : status === OrderStatus.PENDING ? VendorFulfilmentStatus.AWAITING_CONFIRMATION : VendorFulfilmentStatus.CONFIRMED;
+      const fulfilment = await fulfilmentRepo.save(fulfilmentRepo.create({
+        orderId: order.id, vendorId, status: fulfilmentStatus,
+        orderItemIds: savedLineItems.filter((item) => item.vendorId === vendorId).map((item) => item.id),
+        itemTotal: vendorTotal,
+        commissionAmount,
+        refundAmount: fulfilmentStatus === VendorFulfilmentStatus.REJECTED ? vendorTotal : 0,
+        confirmationDeadline: new Date(Date.now() + (status === OrderStatus.PENDING ? 60 : -60) * 60 * 1000),
+        confirmedAt: fulfilmentStatus === VendorFulfilmentStatus.CONFIRMED ? new Date() : undefined,
+        rejectedAt: fulfilmentStatus === VendorFulfilmentStatus.REJECTED ? new Date() : undefined,
+        decidedBy: fulfilmentStatus === VendorFulfilmentStatus.AWAITING_CONFIRMATION ? undefined : 'seed-system',
+        rejectionReason: fulfilmentStatus === VendorFulfilmentStatus.REJECTED ? 'Seeded out-of-stock scenario' : undefined,
+        idempotencyKeys: [`seed:${order.id}:${vendorId}`],
+      } as any));
+      if (fulfilmentStatus === VendorFulfilmentStatus.CONFIRMED && paymentStatus === PaymentStatus.SUCCESSFUL) await settlementRepo.save(settlementRepo.create({
         vendorId,
         orderId: order.id,
         settlementRef: `HK-SET-${orderCode}-${String(vendorId).slice(0, 4)}`,
@@ -809,9 +964,40 @@ async function seed() {
         escrowReleaseAt: new Date(Date.now() + 1000 * 60 * 60 * 24),
         notes: 'Seeded settlement for finance testing.',
       } as any));
+
+      if (paymentStatus === PaymentStatus.SUCCESSFUL) {
+        await ledgerRepo.save(ledgerRepo.create({ orderId: order.id, paymentId: payment.id, vendorId, fulfilmentId: fulfilment.id, type: fulfilmentStatus === VendorFulfilmentStatus.REJECTED ? EscrowEventType.PARTIALLY_REFUNDED : EscrowEventType.HELD, amount: fulfilmentStatus === VendorFulfilmentStatus.REJECTED ? -vendorTotal : vendorTotal, currency: 'NGN', idempotencyKey: `seed:${order.id}:${vendorId}:${fulfilmentStatus}` } as any));
+      }
     }
   }
   console.log('Orders, payments, logistics, and settlements ready: 6');
+
+  for (let boothIndex = 0; boothIndex < savedBooths.length; boothIndex += 1) {
+    const booth = savedBooths[boothIndex];
+    const code = String(410001 + boothIndex);
+    booth.accessCodeDigest = boothAccess.digestCode(code);
+    booth.accessCodeVersion = 1;
+    booth.accessCodeRotatedAt = now;
+    booth.qrPublicId = `hook-booth-${boothIndex + 1}`;
+    booth.qrTokenHash = boothAccess.digestQrToken(`seed-booth-token-${boothIndex + 1}`);
+    booth.qrVersion = 1;
+    booth.qrRotatedAt = now;
+    await boothRepo.save(booth);
+    for (const product of savedProducts.slice(boothIndex * 3, boothIndex * 3 + 5)) {
+      await boothInventoryRepo.save(boothInventoryRepo.create({ boothId: booth.id, productId: product.id, vendorId: product.vendorId, isActive: booth.isActive }));
+    }
+  }
+  console.log(`Booth credentials and inventory ready (test codes ${savedBooths.map((_, index) => 410001 + index).join(', ')})`);
+
+  await refundRequestRepo.save(refundRequestRepo.create({ orderId: seededOrders[3].id, paymentId: seededPayments[3].id, requestedBy: seededCustomerProfiles[3 % seededCustomerProfiles.length].guestId, reasonType: 'not_delivered', reason: 'The seeded order did not arrive within its delivery window.', amount: seededOrders[3].total, evidenceUrls: [], status: 'under_review', assignedSupportUserId: (await userRepo.findOne({ where: { role: UserRole.SUPPORT } }))?.id, idempotencyKey: 'seed-refund-request-0001', auditHistory: [{ action: 'requested', actorId: seededCustomerProfiles[3 % seededCustomerProfiles.length].guestId, at: now }] } as any));
+
+  const supportUser = await userRepo.findOne({ where: { role: UserRole.SUPPORT } });
+  const provisional = await userRepo.save(userRepo.create({ email: 'guest.pending@hook.africa', firstName: 'Guest', lastName: 'Shopper', role: UserRole.SHOPPER, accountStatus: 'pending_password', originatingGuestId: 'seed-provisional-001', isActive: true, isEmailVerified: false } as any));
+  await deletionRepo.save(deletionRepo.create({ userId: provisional.id, reason: 'Seeded support workflow', status: 'requested', assignedTo: supportUser?.id, coolingOffUntil: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) }));
+
+  const checkoutEvents = ['payment_options_shown', 'payment_method_selected', 'payment_initiated', 'payment_completed', 'delivered', 'checkout_abandoned'];
+  for (let index = 0; index < 18; index += 1) await checkoutEventRepo.save(checkoutEventRepo.create({ sessionId: `seed-checkout-${Math.floor(index / 6) + 1}`, guestId: seededCustomerProfiles[index % seededCustomerProfiles.length].guestId, event: checkoutEvents[index % checkoutEvents.length], paymentMode: index % 3 === 0 ? PaymentMode.PAY_ON_DELIVERY : PaymentMode.PAY_NOW, metadata: { seeded: true }, occurredAt: new Date(Date.now() - index * 60 * 60 * 1000) } as any));
+  console.log('Gift order, refund request, provisional guest, deletion request, and checkout analytics ready');
 
   await negotiationRepo.delete({ productId: { $in: savedProducts.map((product) => product.id) } } as any);
   const negotiationSeeds = [

@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 import { createApp } from './app';
 import { assertSafeEnvironment } from './config/env';
 import { initializeDatabase } from './config/data-source';
+import { startCommerceJobs } from './services/commerce-jobs.service';
 
 dotenv.config({ quiet: true });
 
@@ -47,6 +48,7 @@ async function bootstrap() {
   const app = createApp();
   const port = Number(process.env.PORT || 4000);
   const apiPrefix = process.env.API_PREFIX || 'api/v1';
+  startCommerceJobs();
 
   app.listen(port, () => {
     printReady(port, apiPrefix);

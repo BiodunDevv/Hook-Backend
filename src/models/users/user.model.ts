@@ -22,6 +22,8 @@ export interface User extends BaseEntity {
   isActive: boolean;
   lastLoginAt?: Date;
   refreshToken?: string;
+  accountStatus?: 'active' | 'pending_password' | 'deletion_requested' | 'anonymized';
+  originatingGuestId?: string;
 }
 
 const UserSchema = createSchema<User>({
@@ -45,6 +47,8 @@ const UserSchema = createSchema<User>({
   isActive: { type: Boolean, default: true, index: true },
   lastLoginAt: { type: Date },
   refreshToken: { type: String, index: true },
+  accountStatus: { type: String, enum: ['active', 'pending_password', 'deletion_requested', 'anonymized'], default: 'active', index: true },
+  originatingGuestId: { type: String, sparse: true, index: true },
   deletedAt: { type: Date },
 });
 

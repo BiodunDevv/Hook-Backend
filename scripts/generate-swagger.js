@@ -30,6 +30,7 @@ const tags = [
   ['Admin Negotiations', 'Admin AI negotiation monitoring.'],
   ['Admin Reports', 'Admin report listing and generation.'],
   ['Admin Settings', 'Admin platform settings.'],
+  ['Admin Commerce', 'Vendor fulfilment, booth inventory, refunds, deletion, and checkout operations.'],
 ].map(([name, description]) => ({ name, description }));
 
 const schemas = {
@@ -179,6 +180,10 @@ const schemas = {
           size: { type: 'string', example: '42' },
         },
       },
+      boothSessionToken: {
+        type: 'string',
+        description: 'Required when adding from booth inventory. The token is returned by code/QR resolution and binds the cart to one booth.',
+      },
     },
   },
   QuantityRequest: {
@@ -212,7 +217,22 @@ const schemas = {
       },
       deliveryNotes: { type: 'string' },
       scheduledDeliveryAt: { type: 'string', format: 'date-time' },
+      paymentMode: { type: 'string', enum: ['pay_now', 'pay_on_delivery'], default: 'pay_now' },
+      boothSessionToken: {
+        type: 'string',
+        description: 'Current booth session. Required for checkout when the cart belongs to a booth.',
+      },
     },
+  },
+  BoothCodeRequest: {
+    type: 'object',
+    required: ['code'],
+    properties: { code: { type: 'string', pattern: '^\\d{6}$', example: '482913' } },
+  },
+  BoothSessionRequest: {
+    type: 'object',
+    required: ['boothSessionToken'],
+    properties: { boothSessionToken: { type: 'string' } },
   },
   DeviceRegisterRequest: {
     type: 'object',
@@ -251,8 +271,8 @@ const schemas = {
     required: ['orderId'],
     properties: {
       orderId: { type: 'string', format: 'uuid' },
-      gateway: { type: 'string', enum: ['paystack', 'nomba'], example: 'paystack' },
-      paymentMethod: { type: 'string', enum: ['card', 'bank_transfer', 'ussd'], example: 'card' },
+      gateway: { type: 'string', enum: ['opay'], example: 'opay' },
+      paymentMethod: { type: 'string', enum: ['card', 'bank_transfer', 'ussd', 'pos'], example: 'card' },
     },
   },
   VendorRegistrationRequest: {
@@ -345,7 +365,7 @@ const schemas = {
     properties: {
       status: {
         type: 'string',
-        enum: ['pending', 'confirmed', 'processing', 'packed', 'picked_up', 'in_transit', 'delivered', 'cancelled', 'returned', 'refunded'],
+        enum: ['awaiting_payment', 'pending', 'confirmed', 'shipped', 'delivered', 'cancelled', 'returned', 'refunded'],
       },
     },
   },
@@ -452,6 +472,16 @@ function guestHeader() {
   };
 }
 
+function boothSessionHeader(required = true) {
+  return {
+    name: 'X-Booth-Session',
+    in: 'header',
+    required,
+    schema: { type: 'string' },
+    description: 'Short-lived signed booth session returned after resolving a six-digit code or scanning a booth QR. It must match the cart booth for adding items and checkout.',
+  };
+}
+
 function op(tag, summary, options = {}) {
   return {
     tags: [tag],
@@ -510,16 +540,20 @@ add('get', `${apiPrefix}/vendors/{id}`, op('Public Marketplace', 'Get vendor det
 add('get', `${apiPrefix}/booths`, op('Public Marketplace', 'List active booths', { public: true }));
 add('get', `${apiPrefix}/booths/nearby`, op('Public Marketplace', 'List nearby booths', { public: true, parameters: [query('lat', { type: 'number' }), query('lng', { type: 'number' })] }));
 add('get', `${apiPrefix}/booths/{id}`, op('Public Marketplace', 'Get booth detail', { public: true, parameters: [param('id', 'Booth id')] }));
+add('get', `${apiPrefix}/booths/scan/{publicId}`, op('Public Marketplace', 'Resolve a booth QR and return active approved inventory', { public: true, parameters: [param('publicId', 'Stable booth QR public id'), query('token')] }));
+add('post', `${apiPrefix}/booths/resolve`, op('Public Marketplace', 'Resolve a six-digit booth access code and return normalized inventory, represented categories, and a short-lived booth session', { public: true, requestBody: body('BoothCodeRequest') }));
+add('post', `${apiPrefix}/booths/scan-session`, op('Public Marketplace', 'Reopen the authorized booth catalog and roll its short-lived session', { public: true, requestBody: body('BoothSessionRequest') }));
+add('post', `${apiPrefix}/booths/scan-session/products/{productId}`, op('Public Marketplace', 'Get one approved product from the authorized booth inventory and roll its session', { public: true, parameters: [param('productId', 'Product id')], requestBody: body('BoothSessionRequest') }));
 add('get', `${apiPrefix}/search`, op('Public Marketplace', 'Search products and vendors', { public: true, parameters: [query('q')] }));
 add('get', `${apiPrefix}/search/suggestions`, op('Public Marketplace', 'Get search suggestions', { public: true, parameters: [query('q')] }));
 
 // Customer
-add('get', `${apiPrefix}/cart`, op('Customer Cart', 'Get current cart', { parameters: [guestHeader()] }));
+add('get', `${apiPrefix}/cart`, op('Customer Cart', 'Get the enriched booth-aware cart, stock availability, and booth-session validity', { parameters: [guestHeader(), boothSessionHeader(false)] }));
 add('post', `${apiPrefix}/cart/items`, op('Customer Cart', 'Add item to cart', { parameters: [guestHeader()], requestBody: body('CartItemRequest') }));
 add('patch', `${apiPrefix}/cart/items/{itemId}`, op('Customer Cart', 'Update cart item quantity', { parameters: [guestHeader(), param('itemId', 'Cart item id')], requestBody: body('QuantityRequest') }));
 add('delete', `${apiPrefix}/cart/items/{itemId}`, op('Customer Cart', 'Remove item from cart', { parameters: [guestHeader(), param('itemId', 'Cart item id')] }));
 add('delete', `${apiPrefix}/cart`, op('Customer Cart', 'Clear current cart', { parameters: [guestHeader()] }));
-add('post', `${apiPrefix}/checkout`, op('Customer Orders', 'Create order from current cart', { parameters: [guestHeader()], requestBody: body('CheckoutRequest') }));
+add('post', `${apiPrefix}/checkout`, op('Customer Orders', 'Create order from current cart after revalidating booth inventory, session, variants, and stock', { parameters: [guestHeader()], requestBody: body('CheckoutRequest') }));
 add('get', `${apiPrefix}/orders`, op('Customer Orders', 'List current shopper or guest orders', { parameters: [guestHeader()] }));
 add('get', `${apiPrefix}/orders/{id}`, op('Customer Orders', 'Get current shopper or guest order detail', { parameters: [guestHeader(), param('id', 'Order id')] }));
 add('post', `${apiPrefix}/orders/{id}/cancel`, op('Customer Orders', 'Cancel current shopper or guest order', { parameters: [guestHeader(), param('id', 'Order id')], requestBody: { required: false, content: { 'application/json': { schema: { type: 'object', properties: { reason: { type: 'string' } } } } } } }));
@@ -528,9 +562,15 @@ add('post', `${apiPrefix}/negotiations`, op('Negotiations', 'Start negotiation',
 add('get', `${apiPrefix}/negotiations/{id}`, op('Negotiations', 'Get negotiation detail', { parameters: [guestHeader(), param('id', 'Negotiation id')] }));
 add('post', `${apiPrefix}/negotiations/{id}/counter`, op('Negotiations', 'Counter negotiation offer', { parameters: [guestHeader(), param('id', 'Negotiation id')], requestBody: body('NegotiationCounterRequest') }));
 add('post', `${apiPrefix}/negotiations/{id}/accept`, op('Negotiations', 'Accept negotiation counter', { parameters: [guestHeader(), param('id', 'Negotiation id')] }));
-add('post', `${apiPrefix}/payments/initialize`, op('Payments', 'Initialize payment with provider-ready stub', { parameters: [guestHeader()], requestBody: body('PaymentInitializeRequest') }));
-add('post', `${apiPrefix}/payments/verify/{reference}`, op('Payments', 'Verify payment reference', { parameters: [guestHeader(), param('reference', 'Payment transaction reference')] }));
+add('post', `${apiPrefix}/payments/initialize`, op('Payments', 'Initialize OPay Hosted Cashier for Pay Now. Returns 503 until merchant credentials are configured.', { parameters: [guestHeader()], requestBody: body('PaymentInitializeRequest') }));
+add('post', `${apiPrefix}/payments/verify/{reference}`, op('Payments', 'Query signed OPay provider status; this endpoint never trusts customer-supplied success', { parameters: [guestHeader(), param('reference', 'Payment transaction reference')] }));
 add('get', `${apiPrefix}/payments/orders/{orderId}/status`, op('Payments', 'Get order payment status', { parameters: [guestHeader(), param('orderId', 'Order id')] }));
+add('get', `${apiPrefix}/payment-methods/capability`, op('Payments', 'Check whether OPay reusable tokenization is enabled', { parameters: [guestHeader()] }));
+add('get', `${apiPrefix}/payment-methods`, op('Payments', 'List masked saved payment methods', { parameters: [guestHeader()] }));
+add('delete', `${apiPrefix}/payment-methods/{id}`, op('Payments', 'Revoke a saved payment method token', { parameters: [param('id', 'Saved payment method id')] }));
+add('post', `${apiPrefix}/orders/{id}/refunds`, op('Customer Orders', 'Request a support-reviewed refund against captured funds', { parameters: [guestHeader(), param('id', 'Order id')] }));
+add('post', `${apiPrefix}/support/account-deletion`, op('Authentication', 'Open a support-managed deletion request with a cooling-off period'));
+add('post', `${apiPrefix}/analytics/checkout-events`, op('Payments', 'Record a non-sensitive checkout funnel event', { parameters: [guestHeader()] }));
 add('get', `${apiPrefix}/notifications`, op('Notifications', 'List notifications', { parameters: [guestHeader()] }));
 add('patch', `${apiPrefix}/notifications/read-all`, op('Notifications', 'Mark all notifications as read', { parameters: [guestHeader()] }));
 add('delete', `${apiPrefix}/notifications/clear`, op('Notifications', 'Clear all notifications', { parameters: [guestHeader()] }));
@@ -548,6 +588,7 @@ add('get', `${apiPrefix}/vendors/me/products`, op('Vendor Portal', 'List current
 add('post', `${apiPrefix}/vendors/me/products`, op('Vendor Portal', 'Create vendor product for review', { requestBody: body('ProductRequest') }));
 add('patch', `${apiPrefix}/vendors/me/products/{id}`, op('Vendor Portal', 'Update vendor product and return to review', { parameters: [param('id', 'Product id')], requestBody: body('ProductRequest', false) }));
 add('get', `${apiPrefix}/vendors/me/orders`, op('Vendor Portal', 'List current vendor orders'));
+add('post', `${apiPrefix}/vendors/me/orders/{orderId}/fulfilment/{decision}`, op('Vendor Portal', 'Confirm or reject reserved stock for this vendor group', { parameters: [param('orderId', 'Order id'), param('decision', 'confirmed or rejected')] }));
 add('get', `${apiPrefix}/vendors/me/settlements`, op('Vendor Portal', 'List current vendor settlements and summary'));
 add('patch', `${apiPrefix}/vendors/me/bank-details`, op('Vendor Portal', 'Update current vendor bank details', { requestBody: body('VendorBankRequest') }));
 
@@ -559,7 +600,7 @@ add('post', `${apiPrefix}/logistics/driver/jobs/{id}/verify-otp`, op('Logistics'
 add('get', `${apiPrefix}/logistics/field-agent/profile`, op('Logistics', 'Get current field-agent profile'));
 add('post', `${apiPrefix}/upload/image`, op('Uploads', 'Upload one image', { requestBody: { required: true, content: { 'multipart/form-data': { schema: { type: 'object', required: ['image'], properties: { image: { type: 'string', format: 'binary' } } } } } } }));
 add('post', `${apiPrefix}/upload/images`, op('Uploads', 'Upload multiple images', { requestBody: { required: true, content: { 'multipart/form-data': { schema: { type: 'object', required: ['images'], properties: { images: { type: 'array', items: { type: 'string', format: 'binary' } } } } } } } }));
-add('post', `${apiPrefix}/webhooks/payments/{gateway}`, op('Webhooks', 'Receive payment provider webhook', { public: true, parameters: [param('gateway', 'Payment gateway: paystack or nomba')], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } } } }));
+add('post', `${apiPrefix}/webhooks/payments/{gateway}`, op('Webhooks', 'Receive authenticated OPay webhook; legacy providers are read-only', { public: true, parameters: [param('gateway', 'Payment gateway: opay')], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } } } }));
 
 // Admin
 add('post', `${apiPrefix}/admin/auth/login`, op('Admin Auth', 'Login admin or super-admin', { public: true, requestBody: body('LoginRequest') }));
@@ -584,6 +625,7 @@ add('patch', `${apiPrefix}/admin/products/{id}/review`, op('Admin Products', 'Ap
 add('get', `${apiPrefix}/admin/orders`, op('Admin Orders', 'List orders', { parameters: [query('page', { type: 'integer' }), query('limit', { type: 'integer' }), query('status')] }));
 add('get', `${apiPrefix}/admin/orders/{id}`, op('Admin Orders', 'Get order detail', { parameters: [param('id', 'Order id')] }));
 add('patch', `${apiPrefix}/admin/orders/{id}/status`, op('Admin Orders', 'Update order status', { parameters: [param('id', 'Order id')], requestBody: body('OrderStatusRequest') }));
+add('post', `${apiPrefix}/admin/orders/{orderId}/fulfilments/{vendorId}/{decision}`, op('Admin Commerce', 'Audited admin vendor-stock decision override', { parameters: [param('orderId', 'Order id'), param('vendorId', 'Vendor id'), param('decision', 'confirmed or rejected')] }));
 add('get', `${apiPrefix}/admin/dispatch/active`, op('Admin Dispatch', 'List active deliveries'));
 add('get', `${apiPrefix}/admin/dispatch`, op('Admin Dispatch', 'List delivery records', { parameters: [query('page', { type: 'integer' }), query('limit', { type: 'integer' })] }));
 add('get', `${apiPrefix}/admin/dispatch/drivers`, op('Admin Dispatch', 'List active drivers', { parameters: [query('stateCode')] }));
@@ -596,7 +638,22 @@ add('get', `${apiPrefix}/admin/booths/analytics`, op('Admin Booths', 'Get booth 
 add('get', `${apiPrefix}/admin/booths/{id}`, op('Admin Booths', 'Get booth detail', { parameters: [param('id', 'Booth id')] }));
 add('post', `${apiPrefix}/admin/booths`, op('Admin Booths', 'Provision booth (super-admin)', { requestBody: body('BoothRequest') }));
 add('patch', `${apiPrefix}/admin/booths/{id}/status`, op('Admin Booths', 'Toggle booth status', { parameters: [param('id', 'Booth id')], requestBody: body('BoothStatusRequest', false) }));
+add('post', `${apiPrefix}/admin/booths/{id}/qr/rotate`, op('Admin Commerce', 'Rotate and revoke the previous booth QR token (super-admin)', { parameters: [param('id', 'Booth id')] }));
+add('post', `${apiPrefix}/admin/booths/{id}/code/rotate`, op('Admin Commerce', 'Rotate and reveal a new six-digit booth code once (super-admin)', { parameters: [param('id', 'Booth id')] }));
+add('put', `${apiPrefix}/admin/booths/{id}/attendant`, op('Admin Commerce', 'Assign an existing attendant or create and assign a phone-enabled field agent', { parameters: [param('id', 'Booth id')] }));
+add('delete', `${apiPrefix}/admin/booths/{id}/attendant`, op('Admin Commerce', 'Release the current booth attendant', { parameters: [param('id', 'Booth id')] }));
+add('put', `${apiPrefix}/admin/booths/{id}/inventory`, op('Admin Commerce', 'Replace active booth product assignments', { parameters: [param('id', 'Booth id')] }));
+add('get', `${apiPrefix}/admin/support/deletion-requests`, op('Admin Commerce', 'List support-managed account deletion requests'));
+add('patch', `${apiPrefix}/admin/support/deletion-requests/{id}`, op('Admin Commerce', 'Verify, approve, cancel, or anonymize a deletion request', { parameters: [param('id', 'Deletion request id')] }));
+add('get', `${apiPrefix}/admin/analytics/checkout`, op('Admin Commerce', 'Get Pay Now versus POD checkout funnel analytics'));
 add('get', `${apiPrefix}/admin/financials`, op('Admin Financials', 'Get financial dashboard (super-admin)'));
+add('get', `${apiPrefix}/admin/financials/payments`, op('Admin Financials', 'List gateway payments and collection obligations'));
+add('get', `${apiPrefix}/admin/financials/escrow-ledger`, op('Admin Financials', 'List immutable Hook escrow ledger entries'));
+add('get', `${apiPrefix}/admin/financials/reconciliation`, op('Admin Financials', 'List provider reconciliation mismatches'));
+add('post', `${apiPrefix}/admin/financials/payments/{paymentId}/refund`, op('Admin Financials', 'Issue an idempotent OPay refund (super-admin)', { parameters: [param('paymentId', 'Payment id')] }));
+add('get', `${apiPrefix}/admin/financials/refund-requests`, op('Admin Financials', 'List support-reviewed customer refund requests'));
+add('patch', `${apiPrefix}/admin/financials/refund-requests/{id}/review`, op('Admin Financials', 'Assign, review, or reject a refund request', { parameters: [param('id', 'Refund request id')] }));
+add('post', `${apiPrefix}/admin/financials/refund-requests/{id}/approve`, op('Admin Financials', 'Approve and submit a provider refund (super-admin)', { parameters: [param('id', 'Refund request id')] }));
 add('get', `${apiPrefix}/admin/financials/settlements`, op('Admin Financials', 'List settlements (super-admin)', { parameters: [query('page', { type: 'integer' }), query('limit', { type: 'integer' }), query('status')] }));
 add('post', `${apiPrefix}/admin/financials/settlements/trigger/{vendorId}`, op('Admin Financials', 'Trigger settlement payout stub (super-admin)', { parameters: [param('vendorId', 'Vendor id')], requestBody: body('SettlementTriggerRequest', false) }));
 add('get', `${apiPrefix}/admin/financials/audit-logs`, op('Admin Financials', 'List financial audit logs (super-admin)'));

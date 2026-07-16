@@ -84,7 +84,7 @@ export class MongoRepository<T extends { id?: string }> {
       const doc = await this.model.findByIdAndUpdate(
         id,
         { $set: withoutDocumentId(payload) },
-        { new: true, runValidators: true, upsert: false },
+        { returnDocument: 'after', runValidators: true, upsert: false },
       );
       if (doc) return toPlain<T>(doc);
       const created = await this.model.create({ ...withoutDocumentId(payload), _id: id });

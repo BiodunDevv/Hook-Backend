@@ -14,6 +14,11 @@ export type Permission =
   | 'field_agents.view'
   | 'booths.view'   | 'booths.edit'
   | 'financials.view'
+  | 'financials.refund' | 'financials.reconcile'
+  | 'refunds.view' | 'refunds.manage'
+  | 'booths.inventory'
+  | 'deletions.view' | 'deletions.manage'
+  | 'analytics.checkout'
   | 'reports.view'
   | 'ai_negotiation.view'
   | 'settings.view';

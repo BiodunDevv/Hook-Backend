@@ -85,6 +85,7 @@ export class AuthService {
         isActive: true,
         isEmailVerified: true,
         avatarUrl: true,
+        accountStatus: true,
       },
     });
 
@@ -94,6 +95,9 @@ export class AuthService {
 
     if (!user.isActive) {
       throw new HttpError(401, 'Account not activated. Complete your profile first.');
+    }
+    if (user.accountStatus === 'pending_password') {
+      throw new HttpError(403, 'Set your password from the email sent after checkout before signing in');
     }
 
     if (
@@ -399,6 +403,9 @@ export class AuthService {
 
     user.password = await hashPassword(password);
     user.refreshToken = undefined;
+    user.accountStatus = 'active';
+    user.isActive = true;
+    user.isEmailVerified = true;
     await Promise.all([
       this.markOtpUsed(otp.id),
       this.userRepo.save(user),

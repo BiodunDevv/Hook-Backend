@@ -8,9 +8,11 @@ import { User } from '@models/users/user.model';
 import { Vendor } from '@models/vendors/vendor.model';
 import { VendorService } from '@services/vendor.service';
 import { routeParam } from '@lib/api-utils';
-import { sendCreated, sendSuccess } from '@utils/http';
+import { HttpError, sendCreated, sendSuccess } from '@utils/http';
+import { FulfilmentService } from '@services/fulfilment.service';
 
 export class VendorController {
+  private readonly fulfilments = new FulfilmentService();
   private readonly vendors = new VendorService(
     AppDataSource.getRepository(User),
     AppDataSource.getRepository(Vendor),
@@ -54,5 +56,17 @@ export class VendorController {
 
   bankDetails = async (req: Request, res: Response) => {
     sendSuccess(res, await this.vendors.updateBank(req.user!.sub, req.body));
+  };
+
+  decideFulfilment = async (req: Request, res: Response) => {
+    const vendor = await AppDataSource.getRepository(Vendor).findOne({ where: { ownerId: req.user!.sub } });
+    if (!vendor) throw new HttpError(404, 'Vendor profile not found');
+    const decision = routeParam(req.params.decision);
+    if (!['confirmed', 'rejected'].includes(decision)) throw new HttpError(400, 'Invalid fulfilment decision');
+    sendSuccess(res, await this.fulfilments.decide({
+      orderId: routeParam(req.params.orderId), vendorId: vendor.id,
+      decision: decision as 'confirmed' | 'rejected', actorId: req.user!.sub,
+      reason: req.body.reason, idempotencyKey: req.body.idempotencyKey,
+    }));
   };
 }

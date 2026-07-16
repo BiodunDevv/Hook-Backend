@@ -49,6 +49,19 @@ export function assertSafeEnvironment() {
       requireEnv('CLOUDINARY_CLOUD_NAME');
       requireEnv('CLOUDINARY_UPLOAD_PRESET');
     }
+    for (const name of ['BOOTH_ACCESS_SECRET', 'BOOTH_SESSION_SECRET']) {
+      const value = requireEnv(name);
+      if (value.length < 32 || value.startsWith('replace-with-')) {
+        throw new Error(`${name} must be an independent production secret with at least 32 characters`);
+      }
+    }
+    if (process.env.OPAY_PAYIN_MODE === 'live') {
+      requireEnv('OPAY_PAYIN_PUBLIC_KEY');
+      requireEnv('OPAY_PAYIN_SECRET_KEY');
+      requireEnv('OPAY_PAYIN_MERCHANT_ID');
+      const callbackUrl = requireEnv('OPAY_PAYIN_CALLBACK_URL');
+      if (!callbackUrl.startsWith('https://')) throw new Error('OPAY_PAYIN_CALLBACK_URL must use HTTPS in live mode');
+    }
   }
 }
 

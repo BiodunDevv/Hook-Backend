@@ -1,12 +1,18 @@
 import { Request, Response } from 'express';
 import { ProductStatus } from '@lib/constants';
 import { getPagination, paginated } from '@lib/api-utils';
+import { mongoIn } from '@lib/mongo-repository';
 import { AppDataSource } from '@config/data-source';
 import { Booth } from '@models/booths/booth.model';
+import { BoothInventory } from '@models/booths/booth-inventory.model';
+import { HttpError } from '@utils/http';
 import { Category } from '@models/categories/category.model';
+import { OperationalState } from '@models/operations/operational-state.model';
 import { Product } from '@models/products/product.model';
 import { Vendor } from '@models/vendors/vendor.model';
+import { normalizeStateCode } from '@services/operational-state.service';
 import { sendSuccess } from '@utils/http';
+import { BoothAccessService } from '@services/booth-access.service';
 
 const routeParam = (value: string | string[] | undefined) =>
   Array.isArray(value) ? value[0] : value || '';
@@ -16,6 +22,24 @@ export class PublicController {
   private readonly categories = AppDataSource.getRepository(Category);
   private readonly vendors = AppDataSource.getRepository(Vendor);
   private readonly booths = AppDataSource.getRepository(Booth);
+  private readonly operationalStates = AppDataSource.getRepository(OperationalState);
+  private readonly boothInventory = AppDataSource.getRepository(BoothInventory);
+  private readonly boothAccess = new BoothAccessService();
+
+  // Real per-vendor approved-product counts — grouped in memory to avoid N+1 queries,
+  // same in-memory-join pattern used by categories.controller.ts / products.controller.ts.
+  private async attachProductCounts<T extends { id: string }>(vendorRows: T[]): Promise<(T & { productCount: number })[]> {
+    if (!vendorRows.length) return [];
+    const vendorIds = vendorRows.map((vendor) => vendor.id);
+    const approvedProducts = await this.products.find({
+      where: { status: ProductStatus.APPROVED, vendorId: mongoIn(vendorIds) },
+    });
+    const counts = new Map<string, number>();
+    for (const product of approvedProducts as any[]) {
+      counts.set(product.vendorId, (counts.get(product.vendorId) || 0) + 1);
+    }
+    return vendorRows.map((vendor) => ({ ...vendor, productCount: counts.get(vendor.id) || 0 }));
+  }
 
   getProducts = async (req: Request, res: Response) => {
     const { page, limit, skip } = getPagination(req.query);
@@ -66,15 +90,38 @@ export class PublicController {
     sendSuccess(res, await this.booths.findOne({ where: { id: routeParam(req.params.id), isActive: true } }));
   };
 
+  scanBooth = async (req: Request, res: Response) => {
+    const publicId = routeParam(req.params.publicId);
+    const token = typeof req.query.token === 'string' ? req.query.token : '';
+    sendSuccess(res, await this.boothAccess.resolveQr(publicId, token));
+  };
+
+  resolveBooth = async (req: Request, res: Response) => {
+    sendSuccess(res, await this.boothAccess.resolveCode(req.body.code));
+  };
+
+  boothSession = async (req: Request, res: Response) => {
+    sendSuccess(res, await this.boothAccess.resolveSession(req.body.boothSessionToken));
+  };
+
+  boothProduct = async (req: Request, res: Response) => {
+    sendSuccess(res, await this.boothAccess.resolveProduct(req.body.boothSessionToken, routeParam(req.params.productId)));
+  };
+
   getVendors = async (req: Request, res: Response) => {
     const { page, limit, skip } = getPagination(req.query);
+    const where: Record<string, unknown> = { isApproved: true, isActive: true };
+    const stateCode = normalizeStateCode(req.query.stateCode);
+    if (stateCode) where.stateCode = stateCode;
+
     const [data, total] = await this.vendors.findAndCount({
-      where: { isApproved: true, isActive: true },
+      where,
       order: { createdAt: 'DESC' },
       skip,
       take: limit,
     });
-    sendSuccess(res, paginated(data, total, page, limit));
+    const withCounts = await this.attachProductCounts(data as any[]);
+    sendSuccess(res, paginated(withCounts, total, page, limit));
   };
 
   getVendor = async (req: Request, res: Response) => {
@@ -84,14 +131,27 @@ export class PublicController {
     }));
   };
 
-  homeFeed = async (_req: Request, res: Response) => {
+  homeFeed = async (req: Request, res: Response) => {
+    const vendorWhere: Record<string, unknown> = { isApproved: true, isActive: true };
+    const stateCode = normalizeStateCode(req.query.stateCode);
+    if (stateCode) vendorWhere.stateCode = stateCode;
+
     const [featuredProducts, vendors, categories, booths] = await Promise.all([
       this.products.find({ where: { status: ProductStatus.APPROVED }, relations: { vendor: true, category: true }, take: 12, order: { createdAt: 'DESC' } }),
-      this.vendors.find({ where: { isApproved: true, isActive: true }, take: 8, order: { createdAt: 'DESC' } }),
+      this.vendors.find({ where: vendorWhere, take: 8, order: { createdAt: 'DESC' } }),
       this.categories.find({ where: { isActive: true }, take: 12, order: { sortOrder: 'ASC', name: 'ASC' } }),
       this.booths.find({ where: { isActive: true }, take: 6, order: { createdAt: 'DESC' } }),
     ]);
-    sendSuccess(res, { featuredProducts, vendors, categories, booths });
+    const vendorsWithCounts = await this.attachProductCounts(vendors as any[]);
+    sendSuccess(res, { featuredProducts, vendors: vendorsWithCounts, categories, booths });
+  };
+
+  getOperatingStates = async (_req: Request, res: Response) => {
+    const states = await this.operationalStates.find({
+      where: { isEnabled: true },
+      order: { sortOrder: 'ASC' },
+    });
+    sendSuccess(res, (states as any[]).map((state) => ({ code: state.code, name: state.name })));
   };
 
   getNearbyBooths = async (_req: Request, res: Response) => {

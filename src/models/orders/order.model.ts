@@ -1,4 +1,4 @@
-import { OrderStatus, PaymentStatus } from '@lib/constants';
+import { OrderStatus, OrderType, PaymentMode, PaymentStatus } from '@lib/constants';
 import { BaseEntity, createModel, createSchema } from '@models/base.model';
 
 export interface Order extends BaseEntity {
@@ -18,6 +18,15 @@ export interface Order extends BaseEntity {
   vendorCount: number;
   status: OrderStatus;
   paymentStatus: PaymentStatus;
+  paymentMode: PaymentMode;
+  orderType: OrderType;
+  giftRecipient?: { name: string; email: string; phone: string; address: Order['deliveryAddress']; message?: string };
+  boothId?: string;
+  boothSnapshot?: { name: string; accessCodeMasked: string; source: 'code' | 'qr' };
+  attendantSnapshot?: { userId: string; name: string; email: string; phone: string };
+  deliverySubsidy: number;
+  vendorConfirmationDeadline?: Date;
+  partialFulfilment: boolean;
   deliveryAddress: {
     street: string;
     city: string;
@@ -46,6 +55,15 @@ const OrderSchema = createSchema<Order>({
   vendorCount: { type: Number, default: 0 },
   status: { type: String, enum: Object.values(OrderStatus), default: OrderStatus.PENDING, index: true },
   paymentStatus: { type: String, enum: Object.values(PaymentStatus), default: PaymentStatus.UNPAID, index: true },
+  paymentMode: { type: String, enum: Object.values(PaymentMode), default: PaymentMode.PAY_NOW, index: true },
+  orderType: { type: String, enum: Object.values(OrderType), default: OrderType.STANDARD, index: true },
+  giftRecipient: { type: Object },
+  boothId: { type: String, index: true },
+  boothSnapshot: { type: Object },
+  attendantSnapshot: { type: Object },
+  deliverySubsidy: { type: Number, default: 0 },
+  vendorConfirmationDeadline: { type: Date, index: true },
+  partialFulfilment: { type: Boolean, default: false },
   deliveryAddress: { type: Object, required: true },
   deliveryNotes: { type: String },
   scheduledDeliveryAt: { type: Date },
@@ -57,5 +75,7 @@ const OrderSchema = createSchema<Order>({
 
 OrderSchema.index({ userId: 1, status: 1 });
 OrderSchema.index({ guestId: 1, status: 1 });
+OrderSchema.index({ boothId: 1, createdAt: -1 });
+OrderSchema.index({ boothId: 1, paymentStatus: 1, status: 1 });
 
 export const Order = createModel<Order>('Order', OrderSchema);

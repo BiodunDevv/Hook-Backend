@@ -8,6 +8,9 @@ export interface Cart extends BaseEntity {
   deliveryFee: number;
   total: number;
   isCheckedOut: boolean;
+  boothId?: string;
+  boothSessionVersion?: number;
+  boothSource?: 'code' | 'qr';
   user?: any;
 }
 
@@ -18,6 +21,9 @@ const CartSchema = createSchema<Cart>({
   deliveryFee: { type: Number, default: 0 },
   total: { type: Number, default: 0 },
   isCheckedOut: { type: Boolean, default: false },
+  boothId: { type: String, index: true },
+  boothSessionVersion: { type: Number },
+  boothSource: { type: String, enum: ['code', 'qr'] },
   deletedAt: { type: Date },
 });
 

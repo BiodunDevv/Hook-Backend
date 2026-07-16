@@ -48,11 +48,31 @@ Admins have all permissions. Support staff only have their explicitly assigned p
 
 ### Vendors (approved, with owner accounts)
 
-| Owner email | Business | Tier | Commission |
-|---|---|---|---|
-| `vendor.one@hook.africa` | Lagos Sneaker Lab | tier_1 | 12% |
-| `vendor.two@hook.africa` | Mainland Kicks Depot | tier_2 | 15% |
-| `vendor.three@hook.africa` | Balogun Market Select | tier_3 | 18% |
+Each vendor has a professional Unsplash storefront/market photo (`imageUrl`) — this is what renders on the mobile app's Home screen vendor cards.
+
+| Owner email | Business | Tier | Commission | State | Image |
+|---|---|---|---|---|---|
+| `vendor.one@hook.africa` | Balogun Sneaker Market | tier_1 | 12% | Lagos | Unsplash `photo-1555529771-835f59fc5efe` |
+| `vendor.two@hook.africa` | Allen Avenue Fashion Hub | tier_2 | 15% | Lagos | Unsplash `photo-1607083206968-13611e3d76db` |
+| `vendor.three@hook.africa` | Yaba Fabric & Textile Market | tier_3 | 18% | Lagos | Unsplash `photo-1567401893414-76b7b1e5a7a5` |
+| `vendor.four@hook.africa` | Computer Village Gadget Mart | tier_2 | 15% | Lagos | Unsplash `photo-1441984904996-e0b6ba687e04` |
+| `vendor.five@hook.africa` | Surulere Dress & Style House | tier_3 | 18% | Lagos | Unsplash `photo-1560243563-062bfc001d68` |
+| `vendor.six@hook.africa` | Sango Ota Trade Fair | tier_2 | 15% | Ogun | Unsplash `photo-1445205170230-053b83016050` |
+| `vendor.seven@hook.africa` | Port Harcourt Waterfront Market | tier_3 | 18% | Rivers | Unsplash `photo-1483985988355-763728e1935b` |
+
+### Operating States
+
+5 of the 37 Nigerian states + FCT are enabled by default so the mobile state dropdown has real multi-state data to filter, not just Lagos-vs-empty:
+
+| Code | State | Vendors |
+|---|---|---|
+| `LA` | Lagos | 5 |
+| `OG` | Ogun | 1 |
+| `RI` | Rivers | 1 |
+| `OY` | Oyo | 0 (enabled, no vendors yet) |
+| `FC` | Federal Capital Territory | 0 (enabled, no vendors yet) |
+
+All other states exist in the catalog but are disabled (`isEnabled: false`) — selecting one on mobile correctly shows an empty vendor list. Enable more via `PATCH /admin/operations/states/:code`. The mobile Home screen defaults to **All States** (no `stateCode` filter), showing all 7 seeded vendors regardless of state.
 
 ### Customers (shoppers)
 
@@ -85,17 +105,21 @@ Each booth has an Unsplash preview image and operating hours.
 
 ## Categories
 
-Three active categories, each with a free Unsplash image as its display icon. Categories are managed by super admins at `/dashboard/categories`; staff are assigned to them from the Staff page.
+Five active categories, each with a free Unsplash image as its display icon. Categories are managed by super admins at `/dashboard/categories`; staff are assigned to them from the Staff page.
 
 | Category | Slug | Icon |
 |---|---|---|
 | Sneakers | `sneakers` | Unsplash `photo-1542291026-7eec264c27ff` |
 | Streetwear | `streetwear` | Unsplash `photo-1523398002811-999ca8dec234` |
 | Accessories | `accessories` | Unsplash `photo-1553062407-98eeb64c6a62` |
+| Dresses | `dresses` | Unsplash `photo-1595777457583-95e059d581b8` |
+| Bags | `bags` | Unsplash `photo-1566150905458-1bf1fc113f0d` |
+
+Only Sneakers/Streetwear/Accessories have seeded products today — Dresses and Bags are real, empty categories (correctly show 0 items rather than fabricated counts).
 
 ## Catalog & Operations Data
 
-- **15 approved products** with realistic prices, stock levels, colors, sizes, Hook IDs, and multiple Unsplash image previews — spread across all three categories (10 sneakers, 2 streetwear, 3 accessories) so category-manager displays have variety.
+- **15 approved products** with realistic prices, stock levels, colors, sizes, Hook IDs, and multiple Unsplash image previews — spread across the Sneakers/Streetwear/Accessories categories (10 sneakers, 2 streetwear, 3 accessories) and round-robin across all 5 vendors, so category-manager and vendor-card displays have variety.
 - **6 pending field uploads** (`pending_approval`, `source: field_agent`) attributed to the seeded agents — these populate the QA Review Queue. One title ("Dior Replica Quilted Tote") intentionally trips the counterfeit auto-flag so the flagged-review flow can be tested.
 - **6 orders** with line items, payments (Paystack-stubbed), logistics with tracking paths, and per-vendor settlement records across the full status range (pending → delivered).
 - **8 AI negotiations** covering accepted, active, declined, and expired states with message history.

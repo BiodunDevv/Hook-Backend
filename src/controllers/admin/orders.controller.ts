@@ -10,12 +10,14 @@ export class AdminOrdersController {
 
   private async enrichOrder(order: any) {
     if (!order) return order;
-    const [items, payment, logistics] = await Promise.all([
+    const [items, payment, logistics, fulfilments, escrowLedger] = await Promise.all([
       adminRepos.orderItems().find({ where: { orderId: order.id }, relations: { product: true, vendor: true } }),
       adminRepos.payments().findOne({ where: { orderId: order.id } }),
       adminRepos.logistics().findOne({ where: { orderId: order.id }, relations: { driver: true } }),
+      adminRepos.fulfilments().find({ where: { orderId: order.id }, relations: { vendor: true } }),
+      adminRepos.escrowLedger().find({ where: { orderId: order.id }, order: { createdAt: 'ASC' } }),
     ]);
-    return { ...order, items, payment, logistics };
+    return { ...order, items, payment, logistics, fulfilments, escrowLedger };
   }
 
   list = async (req: Request, res: Response) => {
@@ -35,6 +37,9 @@ export class AdminOrdersController {
       }
     }
     if (typeof req.query.paymentStatus === 'string') where.paymentStatus = req.query.paymentStatus;
+    if (typeof req.query.paymentMode === 'string') where.paymentMode = req.query.paymentMode;
+    if (typeof req.query.orderType === 'string') where.orderType = req.query.orderType;
+    if (typeof req.query.boothId === 'string') where.boothId = req.query.boothId;
     const all = await adminRepos.orders().find({ where, relations: { user: true }, order: { createdAt: 'DESC' } });
     let filtered = all as any[];
     if (typeof req.query.driverId === 'string') {
@@ -74,7 +79,17 @@ export class AdminOrdersController {
     const orders = adminRepos.orders();
     const order = await orders.findOne({ where: { id: routeParam(req.params.id) } });
     if (!order) throw new HttpError(404, 'Order not found');
-    order.status = req.body.status || order.status;
+    const next = req.body.status || order.status;
+    const allowed: Record<string, string[]> = {
+      pending: ['cancelled'], confirmed: ['shipped', 'cancelled'], shipped: ['delivered'], delivered: [], cancelled: ['refunded'], refunded: [],
+    };
+    if (next !== order.status && !(allowed[order.status] || []).includes(next)) {
+      throw new HttpError(409, `Order cannot move from ${order.status} to ${next}`);
+    }
+    if (next === OrderStatus.DELIVERED && order.paymentMode === 'pay_on_delivery' && order.paymentStatus !== PaymentStatus.SUCCESSFUL) {
+      throw new HttpError(409, 'Pay on Delivery must be collected before completing delivery');
+    }
+    order.status = next;
     if (order.status === OrderStatus.DELIVERED) order.deliveredAt = new Date();
     await orders.save(order);
     await auditAdminAction(req, 'order.status', 'order', order.id, { status: order.status });

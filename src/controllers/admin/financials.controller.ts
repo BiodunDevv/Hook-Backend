@@ -1,23 +1,60 @@
 import { Request, Response } from 'express';
-import { PaymentStatus, SettlementStatus } from '@lib/constants';
+import { EscrowEventType, PaymentStatus, SettlementStatus } from '@lib/constants';
 import { HttpError, sendSuccess } from '@utils/http';
 import { actor, adminRepos, getPagination, paginated, routeParam } from './admin.helpers';
+import { PaymentService } from '@services/payment.service';
 
 export class AdminFinancialsController {
-  dashboard = async (_req: Request, res: Response) => {
-    const [paymentRows, settlementRows] = await Promise.all([
-      adminRepos.payments().find({ order: { createdAt: 'DESC' }, take: 20 }),
-      adminRepos.settlements().find({ order: { createdAt: 'DESC' }, take: 20, relations: { vendor: true } }),
+  private paymentsService = new PaymentService(adminRepos.payments(), adminRepos.orders(), adminRepos.escrowLedger(), adminRepos.fulfilments());
+  dashboard = async (req: Request, res: Response) => {
+    const boothId = typeof req.query.boothId === 'string' ? req.query.boothId : undefined;
+    const boothOrders = await adminRepos.orders().find({ where: boothId ? { boothId } : {} });
+    const boothOrderIds = new Set(boothOrders.map((order) => order.id));
+    let [paymentRows, settlementRows] = await Promise.all([
+      adminRepos.payments().find({ order: { createdAt: 'DESC' } }),
+      adminRepos.settlements().find({ order: { createdAt: 'DESC' }, relations: { vendor: true } }),
     ]);
+    let ledger = await adminRepos.escrowLedger().find({ order: { createdAt: 'DESC' } });
+    if (boothId) {
+      paymentRows = paymentRows.filter((payment) => Boolean(payment.orderId) && boothOrderIds.has(payment.orderId!));
+      settlementRows = settlementRows.filter((settlement) => Boolean(settlement.orderId) && boothOrderIds.has(settlement.orderId!));
+      ledger = ledger.filter((entry) => Boolean(entry.orderId) && boothOrderIds.has(entry.orderId!));
+    }
     const successful = paymentRows.filter((payment) => payment.status === PaymentStatus.SUCCESSFUL);
     const pendingSettlements = settlementRows.filter((settlement) => settlement.status === SettlementStatus.PENDING_ESCROW);
+    const period = ['24h', '7d', '30d', 'ytd'].includes(String(req.query.period).toLowerCase()) ? String(req.query.period).toLowerCase() : '7d';
+    const now = new Date();
+    const start = period === '24h' ? new Date(now.getTime() - 24 * 60 * 60 * 1000)
+      : period === '30d' ? new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
+        : period === 'ytd' ? new Date(now.getFullYear(), 0, 1)
+          : new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const bucketKey = (date: Date) => period === '24h'
+      ? `${String(date.getHours()).padStart(2, '0')}:00`
+      : period === 'ytd' ? date.toLocaleString('en', { month: 'short' })
+        : date.toLocaleString('en', { month: 'short', day: 'numeric' });
+    const trendMap = new Map<string, { label: string; volume: number; revenue: number }>();
+    for (const payment of successful.filter((row) => row.createdAt >= start)) {
+      const key = bucketKey(payment.createdAt);
+      const row = trendMap.get(key) || { label: key, volume: 0, revenue: 0 };
+      row.volume += payment.amount;
+      row.revenue += Number(payment.splitData?.commission || 0);
+      trendMap.set(key, row);
+    }
     sendSuccess(res, {
       grossVolume: successful.reduce((sum, payment) => sum + payment.amount, 0),
-      platformRevenue: successful.reduce((sum, payment) => sum + payment.gatewayFee, 0),
+      platformRevenue: settlementRows.reduce((sum, settlement) => sum + settlement.commissionAmount, 0),
       escrowBalance: pendingSettlements.reduce((sum, settlement) => sum + settlement.netAmount, 0),
       pendingPayouts: pendingSettlements.reduce((sum, settlement) => sum + settlement.netAmount, 0),
-      recentPayments: paymentRows,
-      recentSettlements: settlementRows,
+      heldFunds: ledger.filter((row) => row.type === EscrowEventType.HELD).reduce((sum, row) => sum + row.amount, 0),
+      refundQueue: ledger.filter((row) => row.type === EscrowEventType.REFUND_PENDING).reduce((sum, row) => sum + row.amount, 0),
+      availablePayouts: ledger.filter((row) => row.type === EscrowEventType.ELIGIBLE_FOR_PAYOUT).reduce((sum, row) => sum + row.amount, 0),
+      gatewayFees: successful.reduce((sum, payment) => sum + payment.gatewayFee, 0),
+      deliverySubsidy: boothOrders.reduce((sum, order) => sum + Number(order.deliverySubsidy || 0), 0),
+      boothId: boothId || null,
+      period,
+      trend: Array.from(trendMap.values()),
+      recentPayments: paymentRows.slice(0, 20),
+      recentSettlements: settlementRows.slice(0, 20),
     });
   };
 
@@ -61,5 +98,39 @@ export class AdminFinancialsController {
     const { page, limit, skip } = getPagination(req.query);
     const [data, total] = await adminRepos.auditLogs().findAndCount({ order: { createdAt: 'DESC' }, skip, take: limit });
     sendSuccess(res, paginated(data, total, page, limit));
+  };
+
+  payments = async (req: Request, res: Response) => {
+    const { page, limit, skip } = getPagination(req.query);
+    const where: Record<string, unknown> = {};
+    if (typeof req.query.status === 'string') where.status = req.query.status;
+    const [data, total] = await adminRepos.payments().findAndCount({ where, order: { createdAt: 'DESC' }, skip, take: limit, relations: { order: true } });
+    sendSuccess(res, paginated(data, total, page, limit));
+  };
+
+  escrow = async (req: Request, res: Response) => {
+    const { page, limit, skip } = getPagination(req.query);
+    const [data, total] = await adminRepos.escrowLedger().findAndCount({ order: { createdAt: 'DESC' }, skip, take: limit });
+    sendSuccess(res, paginated(data, total, page, limit));
+  };
+
+  refund = async (req: Request, res: Response) => {
+    const result = await this.paymentsService.refund(routeParam(req.params.paymentId), req.body.amount, req.body.idempotencyKey);
+    await adminRepos.auditLogs().save(adminRepos.auditLogs().create({
+      action: 'payment.refund', resourceType: 'payment', resourceId: routeParam(req.params.paymentId),
+      ...actor(req), metadata: JSON.stringify({ amount: req.body.amount, reason: req.body.reason }), status: 'success',
+    }));
+    sendSuccess(res, result);
+  };
+
+  reconciliation = async (_req: Request, res: Response) => {
+    const [payments, ledger] = await Promise.all([adminRepos.payments().find({}), adminRepos.escrowLedger().find({})]);
+    const successful = payments.filter((payment) => payment.status === PaymentStatus.SUCCESSFUL);
+    const receivedIds = new Set(ledger.filter((row) => row.type === EscrowEventType.PAYMENT_RECEIVED).map((row) => row.paymentId));
+    sendSuccess(res, {
+      checked: successful.length,
+      unmatched: successful.filter((payment) => !receivedIds.has(payment.id)),
+      generatedAt: new Date(),
+    });
   };
 }

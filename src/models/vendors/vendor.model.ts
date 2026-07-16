@@ -7,6 +7,7 @@ export interface Vendor extends BaseEntity {
   businessPhone?: string;
   businessAddress?: string;
   description?: string;
+  imageUrl?: string;
   socialLinks?: Record<string, string>;
   tier: VendorTier;
   isApproved: boolean;
@@ -32,6 +33,7 @@ const VendorSchema = createSchema<Vendor>({
   businessPhone: { type: String, trim: true },
   businessAddress: { type: String },
   description: { type: String },
+  imageUrl: { type: String },
   socialLinks: { type: Object },
   tier: { type: String, enum: Object.values(VendorTier), default: VendorTier.TIER_3, index: true },
   isApproved: { type: Boolean, default: false, index: true },

@@ -120,6 +120,7 @@ export class AdminVendorsController {
       stateCode: state?.stateCode,
       stateName: state?.stateName,
       description: req.body.description,
+      imageUrl: req.body.imageUrl,
       tier: req.body.tier,
       commissionPercentage: req.body.commissionPercentage,
       isApproved: req.body.isApproved,

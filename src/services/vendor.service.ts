@@ -1,5 +1,5 @@
 import type { MongoRepository as Repository } from '@lib/mongo-repository';
-import { ProductStatus, UserRole, VendorTier } from '@lib/constants';
+import { OrderStatus, ProductStatus, UserRole, VendorTier } from '@lib/constants';
 import { Product } from '@models/products/product.model';
 import { Order } from '@models/orders/order.model';
 import { OrderItem } from '@models/orders/order-item.model';
@@ -82,7 +82,8 @@ export class VendorService {
     const items = await this.orderItems.find({ where: { vendorId: vendor.id } });
     const orderIds = [...new Set(items.map((item) => item.orderId))];
     const orders = await Promise.all(orderIds.map((orderId) => this.orders.findOne({ where: { id: orderId }, relations: { user: true } })));
-    return orders.filter(Boolean).sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return orders.filter((order): order is Order => Boolean(order && order.status !== OrderStatus.AWAITING_PAYMENT))
+      .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
   async settlementsForVendor(ownerId: string) {

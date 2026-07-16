@@ -16,6 +16,7 @@ import { AdminSettingsController } from '@controllers/admin/settings.controller'
 import { AdminStaffController } from '@controllers/admin/staff.controller';
 import { AdminUsersController } from '@controllers/admin/users.controller';
 import { AdminVendorsController } from '@controllers/admin/vendors.controller';
+import { AdminCommerceController } from '@controllers/admin/commerce.controller';
 import { createAdminAuthRouter } from '@controllers/admin/admin-auth.controller';
 import { requireAuth } from '@middleware/auth';
 import { requireAdmin, requireSuperAdmin } from '@middleware/roles';
@@ -47,6 +48,12 @@ import {
   settingsSchema,
   settlementTriggerSchema,
   vendorTierSchema,
+  fulfilmentDecisionSchema,
+  boothInventorySchema,
+  boothAttendantSchema,
+  adminRefundReviewSchema,
+  deletionUpdateSchema,
+  refundSchema,
 } from '@validations/common.schemas';
 import { asyncHandler } from '@utils/http';
 
@@ -68,6 +75,7 @@ export function createAdminRouter() {
   const search      = new AdminSearchController();
   const categories  = new AdminCategoriesController();
   const operations  = new AdminOperationsController();
+  const commerce    = new AdminCommerceController();
 
   // ── Public admin auth (no token required) ──────────────────────────────
   router.use('/auth', createAdminAuthRouter());
@@ -143,6 +151,7 @@ export function createAdminRouter() {
   router.patch('/orders/:id',             requirePermission('orders.edit'),   validateBody(adminOrderUpdateSchema), asyncHandler(orders.update));
   router.patch('/orders/:id/status',      requirePermission('orders.edit'),   validateBody(orderStatusSchema), asyncHandler(orders.status));
   router.patch('/orders/:id/assign-driver', requirePermission('orders.edit'), validateBody(adminAssignDriverSchema), asyncHandler(orders.assignDriver));
+  router.post('/orders/:orderId/fulfilments/:vendorId/:decision', requirePermission('orders.edit'), validateBody(fulfilmentDecisionSchema), asyncHandler(commerce.decideFulfilment));
 
   // ── Dispatch / Drivers ────────────────────────────────────────────────
   router.get('/dispatch/active',           requirePermission('drivers.view'), asyncHandler(dispatch.active));
@@ -167,6 +176,16 @@ export function createAdminRouter() {
   router.get('/booths/:id',       requirePermission('booths.view'), asyncHandler(booths.detail));
   router.post('/booths',          requirePermission('booths.edit'), validateBody(adminBoothCreateSchema), asyncHandler(booths.create));
   router.patch('/booths/:id/status', requirePermission('booths.edit'), asyncHandler(booths.status));
+  router.post('/booths/:id/qr/rotate', requireSuperAdmin, asyncHandler(commerce.rotateBoothQr));
+  router.post('/booths/:id/code/rotate', requireSuperAdmin, asyncHandler(commerce.rotateBoothCode));
+  router.put('/booths/:id/attendant', requirePermission('booths.edit'), validateBody(boothAttendantSchema), asyncHandler(booths.setAttendant));
+  router.delete('/booths/:id/attendant', requirePermission('booths.edit'), asyncHandler(booths.releaseAttendant));
+  router.put('/booths/:id/inventory', requirePermission('booths.inventory'), validateBody(boothInventorySchema), asyncHandler(commerce.setBoothInventory));
+
+  // ── Support operations ───────────────────────────────────────────────
+  router.get('/support/deletion-requests', requirePermission('deletions.view'), asyncHandler(commerce.deletionRequests));
+  router.patch('/support/deletion-requests/:id', requirePermission('deletions.manage'), validateBody(deletionUpdateSchema), asyncHandler(commerce.updateDeletion));
+  router.get('/analytics/checkout', requirePermission('analytics.checkout'), asyncHandler(commerce.checkoutAnalytics));
 
   // ── Financials (view gated by permission, write stays super_admin) ─────
   router.get('/financials',                    requirePermission('financials.view'), asyncHandler(financials.dashboard));
@@ -174,6 +193,13 @@ export function createAdminRouter() {
   router.get('/financials/settlements/:id',    requirePermission('financials.view'), asyncHandler(financials.settlementDetail));
   router.post('/financials/settlements/trigger/:vendorId', requireSuperAdmin, validateBody(settlementTriggerSchema), asyncHandler(financials.trigger));
   router.get('/financials/audit-logs',         requireSuperAdmin, asyncHandler(financials.audit));
+  router.get('/financials/payments',           requirePermission('financials.view'), asyncHandler(financials.payments));
+  router.get('/financials/escrow-ledger',      requirePermission('financials.view'), asyncHandler(financials.escrow));
+  router.get('/financials/reconciliation',     requirePermission('financials.reconcile'), asyncHandler(financials.reconciliation));
+  router.get('/financials/refund-requests', requirePermission('refunds.view'), asyncHandler(commerce.refundRequests));
+  router.patch('/financials/refund-requests/:id/review', requirePermission('refunds.manage'), validateBody(adminRefundReviewSchema), asyncHandler(commerce.reviewRefund));
+  router.post('/financials/refund-requests/:id/approve', requireSuperAdmin, validateBody(refundSchema.pick({ reason: true })), asyncHandler(commerce.approveRefund));
+  router.post('/financials/payments/:paymentId/refund', requireSuperAdmin, validateBody(refundSchema), asyncHandler(financials.refund));
 
   // ── Negotiations ──────────────────────────────────────────────────────
   router.get('/negotiations',    requirePermission('ai_negotiation.view'), asyncHandler(negotiations.list));

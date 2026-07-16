@@ -2,11 +2,13 @@ import { PaymentStatus } from '@lib/constants';
 import { BaseEntity, createModel, createSchema } from '@models/base.model';
 
 export interface Payment extends BaseEntity {
-  orderId: string;
+  orderId?: string;
+  giftId?: string;
+  resourceType: 'order' | 'gift';
   transactionRef: string;
   gatewayRef?: string;
-  gateway: 'paystack' | 'nomba';
-  paymentMethod: 'card' | 'bank_transfer' | 'ussd';
+  gateway: 'opay' | 'paystack' | 'nomba';
+  paymentMethod: 'card' | 'bank_transfer' | 'ussd' | 'pos';
   amount: number;
   gatewayFee: number;
   amountSettled: number;
@@ -20,11 +22,13 @@ export interface Payment extends BaseEntity {
 }
 
 const PaymentSchema = createSchema<Payment>({
-  orderId: { type: String, required: true, unique: true, index: true },
+  orderId: { type: String, unique: true, sparse: true, index: true },
+  giftId: { type: String, unique: true, sparse: true, index: true },
+  resourceType: { type: String, enum: ['order', 'gift'], default: 'order', index: true },
   transactionRef: { type: String, required: true, unique: true },
   gatewayRef: { type: String, index: true },
-  gateway: { type: String, enum: ['paystack', 'nomba'], required: true },
-  paymentMethod: { type: String, enum: ['card', 'bank_transfer', 'ussd'], required: true },
+  gateway: { type: String, enum: ['opay', 'paystack', 'nomba'], required: true },
+  paymentMethod: { type: String, enum: ['card', 'bank_transfer', 'ussd', 'pos'], required: true },
   amount: { type: Number, required: true },
   gatewayFee: { type: Number, default: 0 },
   amountSettled: { type: Number, default: 0 },

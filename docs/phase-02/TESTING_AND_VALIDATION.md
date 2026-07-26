@@ -25,4 +25,6 @@ Run on 2026-07-26:
 
 Coverage includes public-ID formatting/concurrency, permission and scope denial, scoped list filters, Super Admin override, request IDs, success/error envelopes, invitation activation, session revocation, and immutable audit records.
 
-Outstanding: full HTTP E2E coverage for refresh-token replay, suspension across active clients, relationship mutations, and cross-state/cross-Hub denial. Retained commerce APIs still require a complete public-ID boundary audit.
+HTTP E2E coverage now includes refresh-token replay-family revocation, immediate suspension, public Product lookup, public platform relationship identifiers, State-filtered Hub queries, Staff scope presentation, invitation cancellation, retained-commerce permission denial, and incompatible City/Zone/Market/Hub create and update mutations.
+
+Platform persistence references remain Mongo identifiers internally. HTTP requests accept Hook public identifiers, platform context middleware resolves public State/Hub headers, and platform responses present public identifiers for relationship fields and arrays.

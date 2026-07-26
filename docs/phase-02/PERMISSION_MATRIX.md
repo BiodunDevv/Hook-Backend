@@ -44,5 +44,6 @@ This matrix is the reviewed authorization contract for the Phase 2 platform rout
 ## Findings
 
 - Phase 2 platform routes use the matrix above consistently.
-- Retained pre-Phase-2 commerce routes still use their existing permission catalogue. Their consolidation into the platform catalogue belongs with the commerce boundary work before Phase 3 is enabled.
+- Retained commerce routes use the same persisted Permission and Role catalogue as Phase 2 platform routes. Legacy `admin` and `support` enum values are identity compatibility fields only and do not grant authorization.
+- The configured catalogue contains 45 active permissions across platform governance, operational network, retained orders/catalog/customers, finance, support, reports, analytics, and settings.
 - Route order intentionally mounts the Phase 2 platform router before retained admin controllers. Identical paths such as `/staff` resolve to the Phase 2 implementation.

@@ -1,0 +1,29 @@
+# Phase 2 Architecture
+
+## Authority
+
+`Hook-Backend` is the authority for identity, sessions, permissions, scope, geography, operational relationships, public IDs, and audits. Admin and Shopper clients display backend decisions; they do not infer authorization.
+
+## Domains
+
+- Identity: `User` credentials plus typed customer, staff, runner, and partner accounts.
+- Sessions: independently revocable account sessions and opaque guest sessions.
+- Access: live Role and Permission records resolved on every protected request.
+- Geography: Operation State, Operation City, and Service Zone.
+- Network: Market, Dispatch Hub, Hook Partner, Runner Profile, and Runner Market Assignment.
+- Governance: atomic annual public-ID counters and append-only sanitized audit events.
+
+Legacy User roles and legacy collections remain compatibility inputs only. No Vendor, Booth, or Driver model was renamed destructively.
+
+## API boundary
+
+All `/api/v1` responses use `{ success, data, meta }` or `{ success, error, meta }`. `meta.requestId` matches `X-Request-Id`. Public Hook IDs are accepted at resource boundaries and preferred in client-visible records.
+
+## Applications
+
+- Admin: retained operations console plus Phase 2 Administration, Markets, Dispatch Hubs, Hook Partners, and Runners.
+- Runner: isolated `/runner` route group with only real identity and assignment data.
+- Partner: isolated `/partner` route group with only the authenticated location.
+- Shopper: customer authentication, backend-issued guest sessions, and public geography.
+
+Commerce behavior remains out of Phase 2.

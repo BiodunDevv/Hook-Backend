@@ -36,20 +36,43 @@ const tags = [
 const schemas = {
   ApiSuccess: {
     type: 'object',
+    required: ['success', 'data', 'meta'],
     properties: {
       success: { type: 'boolean', example: true },
-      message: { type: 'string', example: 'Success' },
       data: { nullable: true },
-      timestamp: { type: 'string', format: 'date-time' },
+      meta: {
+        type: 'object',
+        required: ['requestId', 'timestamp'],
+        properties: {
+          requestId: { type: 'string', format: 'uuid' },
+          timestamp: { type: 'string', format: 'date-time' },
+          pagination: { type: 'object', nullable: true },
+        },
+      },
     },
   },
   ApiError: {
     type: 'object',
+    required: ['success', 'error', 'meta'],
     properties: {
       success: { type: 'boolean', example: false },
-      message: { type: 'string', example: 'Invalid request body' },
-      errors: { nullable: true },
-      timestamp: { type: 'string', format: 'date-time' },
+      error: {
+        type: 'object',
+        required: ['code', 'message'],
+        properties: {
+          code: { type: 'string', example: 'VALIDATION_ERROR' },
+          message: { type: 'string', example: 'Invalid request body' },
+          details: { nullable: true },
+        },
+      },
+      meta: {
+        type: 'object',
+        required: ['requestId', 'timestamp'],
+        properties: {
+          requestId: { type: 'string', format: 'uuid' },
+          timestamp: { type: 'string', format: 'date-time' },
+        },
+      },
     },
   },
   LoginRequest: {
@@ -666,6 +689,42 @@ add('post', `${apiPrefix}/admin/reports/generate`, op('Admin Reports', 'Generate
 add('get', `${apiPrefix}/admin/settings`, op('Admin Settings', 'Get platform settings'));
 add('patch', `${apiPrefix}/admin/settings`, op('Admin Settings', 'Update platform settings (super-admin)', { requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } } } }));
 
+add('post', `${apiPrefix}/guest-sessions`, op('Guest Sessions', 'Issue an opaque backend-managed guest session'));
+add('get', `${apiPrefix}/guest-sessions/current`, op('Guest Sessions', 'Restore the current guest session', {
+  parameters: [{ in: 'header', name: 'X-Guest-Session', required: true, schema: { type: 'string' } }],
+}));
+add('delete', `${apiPrefix}/guest-sessions/current`, op('Guest Sessions', 'Revoke the current guest session', {
+  parameters: [{ in: 'header', name: 'X-Guest-Session', required: true, schema: { type: 'string' } }],
+}));
+for (const resource of ['states', 'cities', 'zones', 'markets']) {
+  add('get', `${apiPrefix}/public/${resource}`, op('Public Geography', `List active public ${resource}`));
+  add('get', `${apiPrefix}/public/${resource}/{id}`, op('Public Geography', `Get active public ${resource.slice(0, -1)}`, {
+    parameters: [param('id', 'Public Hook ID')],
+  }));
+}
+const platformResources = [
+  ['staff', 'Staff Accounts'], ['roles', 'Roles and Permissions'], ['permissions', 'Roles and Permissions'],
+  ['states', 'Platform Geography'], ['cities', 'Platform Geography'], ['zones', 'Platform Geography'],
+  ['markets', 'Operational Network'], ['hubs', 'Operational Network'], ['partners', 'Operational Network'],
+  ['runners', 'Operational Network'], ['runner-assignments', 'Operational Network'],
+  ['audit-logs', 'Platform Audit'],
+];
+for (const [resource, tag] of platformResources) {
+  add('get', `${apiPrefix}/admin/${resource}`, op(tag, `List ${resource.replace(/-/g, ' ')}`));
+  if (!['permissions', 'audit-logs'].includes(resource)) {
+    add('post', `${apiPrefix}/admin/${resource}`, op(tag, `Create ${resource.replace(/-/g, ' ')}`));
+  }
+  add('get', `${apiPrefix}/admin/${resource}/{id}`, op(tag, `Get ${resource.replace(/-/g, ' ')} by public Hook ID`, {
+    parameters: [param('id', 'Public Hook ID')],
+  }));
+}
+add('get', `${apiPrefix}/admin/public-id-counters`, op('Platform Governance', 'Inspect annual public Hook ID counters'));
+add('post', `${apiPrefix}/admin/public-id-counters/repair`, op('Platform Governance', 'Repair a public ID counter with mandatory reason and audit'));
+add('get', `${apiPrefix}/runner/profile`, op('Runner Foundation', 'Get the authenticated Runner profile and scope'));
+add('get', `${apiPrefix}/runner/markets`, op('Runner Foundation', 'List only Markets assigned to the authenticated Runner'));
+add('get', `${apiPrefix}/partner/profile`, op('Partner Foundation', 'Get the authenticated Hook Partner profile'));
+add('get', `${apiPrefix}/partner/location`, op('Partner Foundation', 'Get only the authenticated Hook Partner location'));
+
 const obsoletePrefixes = [
   `${apiPrefix}/vendors`,
   `${apiPrefix}/booths`,
@@ -699,16 +758,25 @@ const spec = {
   info: {
     title: 'Hook API',
     version: '1.0.0',
-    description: 'Express + TypeScript API documentation for Hook customer, commercial catalog, runner, upload, webhook, and admin workflows. All responses keep the standard shape: { success, message, data, timestamp }.',
+    description: 'Hook Phase 2 platform API. Success responses use { success, data, meta }; errors use { success, error, meta }. X-Request-Id is accepted and returned on every request.',
   },
   servers: [
     { url: 'http://localhost:4000', description: 'Local development server' },
     { url: 'https://hook-api.onrender.com', description: 'Production server' },
   ],
-  tags: tags.filter((tag) => !inactiveTags.has(tag.name)).concat({
-    name: 'Admin Runners',
-    description: 'Admin runner directory, review queue, state assignment, and status controls.',
-  }),
+  tags: tags.filter((tag) => !inactiveTags.has(tag.name)).concat([
+    { name: 'Admin Runners', description: 'Admin Runner identity, scope, and assignment controls.' },
+    { name: 'Guest Sessions', description: 'Backend-issued anonymous Shopper sessions.' },
+    { name: 'Public Geography', description: 'Safe public State, City, Zone, and Market configuration.' },
+    { name: 'Staff Accounts', description: 'Staff identity, role, scope, and session controls.' },
+    { name: 'Roles and Permissions', description: 'Live RBAC configuration.' },
+    { name: 'Platform Geography', description: 'State, City, and Service Zone administration.' },
+    { name: 'Operational Network', description: 'Market, Dispatch Hub, Hook Partner, and Runner administration.' },
+    { name: 'Platform Audit', description: 'Append-only sanitized operational audit events.' },
+    { name: 'Platform Governance', description: 'Super-admin platform counter governance.' },
+    { name: 'Runner Foundation', description: 'Self-scoped Runner account foundation.' },
+    { name: 'Partner Foundation', description: 'Self-scoped Hook Partner account foundation.' },
+  ]),
   paths,
   components: {
     securitySchemes: {

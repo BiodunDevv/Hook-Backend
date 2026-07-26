@@ -18,4 +18,3 @@ Expo Router, React Native, TypeScript, React Query, NativeWind, Secure Store, no
 - Admin expects the backend API under its configured public API URL.
 - Shopper expects `EXPO_PUBLIC_API_URL`; Google platform client IDs are public OAuth identifiers and remain mobile build configuration.
 - MongoDB collections may contain legacy Vendor, Booth, fulfilment, settlement, and internal logistics records.
-

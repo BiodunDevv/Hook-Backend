@@ -19,4 +19,3 @@ Compatibility rules:
 - Collections and enum values must not be renamed until a versioned, reversible migration and data-retention policy exist.
 
 The reset seed still contains legacy operational fixtures. It was not executed in Phase 1 because it drops the database. Aligning fixtures to the Phase 2 domain must precede any future seed run against a shared environment.
-

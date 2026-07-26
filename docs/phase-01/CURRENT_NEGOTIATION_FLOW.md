@@ -21,4 +21,3 @@ No OpenAI or Azure model is called by the active service.
 - Text-only validation exists; attachment/media handling is not an active path.
 
 These findings require a Phase 2 negotiation contract and security design. They were documented rather than rebuilt in Phase 1.
-

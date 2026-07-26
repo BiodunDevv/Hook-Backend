@@ -35,4 +35,3 @@
 - `/dashboard/settings`
 
 Removed active routes: Vendors, Booths, Drivers, internal operations map, and vendor settlement detail. Navigation, quick actions, filters, search consumers, and dead links were removed with them.
-

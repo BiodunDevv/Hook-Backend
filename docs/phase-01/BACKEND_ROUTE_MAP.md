@@ -39,4 +39,3 @@ All API routes are under `/api/v1`.
 - Health and optionally enabled Swagger documents
 
 Removed route families: vendor portal, public vendor discovery, booth resolution/session/inventory, internal driver jobs, dispatch assignment, booth administration, vendor administration, vendor fulfilment decisions, and vendor payout triggers.
-

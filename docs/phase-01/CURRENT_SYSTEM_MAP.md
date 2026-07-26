@@ -27,4 +27,3 @@ Hook Backend
 ```
 
 The baseline mixed future Hook concepts with obsolete Booth, Vendor portal, and internal Fleet ownership. Persisted legacy identifiers crossed products, orders, payments, settlements, fulfilments, and logistics.
-

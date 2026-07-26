@@ -26,4 +26,3 @@
 - Several controllers perform in-memory filtering and aggregation.
 - API contracts are not generated from shared schemas.
 - Audit coverage is incomplete for negotiation and some status transitions.
-

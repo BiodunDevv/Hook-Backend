@@ -35,4 +35,3 @@ Active terminology:
 - Hook Partner (future architecture)
 - Hook Dispatch Hub (future architecture)
 - External Logistics Provider
-

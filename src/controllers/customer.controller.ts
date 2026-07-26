@@ -15,8 +15,6 @@ import { Notification } from '@models/notifications/notification.model';
 import { AccountDeletionRequest } from '@models/support/account-deletion-request.model';
 import { CheckoutEvent } from '@models/analytics/checkout-event.model';
 import { SavedPaymentMethod } from '@models/payments/saved-payment-method.model';
-import { Settlement } from '@models/settlements/settlement.model';
-import { VendorFulfilment } from '@models/orders/vendor-fulfilment.model';
 import { CartService } from '@services/cart.service';
 import { NegotiationService } from '@services/negotiation.service';
 import { NotificationService } from '@services/notification.service';
@@ -50,8 +48,6 @@ export class CustomerController {
     AppDataSource.getRepository(OrderItem),
     AppDataSource.getRepository(Product),
     AppDataSource.getRepository(Logistics),
-    AppDataSource.getRepository(Settlement),
-    AppDataSource.getRepository(VendorFulfilment),
   );
 
   private readonly negotiations = new NegotiationService(
@@ -63,7 +59,6 @@ export class CustomerController {
     AppDataSource.getRepository(Payment),
     AppDataSource.getRepository(Order),
     AppDataSource.getRepository(EscrowLedger),
-    AppDataSource.getRepository(VendorFulfilment),
   );
 
   private readonly notificationService = new NotificationService(
@@ -72,12 +67,11 @@ export class CustomerController {
   );
 
   getCart = async (req: Request, res: Response) => {
-    sendSuccess(res, await this.cart.getCart(owner(req), req.header('x-booth-session') || undefined));
+    sendSuccess(res, await this.cart.getCart(owner(req)));
   };
 
   addCartItem = async (req: Request, res: Response) => {
-    const boothToken = req.body.boothSessionToken || req.header('x-booth-session');
-    sendCreated(res, await this.cart.addItem(owner(req), req.body.productId, req.body.quantity, req.body.selectedVariants, boothToken));
+    sendCreated(res, await this.cart.addItem(owner(req), req.body.productId, req.body.quantity, req.body.selectedVariants));
   };
 
   updateCartItem = async (req: Request, res: Response) => {

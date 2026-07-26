@@ -21,7 +21,8 @@ export interface Product extends BaseEntity {
   viewCount: number;
   orderCount: number;
   averageRating: number;
-  vendorId: string;
+  /** Legacy source reference retained until Market/ProductSource migration. */
+  vendorId?: string;
   categoryId: string;
   fieldAgentId?: string;
   source?: 'vendor' | 'field_agent' | 'admin';
@@ -48,10 +49,10 @@ const ProductSchema = createSchema<Product>({
   viewCount: { type: Number, default: 0 },
   orderCount: { type: Number, default: 0 },
   averageRating: { type: Number, default: 0 },
-  vendorId: { type: String, required: true, index: true },
+  vendorId: { type: String, index: true, sparse: true },
   categoryId: { type: String, required: true, index: true },
   fieldAgentId: { type: String, index: true, sparse: true },
-  source: { type: String, enum: ['vendor', 'field_agent', 'admin'], default: 'vendor' },
+  source: { type: String, enum: ['vendor', 'field_agent', 'admin'], default: 'admin' },
   deletedAt: { type: Date },
 });
 

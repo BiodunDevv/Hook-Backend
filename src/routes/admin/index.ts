@@ -1,9 +1,6 @@
 import { Router } from 'express';
-import { z } from 'zod';
-import { AdminBoothsController } from '@controllers/admin/booths.controller';
 import { AdminCategoriesController } from '@controllers/admin/categories.controller';
 import { AdminDashboardController } from '@controllers/admin/dashboard.controller';
-import { AdminDispatchController } from '@controllers/admin/dispatch.controller';
 import { AdminFieldAgentsController } from '@controllers/admin/field-agents.controller';
 import { AdminFinancialsController } from '@controllers/admin/financials.controller';
 import { AdminNegotiationsController } from '@controllers/admin/negotiations.controller';
@@ -15,7 +12,6 @@ import { AdminReportsController } from '@controllers/admin/reports.controller';
 import { AdminSettingsController } from '@controllers/admin/settings.controller';
 import { AdminStaffController } from '@controllers/admin/staff.controller';
 import { AdminUsersController } from '@controllers/admin/users.controller';
-import { AdminVendorsController } from '@controllers/admin/vendors.controller';
 import { AdminCommerceController } from '@controllers/admin/commerce.controller';
 import { createAdminAuthRouter } from '@controllers/admin/admin-auth.controller';
 import { requireAuth } from '@middleware/auth';
@@ -30,15 +26,10 @@ import {
   staffCreateSchema,
   staffPermissionsSchema,
   staffUpdateSchema,
-  adminAssignDriverSchema,
-  adminBoothCreateSchema,
-  adminDriverCreateSchema,
   adminOrderCreateSchema,
   adminOrderUpdateSchema,
   adminProductCreateSchema,
   adminProductUpdateSchema,
-  adminVendorCreateSchema,
-  adminVendorUpdateSchema,
   orderStatusSchema,
   operationalStateAssignSchema,
   operationalStateToggleSchema,
@@ -46,11 +37,6 @@ import {
   reportSchema,
   roleSchema,
   settingsSchema,
-  settlementTriggerSchema,
-  vendorTierSchema,
-  fulfilmentDecisionSchema,
-  boothInventorySchema,
-  boothAttendantSchema,
   adminRefundReviewSchema,
   deletionUpdateSchema,
   refundSchema,
@@ -61,12 +47,9 @@ export function createAdminRouter() {
   const router = Router();
   const dashboard   = new AdminDashboardController();
   const users       = new AdminUsersController();
-  const vendors     = new AdminVendorsController();
   const products    = new AdminProductsController();
   const orders      = new AdminOrdersController();
-  const dispatch    = new AdminDispatchController();
-  const fieldAgents = new AdminFieldAgentsController();
-  const booths      = new AdminBoothsController();
+  const runners     = new AdminFieldAgentsController();
   const financials  = new AdminFinancialsController();
   const negotiations = new AdminNegotiationsController();
   const reports     = new AdminReportsController();
@@ -114,17 +97,6 @@ export function createAdminRouter() {
   router.patch('/staff/:id/toggle',      requireSuperAdmin, asyncHandler(staff.toggle));
   router.delete('/staff/:id',            requireSuperAdmin, asyncHandler(staff.remove));
 
-  // ── Vendors ────────────────────────────────────────────────────────────
-  router.get('/vendors',             requirePermission('vendors.view'),   asyncHandler(vendors.list));
-  router.get('/vendors/stats',       requirePermission('vendors.view'),   asyncHandler(vendors.stats));
-  router.post('/vendors',            requireSuperAdmin, validateBody(adminVendorCreateSchema), asyncHandler(vendors.create));
-  router.get('/vendors/:id',         requirePermission('vendors.view'),   asyncHandler(vendors.detail));
-  router.patch('/vendors/:id',       requirePermission('vendors.edit'),   validateBody(adminVendorUpdateSchema), asyncHandler(vendors.update));
-  router.patch('/vendors/:id/approve', requirePermission('vendors.approve'), asyncHandler(vendors.approve));
-  router.patch('/vendors/:id/reject',  requirePermission('vendors.approve'), validateBody(z.object({ reason: z.string().optional() })), asyncHandler(vendors.reject));
-  router.patch('/vendors/:id/tier',    requireSuperAdmin, validateBody(vendorTierSchema), asyncHandler(vendors.tier));
-  router.patch('/vendors/:id/toggle',  requirePermission('vendors.edit'), asyncHandler(vendors.toggle));
-
   // ── Categories (taxonomy managed by super_admin, viewable with products.view) ──
   router.get('/categories',              requirePermission('products.view'), asyncHandler(categories.list));
   router.post('/categories',             requireSuperAdmin, validateBody(categoryCreateSchema), asyncHandler(categories.create));
@@ -150,37 +122,15 @@ export function createAdminRouter() {
   router.get('/orders/:id',               requirePermission('orders.view'),   asyncHandler(orders.detail));
   router.patch('/orders/:id',             requirePermission('orders.edit'),   validateBody(adminOrderUpdateSchema), asyncHandler(orders.update));
   router.patch('/orders/:id/status',      requirePermission('orders.edit'),   validateBody(orderStatusSchema), asyncHandler(orders.status));
-  router.patch('/orders/:id/assign-driver', requirePermission('orders.edit'), validateBody(adminAssignDriverSchema), asyncHandler(orders.assignDriver));
-  router.post('/orders/:orderId/fulfilments/:vendorId/:decision', requirePermission('orders.edit'), validateBody(fulfilmentDecisionSchema), asyncHandler(commerce.decideFulfilment));
-
-  // ── Dispatch / Drivers ────────────────────────────────────────────────
-  router.get('/dispatch/active',           requirePermission('drivers.view'), asyncHandler(dispatch.active));
-  router.get('/dispatch/drivers/stats',    requirePermission('drivers.view'), asyncHandler(dispatch.driverStats));
-  router.get('/dispatch',                  requirePermission('drivers.view'), asyncHandler(dispatch.list));
-  router.get('/dispatch/drivers',          requirePermission('drivers.view'), asyncHandler(dispatch.drivers));
-  router.post('/dispatch/drivers',         requirePermission('drivers.edit'), validateBody(adminDriverCreateSchema), asyncHandler(dispatch.createDriver));
-  router.get('/dispatch/drivers/:id',      requirePermission('drivers.view'), asyncHandler(dispatch.driverDetail));
-  router.patch('/dispatch/drivers/:id/toggle', requirePermission('drivers.edit'), asyncHandler(dispatch.toggleDriver));
-
-  // ── Field Agents ──────────────────────────────────────────────────────
-  router.get('/field-agents',         requirePermission('field_agents.view'), asyncHandler(fieldAgents.list));
-  router.get('/field-agents/stats',   requirePermission('field_agents.view'), asyncHandler(fieldAgents.stats));
-  router.get('/field-agents/queue',   requirePermission('field_agents.view'), asyncHandler(fieldAgents.queue));
-  router.get('/field-agents/:id',     requirePermission('field_agents.view'), asyncHandler(fieldAgents.detail));
-  router.patch('/field-agents/:id/toggle', requirePermission('field_agents.view'), asyncHandler(fieldAgents.toggle));
-  router.patch('/field-agents/:id/state', requirePermission('field_agents.view'), validateBody(operationalStateAssignSchema), asyncHandler(fieldAgents.setState));
-
-  // ── Booths ─────────────────────────────────────────────────────────────
-  router.get('/booths',           requirePermission('booths.view'), asyncHandler(booths.list));
-  router.get('/booths/analytics', requirePermission('booths.view'), asyncHandler(booths.analytics));
-  router.get('/booths/:id',       requirePermission('booths.view'), asyncHandler(booths.detail));
-  router.post('/booths',          requirePermission('booths.edit'), validateBody(adminBoothCreateSchema), asyncHandler(booths.create));
-  router.patch('/booths/:id/status', requirePermission('booths.edit'), asyncHandler(booths.status));
-  router.post('/booths/:id/qr/rotate', requireSuperAdmin, asyncHandler(commerce.rotateBoothQr));
-  router.post('/booths/:id/code/rotate', requireSuperAdmin, asyncHandler(commerce.rotateBoothCode));
-  router.put('/booths/:id/attendant', requirePermission('booths.edit'), validateBody(boothAttendantSchema), asyncHandler(booths.setAttendant));
-  router.delete('/booths/:id/attendant', requirePermission('booths.edit'), asyncHandler(booths.releaseAttendant));
-  router.put('/booths/:id/inventory', requirePermission('booths.inventory'), validateBody(boothInventorySchema), asyncHandler(commerce.setBoothInventory));
+  // ── Runners ───────────────────────────────────────────────────────────
+  // The controller still reads legacy field-agent collections. The API and
+  // active permission vocabulary are canonical for the current product.
+  router.get('/runners',         requirePermission('runners.view'), asyncHandler(runners.list));
+  router.get('/runners/stats',   requirePermission('runners.view'), asyncHandler(runners.stats));
+  router.get('/runners/queue',   requirePermission('runners.view'), asyncHandler(runners.queue));
+  router.get('/runners/:id',     requirePermission('runners.view'), asyncHandler(runners.detail));
+  router.patch('/runners/:id/toggle', requirePermission('runners.edit'), asyncHandler(runners.toggle));
+  router.patch('/runners/:id/state', requirePermission('runners.edit'), validateBody(operationalStateAssignSchema), asyncHandler(runners.setState));
 
   // ── Support operations ───────────────────────────────────────────────
   router.get('/support/deletion-requests', requirePermission('deletions.view'), asyncHandler(commerce.deletionRequests));
@@ -189,9 +139,6 @@ export function createAdminRouter() {
 
   // ── Financials (view gated by permission, write stays super_admin) ─────
   router.get('/financials',                    requirePermission('financials.view'), asyncHandler(financials.dashboard));
-  router.get('/financials/settlements',        requirePermission('financials.view'), asyncHandler(financials.settlements));
-  router.get('/financials/settlements/:id',    requirePermission('financials.view'), asyncHandler(financials.settlementDetail));
-  router.post('/financials/settlements/trigger/:vendorId', requireSuperAdmin, validateBody(settlementTriggerSchema), asyncHandler(financials.trigger));
   router.get('/financials/audit-logs',         requireSuperAdmin, asyncHandler(financials.audit));
   router.get('/financials/payments',           requirePermission('financials.view'), asyncHandler(financials.payments));
   router.get('/financials/escrow-ledger',      requirePermission('financials.view'), asyncHandler(financials.escrow));

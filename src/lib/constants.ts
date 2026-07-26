@@ -3,6 +3,8 @@
 // ============================================================
 export enum UserRole {
   SHOPPER = 'shopper',
+  // Persisted compatibility values. Active product code uses Runner and
+  // external Logistics Provider terminology.
   VENDOR = 'vendor',
   FIELD_AGENT = 'field_agent',
   EV_DRIVER = 'ev_driver',
@@ -19,12 +21,6 @@ export enum OrderStatus {
   PENDING = 'pending',
   CONFIRMED = 'confirmed',
   SHIPPED = 'shipped',
-  // Legacy aliases keep older callers source-compatible while the public
-  // lifecycle remains pending -> confirmed -> shipped -> delivered.
-  PROCESSING = 'confirmed',
-  PACKED = 'confirmed',
-  PICKED_UP = 'shipped',
-  IN_TRANSIT = 'shipped',
   DELIVERED = 'delivered',
   CANCELLED = 'cancelled',
   RETURNED = 'returned',
@@ -41,6 +37,7 @@ export enum OrderType {
   GIFT = 'gift',
 }
 
+/** @deprecated Vendor fulfilment is retained for historical records only. */
 export enum VendorFulfilmentStatus {
   AWAITING_CONFIRMATION = 'awaiting_confirmation',
   CONFIRMED = 'confirmed',
@@ -96,6 +93,7 @@ export enum ProductStatus {
   SOLD_OUT = 'sold_out',
 }
 
+/** @deprecated Vendor tiers are retained for legacy product/source records. */
 export enum VendorTier {
   TIER_1 = 'tier_1', // Major retailers — full IMS/API integration
   TIER_2 = 'tier_2', // Independent boutiques — vendor portal
@@ -109,6 +107,7 @@ export enum SettlementStatus {
   FAILED = 'failed',
 }
 
+/** @deprecated Booth records are retained pending Hook Partner migration. */
 export enum BoothType {
   PHYGITAL = 'phygital',
   MICRO_HUB = 'micro_hub',

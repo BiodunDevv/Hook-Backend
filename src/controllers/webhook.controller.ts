@@ -3,7 +3,6 @@ import { AppDataSource } from '@config/data-source';
 import { Order } from '@models/orders/order.model';
 import { Payment } from '@models/payments/payment.model';
 import { EscrowLedger } from '@models/payments/escrow-ledger.model';
-import { VendorFulfilment } from '@models/orders/vendor-fulfilment.model';
 import { PaymentService } from '@services/payment.service';
 import { routeParam } from '@lib/api-utils';
 import { sendSuccess } from '@utils/http';
@@ -13,7 +12,6 @@ export class WebhookController {
     AppDataSource.getRepository(Payment),
     AppDataSource.getRepository(Order),
     AppDataSource.getRepository(EscrowLedger),
-    AppDataSource.getRepository(VendorFulfilment),
   );
 
   payment = async (req: Request, res: Response) => {

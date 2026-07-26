@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { DELIVERY_SLA_HOURS, OrderStatus, PaymentStatus, VENDOR_COMMISSION_PERCENTAGE } from '@lib/constants';
+import { DELIVERY_SLA_HOURS, OrderStatus, PaymentStatus } from '@lib/constants';
 import { auditAdminAction } from '@lib/audit';
 import { EmailService } from '@emails/email.service';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
@@ -10,14 +10,13 @@ export class AdminOrdersController {
 
   private async enrichOrder(order: any) {
     if (!order) return order;
-    const [items, payment, logistics, fulfilments, escrowLedger] = await Promise.all([
-      adminRepos.orderItems().find({ where: { orderId: order.id }, relations: { product: true, vendor: true } }),
+    const [items, payment, logistics, escrowLedger] = await Promise.all([
+      adminRepos.orderItems().find({ where: { orderId: order.id }, relations: { product: true } }),
       adminRepos.payments().findOne({ where: { orderId: order.id } }),
-      adminRepos.logistics().findOne({ where: { orderId: order.id }, relations: { driver: true } }),
-      adminRepos.fulfilments().find({ where: { orderId: order.id }, relations: { vendor: true } }),
+      adminRepos.logistics().findOne({ where: { orderId: order.id } }),
       adminRepos.escrowLedger().find({ where: { orderId: order.id }, order: { createdAt: 'ASC' } }),
     ]);
-    return { ...order, items, payment, logistics, fulfilments, escrowLedger };
+    return { ...order, items, payment, logistics, escrowLedger };
   }
 
   list = async (req: Request, res: Response) => {
@@ -39,14 +38,8 @@ export class AdminOrdersController {
     if (typeof req.query.paymentStatus === 'string') where.paymentStatus = req.query.paymentStatus;
     if (typeof req.query.paymentMode === 'string') where.paymentMode = req.query.paymentMode;
     if (typeof req.query.orderType === 'string') where.orderType = req.query.orderType;
-    if (typeof req.query.boothId === 'string') where.boothId = req.query.boothId;
     const all = await adminRepos.orders().find({ where, relations: { user: true }, order: { createdAt: 'DESC' } });
     let filtered = all as any[];
-    if (typeof req.query.driverId === 'string') {
-      const jobs = await adminRepos.logistics().find({ where: { driverId: req.query.driverId } });
-      const orderIds = new Set(jobs.map((job) => job.orderId));
-      filtered = filtered.filter((order) => orderIds.has(order.id));
-    }
     if (search) {
       filtered = filtered.filter((order) => [
         order.orderCode,
@@ -151,7 +144,7 @@ export class AdminOrdersController {
       totalPrice: number;
     }> = [];
     for (const item of req.body.items) {
-      const product = await products.findOne({ where: { id: item.productId }, relations: { vendor: true } });
+      const product = await products.findOne({ where: { id: item.productId } });
       if (!product) throw new HttpError(404, `Product not found: ${item.productId}`);
       if (product.quantity < item.quantity) throw new HttpError(400, `${product.title} only has ${product.quantity} in stock`);
       const unitPrice = product.discountedPrice || product.sellingPrice;
@@ -168,7 +161,7 @@ export class AdminOrdersController {
     const deliveryFee = Number(req.body.deliveryFee || 0);
     const discount = Number(req.body.discount || 0);
     const total = Math.max(0, subtotal + deliveryFee - discount);
-    const vendorIds = [...new Set(lines.map((item) => item.product.vendorId))];
+    const legacySourceIds = [...new Set(lines.map((item) => item.product.vendorId).filter(Boolean))];
     const order = await orders.save(orders.create({
       orderCode: `HK-${Date.now().toString().slice(-8)}`,
       userId: customer.id,
@@ -176,7 +169,7 @@ export class AdminOrdersController {
       deliveryFee,
       discount,
       total,
-      vendorCount: vendorIds.length,
+      vendorCount: legacySourceIds.length,
       status: req.body.status || OrderStatus.PENDING,
       paymentStatus: req.body.paymentStatus || PaymentStatus.UNPAID,
       deliveryAddress: req.body.deliveryAddress,
@@ -195,7 +188,7 @@ export class AdminOrdersController {
         unitPrice: line.unitPrice,
         totalPrice: line.totalPrice,
         selectedVariants: line.selectedVariants,
-        commissionAmount: line.totalPrice * (VENDOR_COMMISSION_PERCENTAGE / 100),
+        commissionAmount: 0,
       }));
       await products.update(line.product.id, {
         quantity: Math.max(0, line.product.quantity - line.quantity),
@@ -233,48 +226,10 @@ export class AdminOrdersController {
         itemCount,
       });
     }
-    await Promise.all(vendorIds.map(async (vendorId) => {
-      const vendor = await adminRepos.vendors().findOne({ where: { id: vendorId } });
-      const owner = vendor?.ownerId ? await adminRepos.users().findOne({ where: { id: vendor.ownerId } }) : undefined;
-      if (!vendor || !owner?.email) return;
-      const vendorLines = lines.filter((line) => line.product.vendorId === vendorId);
-      await this.email.sendVendorNewOrder({
-        to: owner.email,
-        name: `${owner.firstName || ''} ${owner.lastName || ''}`.trim(),
-        vendorName: vendor.businessName,
-        customerName: customer.email || 'Customer',
-        orderCode: order.orderCode,
-        amount: vendorLines.reduce((sum, line) => sum + Number(line.totalPrice || 0), 0),
-        itemCount: vendorLines.reduce((sum, line) => sum + Number(line.quantity || 0), 0),
-      });
-    }));
-
     sendCreated(res, await this.enrichOrder(await orders.findOne({
       where: { id: order.id },
       relations: { user: true },
     })));
-  };
-
-  assignDriver = async (req: Request, res: Response) => {
-    const order = await adminRepos.orders().findOne({ where: { id: routeParam(req.params.id) }, relations: { logistics: true } });
-    if (!order) throw new HttpError(404, 'Order not found');
-    const driver = await adminRepos.users().findOne({ where: { id: req.body.driverId } });
-    if (!driver) throw new HttpError(404, 'Driver not found');
-    const logisticsRepo = adminRepos.logistics();
-    const existingLogistics = await logisticsRepo.findOne({ where: { orderId: order.id } });
-    const logistics = existingLogistics || logisticsRepo.create({
-      orderId: order.id,
-      deliveryLocation: {
-        address: `${order.deliveryAddress.street}, ${order.deliveryAddress.city}, ${order.deliveryAddress.state}`,
-        coordinates: order.deliveryAddress.coordinates || { lat: 0, lng: 0 },
-        instructions: order.deliveryNotes,
-      },
-      estimatedDeliveryAt: new Date(Date.now() + DELIVERY_SLA_HOURS * 60 * 60 * 1000),
-    });
-    logistics.driverId = driver.id;
-    await logisticsRepo.save(logistics);
-    await auditAdminAction(req, 'order.assign_driver', 'order', order.id, { driverId: driver.id });
-    sendSuccess(res, await logisticsRepo.findOne({ where: { orderId: order.id }, relations: { order: true, driver: true } }));
   };
 
   private async statsData() {
@@ -285,7 +240,7 @@ export class AdminOrdersController {
     const [total, pending, inTransit, delivered, cancelled, unpaid] = await Promise.all([
       orders.count(),
       orders.count({ where: { status: OrderStatus.PENDING } }),
-      orders.count({ where: { status: OrderStatus.IN_TRANSIT } }),
+      orders.count({ where: { status: OrderStatus.SHIPPED } }),
       orders.count({ where: { status: OrderStatus.DELIVERED } }),
       orders.count({ where: { status: OrderStatus.CANCELLED } }),
       orders.count({ where: { paymentStatus: PaymentStatus.UNPAID } }),

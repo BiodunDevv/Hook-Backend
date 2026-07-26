@@ -23,20 +23,18 @@ export class AdminSearchController {
     const limit = Math.min(parseInt(String(req.query.limit || '5'), 10), 10);
 
     if (q.length < 2) {
-      return sendSuccess(res, { query: q, orders: [], products: [], vendors: [], customers: [], staff: [], total: 0 });
+      return sendSuccess(res, { query: q, orders: [], products: [], customers: [], staff: [], total: 0 });
     }
 
     const isSuperAdmin = req.user?.role === UserRole.SUPER_ADMIN;
     const canOrders    = userHasPermission(req, 'orders.view');
     const canProducts  = userHasPermission(req, 'products.view');
-    const canVendors   = userHasPermission(req, 'vendors.view');
     const canCustomers = userHasPermission(req, 'customers.view');
 
     // Fetch only what the caller can see in parallel
-    const [allOrders, allProducts, allVendors, allUsers, allStaff] = await Promise.all([
+    const [allOrders, allProducts, allUsers, allStaff] = await Promise.all([
       canOrders    ? adminRepos.orders().find({ relations: { user: true }, order: { createdAt: 'DESC' } }) : Promise.resolve([]),
-      canProducts  ? adminRepos.products().find({ relations: { vendor: true }, order: { createdAt: 'DESC' } }) : Promise.resolve([]),
-      canVendors   ? adminRepos.vendors().find({ order: { createdAt: 'DESC' } }) : Promise.resolve([]),
+      canProducts  ? adminRepos.products().find({ order: { createdAt: 'DESC' } }) : Promise.resolve([]),
       canCustomers ? adminRepos.users().find({ where: { role: UserRole.SHOPPER }, order: { createdAt: 'DESC' } }) : Promise.resolve([]),
       // Staff bucket: super_admin only, searches across all staff roles
       isSuperAdmin ? adminRepos.users().find({ order: { createdAt: 'DESC' } }) : Promise.resolve([]),
@@ -64,8 +62,7 @@ export class AdminSearchController {
     const products = (allProducts as any[])
       .filter((p) =>
         matches(p.title, q) ||
-        matches(p.hookId, q) ||
-        matches(p.vendor?.businessName, q),
+        matches(p.hookId, q),
       )
       .slice(0, limit)
       .map((p) => ({
@@ -75,23 +72,6 @@ export class AdminSearchController {
         status: p.status,
         sellingPrice: p.sellingPrice,
         image: Array.isArray(p.images) ? p.images[0] : null,
-        vendor: p.vendor?.businessName || null,
-      }));
-
-    const vendors = (allVendors as any[])
-      .filter((v) =>
-        matches(v.businessName, q) ||
-        matches(v.businessEmail, q) ||
-        matches(v.businessPhone, q),
-      )
-      .slice(0, limit)
-      .map((v) => ({
-        id: v.id,
-        businessName: v.businessName,
-        businessEmail: v.businessEmail,
-        tier: v.tier,
-        isApproved: v.isApproved,
-        isActive: v.isActive,
       }));
 
     const customers = (allUsers as any[])
@@ -111,7 +91,7 @@ export class AdminSearchController {
         isEmailVerified: u.isEmailVerified,
       }));
 
-    // Staff: only staff roles, never shoppers/vendors/drivers
+    // Staff results are limited to active administrative role families.
     const staff = (allStaff as any[])
       .filter((u) =>
         STAFF_ROLES.includes(u.role) && (
@@ -133,8 +113,8 @@ export class AdminSearchController {
         permissions: Array.isArray(u.permissions) ? u.permissions : [],
       }));
 
-    const total = orders.length + products.length + vendors.length + customers.length + staff.length;
+    const total = orders.length + products.length + customers.length + staff.length;
 
-    return sendSuccess(res, { query: q, orders, products, vendors, customers, staff, total });
+    return sendSuccess(res, { query: q, orders, products, customers, staff, total });
   };
 }

@@ -7,9 +7,9 @@ import { adminRepos, getPagination, paginated, routeParam } from './admin.helper
 // Titles hinting at counterfeit goods get flagged for manual review
 const COUNTERFEIT_PATTERN = /replica|first copy|copy|fake|counterfeit|knock[\s-]?off/i;
 
-function agentDisplayName(agent: any): string {
+function runnerDisplayName(agent: any): string {
   const user = agent?.agent;
-  return `${user?.firstName || ''} ${user?.lastName || ''}`.trim() || user?.email || 'Field agent';
+  return `${user?.firstName || ''} ${user?.lastName || ''}`.trim() || user?.email || 'Runner';
 }
 
 function startOfToday(): Date {
@@ -93,8 +93,8 @@ export class AdminFieldAgentsController {
         colors: product.colors || [],
         createdAt: product.createdAt,
         market: agent?.assignedMarket || product.vendor?.businessAddress || 'Marketplace',
-        agentName: agent ? agentDisplayName(agent) : product.vendor?.businessName || 'Vendor upload',
-        source: product.source || 'vendor',
+        agentName: agent ? runnerDisplayName(agent) : product.vendor?.businessName || 'Legacy catalog source',
+        source: product.source || 'admin',
         flagged,
         flagReason: flagged
           ? 'Title implies counterfeit item. Please review before approving.'
@@ -111,7 +111,7 @@ export class AdminFieldAgentsController {
       where: { id: routeParam(req.params.id) },
       relations: { agent: true },
     });
-    if (!agent) throw new HttpError(404, 'Field agent not found');
+    if (!agent) throw new HttpError(404, 'Runner not found');
 
     const products = await adminRepos.products().find({
       where: { fieldAgentId: agent.id },
@@ -140,7 +140,7 @@ export class AdminFieldAgentsController {
   toggle = async (req: Request, res: Response) => {
     const repo = adminRepos.fieldAgents();
     const agent = await repo.findOne({ where: { id: routeParam(req.params.id) } });
-    if (!agent) throw new HttpError(404, 'Field agent not found');
+    if (!agent) throw new HttpError(404, 'Runner not found');
     agent.isActive = !agent.isActive;
     await repo.save(agent);
     sendSuccess(res, { id: agent.id, isActive: agent.isActive });
@@ -149,7 +149,7 @@ export class AdminFieldAgentsController {
   setState = async (req: Request, res: Response) => {
     const repo = adminRepos.fieldAgents();
     const agent = await repo.findOne({ where: { id: routeParam(req.params.id) } });
-    if (!agent) throw new HttpError(404, 'Field agent not found');
+    if (!agent) throw new HttpError(404, 'Runner not found');
     const state = await resolveActiveOperationalState(req.body.stateCode);
     agent.stateCode = state.stateCode;
     agent.stateName = state.stateName;

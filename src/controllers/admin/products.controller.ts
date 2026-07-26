@@ -37,7 +37,7 @@ export class AdminProductsController {
     const { page, limit, skip } = getPagination(req.query);
     const [data, total] = await adminRepos.products().findAndCount({
       where: { status: ProductStatus.PENDING_APPROVAL },
-      relations: { vendor: true, category: true },
+      relations: { category: true },
       order: { createdAt: 'ASC' },
       skip,
       take: limit,
@@ -50,13 +50,12 @@ export class AdminProductsController {
     const search = typeof req.query.search === 'string' ? req.query.search.toLowerCase() : undefined;
     const where: Record<string, unknown> = {};
     if (typeof req.query.status === 'string') where.status = req.query.status;
-    if (typeof req.query.vendorId === 'string') where.vendorId = req.query.vendorId;
     if (typeof req.query.categoryId === 'string') where.categoryId = req.query.categoryId;
-    const all = await adminRepos.products().find({ where, relations: { vendor: true, category: true }, order: { createdAt: 'DESC' } });
+    const all = await adminRepos.products().find({ where, relations: { category: true }, order: { createdAt: 'DESC' } });
     const filtered = all.filter((product: any) => {
       if (req.query.stock === 'low' && !(product.quantity > 0 && product.quantity < 10)) return false;
       if (req.query.stock === 'out' && product.quantity !== 0) return false;
-      if (search && ![product.title, product.vendor?.businessName].some((value) => String(value || '').toLowerCase().includes(search))) return false;
+      if (search && ![product.title, product.hookId].some((value) => String(value || '').toLowerCase().includes(search))) return false;
       return true;
     });
     const managers = await categoryManagersMap();
@@ -75,7 +74,7 @@ export class AdminProductsController {
   detail = async (req: Request, res: Response) => {
     const product: any = await adminRepos.products().findOne({
       where: { id: routeParam(req.params.id) },
-      relations: { vendor: true, category: true, orderItems: true, negotiations: true },
+      relations: { category: true, orderItems: true, negotiations: true },
     });
     if (!product) throw new HttpError(404, 'Product not found');
     const managers = await categoryManagersMap();
@@ -83,42 +82,39 @@ export class AdminProductsController {
   };
 
   create = async (req: Request, res: Response) => {
-    const vendors = adminRepos.vendors();
     const categories = adminRepos.categories();
     const products = adminRepos.products();
-    const [vendor, category] = await Promise.all([
-      vendors.findOne({ where: { id: req.body.vendorId } }),
-      categories.findOne({ where: { id: req.body.categoryId } }),
-    ]);
-    if (!vendor) throw new HttpError(404, 'Vendor not found');
+    const category = await categories.findOne({ where: { id: req.body.categoryId } });
     if (!category) throw new HttpError(404, 'Category not found');
     const baseSlug = slugify(req.body.title);
+    const body = { ...req.body };
+    delete body.vendorId;
     const product = await products.save(products.create({
-      ...req.body,
+      ...body,
+      source: 'admin',
       slug: `${baseSlug}-${Date.now().toString().slice(-6)}`,
       hookId: `HK-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
     } as any)) as any;
     await auditAdminAction(req, 'product.create', 'product', product.id, { title: product.title });
-    sendCreated(res, await products.findOne({ where: { id: product.id }, relations: { vendor: true, category: true } }));
+    sendCreated(res, await products.findOne({ where: { id: product.id }, relations: { category: true } }));
   };
 
   update = async (req: Request, res: Response) => {
     const products = adminRepos.products();
     const product = await products.findOne({ where: { id: routeParam(req.params.id) } });
     if (!product) throw new HttpError(404, 'Product not found');
-    if (req.body.vendorId) {
-      const vendor = await adminRepos.vendors().findOne({ where: { id: req.body.vendorId } });
-      if (!vendor) throw new HttpError(404, 'Vendor not found');
-    }
     if (req.body.categoryId) {
       const category = await adminRepos.categories().findOne({ where: { id: req.body.categoryId } });
       if (!category) throw new HttpError(404, 'Category not found');
     }
-    Object.assign(product, req.body);
+    const updates = { ...req.body };
+    delete updates.vendorId;
+    delete updates.source;
+    Object.assign(product, updates);
     if (req.body.title && !req.body.slug) product.slug = `${slugify(req.body.title)}-${Date.now().toString().slice(-6)}`;
     await products.save(product);
     await auditAdminAction(req, 'product.update', 'product', product.id, { fields: Object.keys(req.body) });
-    sendSuccess(res, await products.findOne({ where: { id: product.id }, relations: { vendor: true, category: true } }));
+    sendSuccess(res, await products.findOne({ where: { id: product.id }, relations: { category: true } }));
   };
 
   review = async (req: Request, res: Response) => {

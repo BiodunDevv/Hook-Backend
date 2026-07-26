@@ -57,7 +57,6 @@ export const cartItemSchema = z.object({
     color: z.string().optional(),
     size: z.string().optional(),
   }).optional(),
-  boothSessionToken: z.string().min(20).optional(),
 });
 
 export const cartQuantitySchema = z.object({ quantity: z.coerce.number().int().positive() });
@@ -88,7 +87,6 @@ export const checkoutSchema = z.object({
     }),
     message: z.string().trim().max(500).optional(),
   }).optional(),
-  boothSessionToken: z.string().min(20).optional(),
 }).superRefine((data, ctx) => {
   if (data.orderType === OrderType.GIFT && !data.giftRecipient) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['giftRecipient'], message: 'Gift recipient delivery details are required' });
@@ -194,12 +192,10 @@ export const adminVendorUpdateSchema = adminVendorCreateSchema.omit({
 }).partial();
 
 export const adminProductCreateSchema = productBaseSchema.extend({
-  vendorId: idSchema,
   status: z.nativeEnum(ProductStatus).default(ProductStatus.PENDING_APPROVAL),
 }).superRefine(validateNegotiationFloor);
 
 export const adminProductUpdateSchema = productBaseSchema.extend({
-  vendorId: idSchema,
   status: z.nativeEnum(ProductStatus).default(ProductStatus.PENDING_APPROVAL),
 }).partial().superRefine(validateNegotiationFloor);
 

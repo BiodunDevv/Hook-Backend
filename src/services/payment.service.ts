@@ -1,24 +1,20 @@
 import type { MongoRepository as Repository } from '@lib/mongo-repository';
-import { EscrowEventType, OrderStatus, PaymentMode, PaymentStatus, VENDOR_CONFIRMATION_HOURS, VendorFulfilmentStatus } from '@lib/constants';
+import { EscrowEventType, OrderStatus, PaymentMode, PaymentStatus } from '@lib/constants';
 import { EscrowLedger } from '@models/payments/escrow-ledger.model';
 import { Order } from '@models/orders/order.model';
-import { VendorFulfilment } from '@models/orders/vendor-fulfilment.model';
 import { Payment } from '@models/payments/payment.model';
 import { HttpError } from '@utils/http';
-import { FulfilmentService } from './fulfilment.service';
 import { OpayProvider } from './payments/opay.provider';
 
 type Method = 'card' | 'bank_transfer' | 'ussd' | 'pos';
 
 export class PaymentService {
   private provider = new OpayProvider();
-  private fulfilmentService = new FulfilmentService();
 
   constructor(
     private readonly payments: Repository<Payment>,
     private readonly orders: Repository<Order>,
     private readonly ledger: Repository<EscrowLedger>,
-    private readonly fulfilments: Repository<VendorFulfilment>,
   ) {}
 
   async initialize(ownerId: string, orderId: string, _gateway: 'opay', paymentMethod: Method) {
@@ -111,9 +107,7 @@ export class PaymentService {
     payment.gatewayResponse = data;
     await this.payments.save(payment);
     if (payment.orderId) {
-      const deadline = new Date(Date.now() + Number(process.env.VENDOR_CONFIRMATION_HOURS || VENDOR_CONFIRMATION_HOURS) * 60 * 60 * 1000);
-      await this.orders.update(payment.orderId, { paymentStatus: PaymentStatus.SUCCESSFUL, status: OrderStatus.PENDING, vendorConfirmationDeadline: deadline });
-      await this.fulfilments.update({ orderId: payment.orderId, status: VendorFulfilmentStatus.AWAITING_CONFIRMATION }, { confirmationDeadline: deadline });
+      await this.orders.update(payment.orderId, { paymentStatus: PaymentStatus.SUCCESSFUL, status: OrderStatus.PENDING });
     }
     if (!payment.orderId) throw new HttpError(409, 'Legacy non-order payments cannot be activated');
     await this.ledger.save(this.ledger.create({
@@ -124,8 +118,6 @@ export class PaymentService {
       orderId: payment.orderId, paymentId: payment.id, type: EscrowEventType.HELD,
       amount: payment.amount, currency: 'NGN', idempotencyKey: `held:${idempotencyKey}`,
     }));
-    const confirmed = payment.orderId ? await this.fulfilments.find({ where: { orderId: payment.orderId, status: VendorFulfilmentStatus.CONFIRMED } }) : [];
-    for (const fulfilment of confirmed) await this.fulfilmentService.makePayoutEligible(fulfilment);
   }
 
   private async findOwnedOrder(ownerId: string, orderId: string) {

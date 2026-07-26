@@ -11,10 +11,8 @@ import { createAdminRouter } from './routes/admin';
 import { createAuthRouter } from './routes/auth';
 import { createCustomerRouter } from './routes/customer';
 import { createDeviceRouter } from './routes/devices';
-import { createLogisticsRouter } from './routes/logistics';
 import { createPublicRouter } from './routes/public';
 import { createUploadRouter } from './routes/upload';
-import { createVendorRouter } from './routes/vendor';
 import { createWebhookRouter } from './routes/webhooks';
 import { errorHandler, sendSuccess } from './utils/http';
 
@@ -100,8 +98,6 @@ export function createApp() {
   app.use(`${apiPrefix}/auth`, authLimiter, createAuthRouter());
   app.use(`${apiPrefix}/devices`, createDeviceRouter());
   app.use(`${apiPrefix}/admin`, createAdminRouter());
-  app.use(`${apiPrefix}/vendors/me`, createVendorRouter());
-  app.use(`${apiPrefix}/logistics`, createLogisticsRouter());
   app.use(`${apiPrefix}/upload`, uploadLimiter, createUploadRouter());
   app.use(`${apiPrefix}/webhooks`, createWebhookRouter());
   app.use(apiPrefix, createPublicRouter());

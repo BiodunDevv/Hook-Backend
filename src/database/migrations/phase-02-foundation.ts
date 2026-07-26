@@ -6,10 +6,13 @@ import { AdminAuditLog } from '@models/admin/admin-audit-log.model';
 import { FieldAgent } from '@models/field-agents/field-agent.model';
 import { OperationalState } from '@models/operations/operational-state.model';
 import { PlatformAuditLog } from '@models/platform/audit-log.model';
-import { OperationState } from '@models/platform/geography.model';
-import { RunnerProfile, StaffProfile } from '@models/platform/operations-accounts.model';
-import { Role } from '@models/platform/access.model';
-import { AccountSession } from '@models/platform/session.model';
+import { OperationCity, OperationState, ServiceZone } from '@models/platform/geography.model';
+import { DispatchHub, Market } from '@models/platform/network.model';
+import { HookPartner, RunnerMarketAssignment, RunnerProfile, StaffProfile } from '@models/platform/operations-accounts.model';
+import { Permission, Role } from '@models/platform/access.model';
+import { AccountSession, GuestSession } from '@models/platform/session.model';
+import { PublicIdCounter } from '@models/platform/counter.model';
+import { AccountInvitation } from '@models/platform/account-invitation.model';
 import { User } from '@models/users/user.model';
 import { ensurePlatformAccessCatalog } from '@services/platform-bootstrap.service';
 import { nextPublicId } from '@services/public-id.service';
@@ -43,6 +46,36 @@ function accountMapping(role: UserRole) {
   }
   if (role === UserRole.FIELD_AGENT) return { accountType: AccountType.RUNNER, domain: 'runner' as const, status: AccountStatus.ACTIVE };
   return { accountType: undefined, domain: undefined, status: AccountStatus.DISABLED };
+}
+
+async function ensurePhase2Indexes() {
+  const models = [
+    Permission,
+    Role,
+    PublicIdCounter,
+    AccountSession,
+    GuestSession,
+    AccountInvitation,
+    PlatformAuditLog,
+    OperationState,
+    OperationCity,
+    ServiceZone,
+    Market,
+    DispatchHub,
+    StaffProfile,
+    RunnerProfile,
+    HookPartner,
+    RunnerMarketAssignment,
+  ];
+  for (const model of [AccountSession, GuestSession, AccountInvitation]) {
+    await model.createCollection();
+    const existing = await model.collection.indexes();
+    const expiresIndex = existing.find((index) => index.name === 'expiresAt_1');
+    if (expiresIndex && expiresIndex.expireAfterSeconds !== 0) {
+      await model.collection.dropIndex(expiresIndex.name!);
+    }
+  }
+  await Promise.all(models.map((model) => model.createIndexes()));
 }
 
 async function buildSummary(mode: Mode): Promise<MigrationSummary> {
@@ -94,6 +127,7 @@ async function execute() {
     throw new Error('Set PHASE_02_MIGRATION_CONFIRMED=true only after a verified backup');
   }
   await ensurePlatformAccessCatalog();
+  await ensurePhase2Indexes();
   const roleByKey = new Map((await Role.find().lean()).map((role) => [role.key, role]));
   const legacyStates = await OperationalState.find().lean();
   for (const state of legacyStates) {

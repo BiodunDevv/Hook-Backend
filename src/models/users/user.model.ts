@@ -72,8 +72,6 @@ const UserSchema = createSchema<User>({
   deletedAt: { type: Date },
 });
 
-UserSchema.index({ email: 1 }, { unique: true });
-UserSchema.index({ googleId: 1 }, { unique: true, sparse: true });
 UserSchema.index({ role: 1, isActive: 1 });
 UserSchema.index({ role: 1, operationalStateCode: 1 });
 UserSchema.index({ accountType: 1, accountStatus: 1 });

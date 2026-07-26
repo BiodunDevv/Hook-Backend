@@ -18,13 +18,21 @@ PHASE_02_MIGRATION_CONFIRMED=true npm run migrate:phase2
 6. Verify counts, unique indexes, public IDs, profile references, and disabled legacy accounts.
 7. Retain source collections and migration metadata.
 
-## Current checkpoint, 2026-07-26
+## Executed checkpoint, 2026-07-26
 
 - Target detected: Atlas database `hook`, `NODE_ENV=production`.
 - Analyze: successful.
 - Dry-run: successful.
-- Source counts: 37 legacy States, 18 typed-account candidates, 3 Runner candidates, 6 Staff candidates.
-- Execution: not performed.
-- Reason: `mongodump` and `mongorestore` are unavailable, so backup and restore verification cannot satisfy the mandatory safety gate.
+- Official MongoDB Database Tools 100.17.0 were downloaded for macOS x86_64 and verified as signed by MongoDB, Inc.
+- Backup archive: `.backups/phase-02/20260726T211917Z/hook.archive.gz` (local, Git-ignored).
+- Backup SHA-256: `3c542f6a44465d3214d495f3c7e6ab87f791ee0e895f8ce15a29d2f1853e02a4`.
+- Restore verification: successful in an isolated database; 43 collections and 213 documents matched exactly. The verification database was dropped.
+- Source counts: 37 legacy States, 20 Users, 3 Runner candidates, and 6 Staff candidates.
+- Execution: successful and idempotent.
+- Post-migration: 37 Operation States, 3 Runner profiles, 6 Staff profiles, 12 Roles, and 27 Permissions.
+- Legacy Vendor and internal Driver identities: 9 disabled, retained for history.
+- Public-ID duplicate check: zero duplicates in Operation States, Staff profiles, Runner profiles, and Users.
+- Phase 2 indexes were created explicitly because production disables Mongoose `autoIndex`; session, guest-session, and invitation expiry indexes are TTL indexes.
+- Temporary restore/test databases: none remain.
 
-No source record was deleted or mutated by analyze/dry-run.
+No source collection was deleted. Legacy records and migration-source metadata remain available for rollback analysis.

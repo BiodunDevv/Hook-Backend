@@ -41,3 +41,6 @@ temp-dash/
 # Temp
 tmp/
 temp/
+
+# Local database backups
+.backups/

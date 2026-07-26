@@ -1,5 +1,12 @@
 # Phase 1 Removal Ledger
 
+## Phase 3 continuation
+
+- Legacy customer negotiation handlers were removed after the Phase 3 negotiation service and routes became the only active consumer path.
+- Active Admin negotiation monitoring was replaced with a public-ID and permission-aware presenter that does not disclose pricing floors.
+- Vendor collections and historical references remain preserved; they were not renamed or deleted.
+- Product compatibility price/media fields remain pending verified Phase 3 migration and Phase 4 consumer proof.
+
 | Surface                            | Evidence                                                                                                                                                                     | Data impact                                                       | Replacement / disposition                                 |
 | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | --------------------------------------------------------- |
 | Admin Vendors                      | Pages, nav, permissions, filters, API consumers and backend admin routes formed a self-contained obsolete workflow. Shopper vendor page was its remaining customer consumer. | Vendor collections and foreign keys preserved.                    | Future Hook Partner model, not a mechanical rename.       |

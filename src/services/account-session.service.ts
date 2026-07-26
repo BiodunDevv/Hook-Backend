@@ -4,6 +4,8 @@ import { AccountStatus, AccountType } from '@lib/constants';
 import { jwtSecret } from '@config/env';
 import { AccountSession } from '@models/platform/session.model';
 import { User } from '@models/users/user.model';
+import { resolveAccessContext } from '@services/access-control.service';
+import { presentPlatformRecords } from '@services/platform-presentation.service';
 import { HttpError } from '@utils/http';
 import { AuthUserPayload, signAccessToken, signRefreshToken } from './token.service';
 
@@ -20,8 +22,8 @@ function refreshExpiry() {
   return new Date(Date.now() + amount * unit);
 }
 
-function safeUser(user: User) {
-  return {
+async function safeUser(user: User) {
+  const base = {
     id: user.id,
     publicId: user.publicId,
     email: user.email,
@@ -33,6 +35,18 @@ function safeUser(user: User) {
     avatarUrl: user.avatarUrl,
     isEmailVerified: user.isEmailVerified,
   };
+  if (user.accountType !== AccountType.STAFF) return base;
+  const accountId = (user as any)._id?.toString() || user.id;
+  const context = await resolveAccessContext(accountId);
+  return presentPlatformRecords({
+    ...base,
+    id: user.publicId,
+    roleKeys: context.roleKeys,
+    permissions: [...context.permissions],
+    scopeType: context.scopeType,
+    assignedStateIds: context.stateIds,
+    assignedHubIds: context.hubIds,
+  });
 }
 
 export async function issueAccountSession(
@@ -61,7 +75,7 @@ export async function issueAccountSession(
   const refreshToken = signRefreshToken(payload);
   session.refreshTokenHash = hash(refreshToken);
   await session.save();
-  return { accessToken, refreshToken, user: safeUser(user) };
+  return { accessToken, refreshToken, user: await safeUser(user) };
 }
 
 export async function rotateAccountSession(refreshToken: string) {
@@ -105,7 +119,7 @@ export async function rotateAccountSession(refreshToken: string) {
   return {
     accessToken: signAccessToken(nextPayload),
     refreshToken: nextRefresh,
-    user: safeUser(user),
+    user: await safeUser(user),
   };
 }
 

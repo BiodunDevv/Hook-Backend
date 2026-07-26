@@ -20,6 +20,7 @@ import { revokeAccountSessions } from '@services/account-session.service';
 import { recordAudit } from '@services/platform-audit.service';
 import { nextPublicId, repairPublicIdCounter, PublicIdDomain } from '@services/public-id.service';
 import { issueAccountInvitation, revokeAccountInvitations } from '@services/account-invitation.service';
+import { presentPlatformRecords } from '@services/platform-presentation.service';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
 
 async function byIdentifier<T>(model: Model<T>, identifier: string) {
@@ -31,10 +32,17 @@ async function byIdentifier<T>(model: Model<T>, identifier: string) {
   return record as T & { id: string; _id: { toString(): string }; publicId?: string };
 }
 
-function stateAndHub(req: Request) {
+async function stateAndHub(req: Request) {
+  const requestedState = req.platformContext?.stateId || (req.query.stateId as string | undefined);
+  const requestedHub = req.platformContext?.hubId || (req.query.hubId as string | undefined);
+  const state = requestedState ? await byIdentifier(OperationState, requestedState) : undefined;
+  const hub = requestedHub ? await byIdentifier(DispatchHub, requestedHub) : undefined;
+  if (state && hub && hub.stateId !== state._id.toString()) {
+    throw new HttpError(409, 'Selected Dispatch Hub does not belong to the selected state', undefined, 'CONFLICT');
+  }
   return {
-    stateId: req.platformContext?.stateId || (req.query.stateId as string | undefined),
-    hubId: req.platformContext?.hubId || (req.query.hubId as string | undefined),
+    stateId: state?._id.toString(),
+    hubId: hub?._id.toString(),
   };
 }
 
@@ -51,14 +59,14 @@ async function listScoped<T>(
   extra: Record<string, unknown> = {},
 ) {
   const context = await access(req, permission);
-  const { stateId, hubId } = stateAndHub(req);
+  const { stateId, hubId } = await stateAndHub(req);
   const { page, limit, skip } = getPagination(req.query);
   const filter = scopedFilter<T>(context, extra, stateId, hubId);
   const [data, total] = await Promise.all([
     model.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean({ virtuals: true }),
     model.countDocuments(filter),
   ]);
-  return paginated(data, total, page, limit);
+  return paginated(await presentPlatformRecords(data), total, page, limit);
 }
 
 async function detailScoped<T>(
@@ -71,7 +79,15 @@ async function detailScoped<T>(
   const record = await byIdentifier(model, identifier);
   const scopedRecord = record as Record<string, any>;
   assertScope(context, scopedRecord.stateId, scopedRecord.hubId || scopedRecord.preferredHubId);
-  return record;
+  return presentPlatformRecords(record);
+}
+
+async function sendPlatformSuccess(res: Response, value: any) {
+  sendSuccess(res, await presentPlatformRecords(value));
+}
+
+async function sendPlatformCreated(res: Response, value: any) {
+  sendCreated(res, await presentPlatformRecords(value));
 }
 
 async function ensureState(id: string, active = false) {
@@ -91,6 +107,36 @@ async function ensureHub(id: string, stateId: string) {
   const hub = await byIdentifier(DispatchHub, id);
   if (hub.stateId !== stateId) throw new HttpError(409, 'Dispatch Hub does not belong to the selected state', undefined, 'CONFLICT');
   return hub;
+}
+
+async function ensureZone(id: string, stateId: string, cityId: string) {
+  const zone = await byIdentifier(ServiceZone, id);
+  if (zone.stateId !== stateId || zone.cityId !== cityId) {
+    throw new HttpError(409, 'Service Zone does not belong to the selected City and State', undefined, 'CONFLICT');
+  }
+  return zone;
+}
+
+async function resolveLocation(input: {
+  stateId: string;
+  cityId: string;
+  zoneId?: string;
+}, active = true) {
+  const state = await ensureState(input.stateId, active);
+  const city = await ensureCity(input.cityId, state._id.toString(), active);
+  const zone = input.zoneId
+    ? await ensureZone(input.zoneId, state._id.toString(), city._id.toString())
+    : undefined;
+  return {
+    state,
+    city,
+    zone,
+    ids: {
+      stateId: state._id.toString(),
+      cityId: city._id.toString(),
+      ...(zone && { zoneId: zone._id.toString() }),
+    },
+  };
 }
 
 async function resolveIdentifiers<T>(model: Model<T>, identifiers: string[]) {
@@ -183,7 +229,7 @@ async function lifecycle(
     after: { status },
     reason: req.body.reason,
   });
-  sendSuccess(res, updated);
+  await sendPlatformSuccess(res, updated);
 }
 
 export class PlatformController {
@@ -220,7 +266,7 @@ export class PlatformController {
     const { page, limit, skip } = getPagination(req.query);
     const filter = context.scopeType === ScopeType.GLOBAL ? {} : { stateIds: { $in: context.stateIds } };
     const [data, total] = await Promise.all([StaffProfile.find(filter).skip(skip).limit(limit).lean({ virtuals: true }), StaffProfile.countDocuments(filter)]);
-    sendSuccess(res, paginated(data, total, page, limit));
+    sendSuccess(res, paginated(await presentPlatformRecords(data), total, page, limit));
   };
 
   staffDetail = async (req: Request, res: Response) => {
@@ -232,7 +278,11 @@ export class PlatformController {
       User.findById(profile.accountId).select('-password -refreshToken').lean({ virtuals: true }),
       Role.find({ _id: { $in: profile.roleIds } }).lean({ virtuals: true }),
     ]);
-    sendSuccess(res, { ...profile, account, roles });
+    sendSuccess(res, {
+      ...await presentPlatformRecords(profile),
+      account: account ? { ...account, id: account.publicId, _id: undefined } : null,
+      roles,
+    });
   };
 
   createStaff = async (req: Request, res: Response) => {
@@ -276,7 +326,11 @@ export class PlatformController {
       invitedBy: req.user!.sub,
     });
     await recordAudit(req, { action: 'staff.created', entityType: 'staff', entityId: profile.id, entityPublicId: publicId, after: profile.toObject() });
-    sendCreated(res, { ...profile.toObject(), account: account.toJSON(), invitation });
+    sendCreated(res, {
+      ...await presentPlatformRecords(profile.toObject()),
+      account: { ...account.toJSON(), id: account.publicId },
+      invitation,
+    });
   };
 
   updateStaff = async (req: Request, res: Response) => {
@@ -306,7 +360,7 @@ export class PlatformController {
       },
     });
     await recordAudit(req, { action: 'staff.updated', entityType: 'staff', entityId: profile._id.toString(), entityPublicId: profile.publicId, before: profile, after: updated, reason: req.body.reason });
-    sendSuccess(res, updated);
+    await sendPlatformSuccess(res, updated);
   };
 
   staffStatus = async (req: Request, res: Response) => {
@@ -377,19 +431,19 @@ export class PlatformController {
     const { page, limit, skip } = getPagination(req.query);
     const filter = context.scopeType === ScopeType.GLOBAL ? {} : { _id: { $in: context.stateIds } };
     const [data, total] = await Promise.all([OperationState.find(filter).sort({ name: 1 }).skip(skip).limit(limit).lean({ virtuals: true }), OperationState.countDocuments(filter)]);
-    sendSuccess(res, paginated(data, total, page, limit));
+    sendSuccess(res, paginated(await presentPlatformRecords(data), total, page, limit));
   };
   stateDetail = async (req: Request, res: Response) => {
     const context = await access(req, 'states.view');
     const state = await byIdentifier(OperationState, routeParam(req.params.id));
     assertScope(context, state._id.toString());
-    sendSuccess(res, state);
+    await sendPlatformSuccess(res, state);
   };
   createState = async (req: Request, res: Response) => {
     await access(req, 'states.manage');
     const state = await OperationState.create({ ...req.body, publicId: await nextPublicId('state') });
     await recordAudit(req, { action: 'state.created', entityType: 'state', entityId: state.id, entityPublicId: state.publicId, stateId: state.id, after: state.toObject() });
-    sendCreated(res, state);
+    await sendPlatformCreated(res, state.toObject());
   };
   updateState = async (req: Request, res: Response) => {
     const context = await access(req, 'states.manage');
@@ -397,7 +451,7 @@ export class PlatformController {
     assertScope(context, state._id.toString());
     const updated = await OperationState.findByIdAndUpdate(state._id, { $set: req.body }, { returnDocument: 'after' }).lean({ virtuals: true });
     await recordAudit(req, { action: 'state.updated', entityType: 'state', entityId: state._id.toString(), entityPublicId: state.publicId, stateId: state._id.toString(), before: state, after: updated, reason: req.body.reason });
-    sendSuccess(res, updated);
+    await sendPlatformSuccess(res, updated);
   };
   stateStatus = (req: Request, res: Response) => lifecycle(req, res, OperationState, 'states.manage', 'state', req.path.endsWith('/activate') ? 'active' : 'inactive');
 
@@ -409,15 +463,27 @@ export class PlatformController {
     assertScope(context, state._id.toString());
     const city = await OperationCity.create({ ...req.body, stateId: state._id.toString(), publicId: await nextPublicId('city') });
     await recordAudit(req, { action: 'city.created', entityType: 'city', entityId: city.id, entityPublicId: city.publicId, stateId: city.stateId, after: city.toObject() });
-    sendCreated(res, city);
+    await sendPlatformCreated(res, city.toObject());
   };
   updateCity = async (req: Request, res: Response) => {
     await access(req, 'cities.manage');
     const city = await byIdentifier(OperationCity, routeParam(req.params.id));
     const context = await resolveAccessContext(req.user!.sub); assertScope(context, city.stateId);
-    const updated = await OperationCity.findByIdAndUpdate(city._id, { $set: req.body }, { returnDocument: 'after' }).lean({ virtuals: true });
+    const state = req.body.stateId ? await ensureState(req.body.stateId, true) : await ensureState(city.stateId, true);
+    assertScope(context, state._id.toString());
+    let defaultHubId = city.defaultHubId;
+    if (req.body.defaultHubId) {
+      const hub = await ensureHub(req.body.defaultHubId, state._id.toString());
+      defaultHubId = hub._id.toString();
+    }
+    const patch = {
+      ...req.body,
+      stateId: state._id.toString(),
+      ...(defaultHubId && { defaultHubId }),
+    };
+    const updated = await OperationCity.findByIdAndUpdate(city._id, { $set: patch }, { returnDocument: 'after' }).lean({ virtuals: true });
     await recordAudit(req, { action: 'city.updated', entityType: 'city', entityId: city._id.toString(), entityPublicId: city.publicId, stateId: city.stateId, before: city, after: updated, reason: req.body.reason });
-    sendSuccess(res, updated);
+    await sendPlatformSuccess(res, updated);
   };
   cityStatus = (req: Request, res: Response) => lifecycle(req, res, OperationCity, 'cities.manage', 'city', req.path.endsWith('/activate') ? 'active' : 'inactive');
 
@@ -430,15 +496,24 @@ export class PlatformController {
     assertScope(context, state._id.toString());
     const zone = await ServiceZone.create({ ...req.body, stateId: state._id.toString(), cityId: city._id.toString(), publicId: await nextPublicId('zone') });
     await recordAudit(req, { action: 'zone.created', entityType: 'zone', entityId: zone.id, entityPublicId: zone.publicId, stateId: zone.stateId, after: zone.toObject() });
-    sendCreated(res, zone);
+    await sendPlatformCreated(res, zone.toObject());
   };
   updateZone = async (req: Request, res: Response) => {
     await access(req, 'zones.manage');
     const zone = await byIdentifier(ServiceZone, routeParam(req.params.id));
     const context = await resolveAccessContext(req.user!.sub); assertScope(context, zone.stateId);
-    const updated = await ServiceZone.findByIdAndUpdate(zone._id, { $set: req.body }, { returnDocument: 'after' }).lean({ virtuals: true });
+    const location = await resolveLocation({
+      stateId: req.body.stateId || zone.stateId,
+      cityId: req.body.cityId || zone.cityId,
+    });
+    assertScope(context, location.ids.stateId);
+    const updated = await ServiceZone.findByIdAndUpdate(
+      zone._id,
+      { $set: { ...req.body, ...location.ids } },
+      { returnDocument: 'after' },
+    ).lean({ virtuals: true });
     await recordAudit(req, { action: 'zone.updated', entityType: 'zone', entityId: zone._id.toString(), entityPublicId: zone.publicId, stateId: zone.stateId, before: zone, after: updated, reason: req.body.reason });
-    sendSuccess(res, updated);
+    await sendPlatformSuccess(res, updated);
   };
   zoneStatus = (req: Request, res: Response) => lifecycle(req, res, ServiceZone, 'zones.manage', 'zone', req.path.endsWith('/activate') ? 'active' : 'inactive');
 
@@ -446,28 +521,42 @@ export class PlatformController {
   marketDetail = async (req: Request, res: Response) => sendSuccess(res, await detailScoped(req, Market, 'markets.view'));
   createMarket = async (req: Request, res: Response) => {
     const context = await access(req, 'markets.manage');
-    const state = await ensureState(req.body.stateId, true);
-    const city = await ensureCity(req.body.cityId, state._id.toString(), true);
-    assertScope(context, state._id.toString());
-    if (req.body.hubId) await ensureHub(req.body.hubId, state._id.toString());
+    const location = await resolveLocation(req.body);
+    assertScope(context, location.ids.stateId);
+    const hub = req.body.hubId ? await ensureHub(req.body.hubId, location.ids.stateId) : undefined;
     const market = await Market.create({
       ...req.body,
       publicId: await nextPublicId('market'),
-      stateId: state._id.toString(),
-      cityId: city._id.toString(),
+      ...location.ids,
+      ...(hub && { hubId: hub._id.toString() }),
       normalizedName: req.body.name.trim().toLowerCase(),
     });
     await recordAudit(req, { action: 'market.created', entityType: 'market', entityId: market.id, entityPublicId: market.publicId, stateId: market.stateId, hubId: market.hubId, after: market.toObject() });
-    sendCreated(res, market);
+    await sendPlatformCreated(res, market.toObject());
   };
   updateMarket = async (req: Request, res: Response) => {
     await access(req, 'markets.manage');
     const market = await byIdentifier(Market, routeParam(req.params.id));
     const context = await resolveAccessContext(req.user!.sub); assertScope(context, market.stateId, market.hubId);
-    if (req.body.hubId) await ensureHub(req.body.hubId, market.stateId);
-    const updated = await Market.findByIdAndUpdate(market._id, { $set: { ...req.body, ...(req.body.name && { normalizedName: req.body.name.trim().toLowerCase() }) } }, { returnDocument: 'after' }).lean({ virtuals: true });
+    const location = await resolveLocation({
+      stateId: req.body.stateId || market.stateId,
+      cityId: req.body.cityId || market.cityId,
+      zoneId: req.body.zoneId || market.zoneId,
+    });
+    assertScope(context, location.ids.stateId);
+    const hub = req.body.hubId
+      ? await ensureHub(req.body.hubId, location.ids.stateId)
+      : market.hubId
+        ? await ensureHub(market.hubId, location.ids.stateId)
+        : undefined;
+    const updated = await Market.findByIdAndUpdate(market._id, { $set: {
+      ...req.body,
+      ...location.ids,
+      ...(hub && { hubId: hub._id.toString() }),
+      ...(req.body.name && { normalizedName: req.body.name.trim().toLowerCase() }),
+    } }, { returnDocument: 'after' }).lean({ virtuals: true });
     await recordAudit(req, { action: 'market.updated', entityType: 'market', entityId: market._id.toString(), entityPublicId: market.publicId, stateId: market.stateId, hubId: market.hubId, before: market, after: updated, reason: req.body.reason });
-    sendSuccess(res, updated);
+    await sendPlatformSuccess(res, updated);
   };
   marketStatus = (req: Request, res: Response) => lifecycle(req, res, Market, 'markets.manage', 'market', req.path.endsWith('/activate') ? 'active' : 'inactive');
   assignMarketHub = async (req: Request, res: Response) => {
@@ -476,51 +565,89 @@ export class PlatformController {
     const hub = await ensureHub(req.body.hubId, market.stateId);
     const updated = await Market.findByIdAndUpdate(market._id, { $set: { hubId: hub._id.toString() } }, { returnDocument: 'after' }).lean({ virtuals: true });
     await recordAudit(req, { action: 'market.hub_assigned', entityType: 'market', entityId: market._id.toString(), entityPublicId: market.publicId, stateId: market.stateId, hubId: hub._id.toString(), before: { hubId: market.hubId }, after: { hubId: hub._id.toString() }, reason: req.body.reason });
-    sendSuccess(res, updated);
+    await sendPlatformSuccess(res, updated);
   };
 
   listHubs = async (req: Request, res: Response) => sendSuccess(res, await listScoped(req, DispatchHub, 'hubs.view'));
   hubDetail = async (req: Request, res: Response) => sendSuccess(res, await detailScoped(req, DispatchHub, 'hubs.view'));
   createHub = async (req: Request, res: Response) => {
     const context = await access(req, 'hubs.manage');
-    const state = await ensureState(req.body.stateId, true);
-    const city = await ensureCity(req.body.cityId, state._id.toString(), true);
-    assertScope(context, state._id.toString());
-    const hub = await DispatchHub.create({ ...req.body, publicId: await nextPublicId('hub'), stateId: state._id.toString(), cityId: city._id.toString() });
+    const location = await resolveLocation(req.body);
+    assertScope(context, location.ids.stateId);
+    const zoneIds = await resolveIdentifiers(ServiceZone, req.body.zoneIds || []);
+    const zones = await ServiceZone.find({ _id: { $in: zoneIds } }).lean();
+    if (zones.some((zone) => zone.stateId !== location.ids.stateId || zone.cityId !== location.ids.cityId)) {
+      throw new HttpError(409, 'Every Service Zone must belong to the Dispatch Hub City and State', undefined, 'CONFLICT');
+    }
+    const staffIds = await resolveIdentifiers(StaffProfile, req.body.staffIds || []);
+    const hub = await DispatchHub.create({
+      ...req.body,
+      publicId: await nextPublicId('hub'),
+      ...location.ids,
+      zoneIds,
+      marketIds: [],
+      staffIds,
+    });
     await recordAudit(req, { action: 'hub.created', entityType: 'hub', entityId: hub.id, entityPublicId: hub.publicId, stateId: hub.stateId, hubId: hub.id, after: hub.toObject() });
-    sendCreated(res, hub);
+    await sendPlatformCreated(res, hub.toObject());
   };
   updateHub = async (req: Request, res: Response) => {
     await access(req, 'hubs.manage');
     const hub = await byIdentifier(DispatchHub, routeParam(req.params.id));
     const context = await resolveAccessContext(req.user!.sub); assertScope(context, hub.stateId, hub._id.toString());
-    const updated = await DispatchHub.findByIdAndUpdate(hub._id, { $set: req.body }, { returnDocument: 'after' }).lean({ virtuals: true });
+    const location = await resolveLocation({
+      stateId: req.body.stateId || hub.stateId,
+      cityId: req.body.cityId || hub.cityId,
+    });
+    assertScope(context, location.ids.stateId, hub._id.toString());
+    const zoneIds = req.body.zoneIds
+      ? await resolveIdentifiers(ServiceZone, req.body.zoneIds)
+      : hub.zoneIds;
+    const zones = await ServiceZone.find({ _id: { $in: zoneIds } }).lean();
+    if (zones.some((zone) => zone.stateId !== location.ids.stateId || zone.cityId !== location.ids.cityId)) {
+      throw new HttpError(409, 'Every Service Zone must belong to the Dispatch Hub City and State', undefined, 'CONFLICT');
+    }
+    const marketIds = req.body.marketIds
+      ? await resolveIdentifiers(Market, req.body.marketIds)
+      : hub.marketIds;
+    const markets = await Market.find({ _id: { $in: marketIds } }).lean();
+    if (markets.some((market) => market.stateId !== location.ids.stateId)) {
+      throw new HttpError(409, 'Every Market must belong to the Dispatch Hub state', undefined, 'CONFLICT');
+    }
+    const staffIds = req.body.staffIds
+      ? await resolveIdentifiers(StaffProfile, req.body.staffIds)
+      : hub.staffIds;
+    const updated = await DispatchHub.findByIdAndUpdate(
+      hub._id,
+      { $set: { ...req.body, ...location.ids, zoneIds, marketIds, staffIds } },
+      { returnDocument: 'after' },
+    ).lean({ virtuals: true });
     await recordAudit(req, { action: 'hub.updated', entityType: 'hub', entityId: hub._id.toString(), entityPublicId: hub.publicId, stateId: hub.stateId, hubId: hub._id.toString(), before: hub, after: updated, reason: req.body.reason });
-    sendSuccess(res, updated);
+    await sendPlatformSuccess(res, updated);
   };
   hubStatus = (req: Request, res: Response) => lifecycle(req, res, DispatchHub, 'hubs.manage', 'hub', req.path.endsWith('/activate') ? 'active' : 'inactive');
   assignHubMarkets = async (req: Request, res: Response) => {
     await access(req, 'hubs.assign_markets');
     const hub = await byIdentifier(DispatchHub, routeParam(req.params.id));
-    const markets = await Market.find({ _id: { $in: req.body.marketIds } }).lean();
-    if (markets.length !== req.body.marketIds.length || markets.some((market) => market.stateId !== hub.stateId)) {
+    const marketIds = await resolveIdentifiers(Market, req.body.marketIds);
+    const markets = await Market.find({ _id: { $in: marketIds } }).lean();
+    if (markets.length !== marketIds.length || markets.some((market) => market.stateId !== hub.stateId)) {
       throw new HttpError(409, 'Every Market must belong to the Dispatch Hub state', undefined, 'CONFLICT');
     }
     await Promise.all([
-      DispatchHub.updateOne({ _id: hub._id }, { $set: { marketIds: req.body.marketIds } }),
-      Market.updateMany({ _id: { $in: req.body.marketIds } }, { $set: { hubId: hub._id.toString() } }),
+      DispatchHub.updateOne({ _id: hub._id }, { $set: { marketIds } }),
+      Market.updateMany({ _id: { $in: marketIds } }, { $set: { hubId: hub._id.toString() } }),
     ]);
     await recordAudit(req, { action: 'hub.markets_assigned', entityType: 'hub', entityId: hub._id.toString(), entityPublicId: hub.publicId, stateId: hub.stateId, hubId: hub._id.toString(), before: { marketIds: hub.marketIds }, after: { marketIds: req.body.marketIds }, reason: req.body.reason });
-    sendSuccess(res, { marketIds: req.body.marketIds });
+    await sendPlatformSuccess(res, { marketIds });
   };
 
   listPartners = async (req: Request, res: Response) => sendSuccess(res, await listScoped(req, HookPartner, 'partners.view'));
   partnerDetail = async (req: Request, res: Response) => sendSuccess(res, await detailScoped(req, HookPartner, 'partners.view'));
   createPartner = async (req: Request, res: Response) => {
     const context = await access(req, 'partners.manage');
-    const state = await ensureState(req.body.stateId, true);
-    const city = await ensureCity(req.body.cityId, state._id.toString(), true);
-    assertScope(context, state._id.toString());
+    const location = await resolveLocation(req.body);
+    assertScope(context, location.ids.stateId);
     const publicId = await nextPublicId('partner');
     const account = await User.create({
       publicId, accountType: AccountType.PARTNER, accountStatus: AccountStatus.INVITED,
@@ -528,7 +655,13 @@ export class PlatformController {
       firstName: req.body.firstName, lastName: req.body.lastName, role: UserRole.SUPPORT,
       isActive: true, isEmailVerified: false, isPhoneVerified: false, scopeType: ScopeType.SELF,
     });
-    const partner = await HookPartner.create({ ...req.body, publicId, accountId: account.id, stateId: state._id.toString(), cityId: city._id.toString(), status: 'invited' });
+    const partner = await HookPartner.create({
+      ...req.body,
+      ...location.ids,
+      publicId,
+      accountId: account.id,
+      status: 'invited',
+    });
     const invitation = await issueAccountInvitation({
       accountId: account.id,
       accountType: AccountType.PARTNER,
@@ -537,15 +670,25 @@ export class PlatformController {
       invitedBy: req.user!.sub,
     });
     await recordAudit(req, { action: 'partner.created', entityType: 'partner', entityId: partner.id, entityPublicId: publicId, stateId: partner.stateId, after: partner.toObject() });
-    sendCreated(res, { ...partner.toObject(), invitation });
+    sendCreated(res, { ...await presentPlatformRecords(partner.toObject()), invitation });
   };
   updatePartner = async (req: Request, res: Response) => {
     await access(req, 'partners.manage');
     const partner = await byIdentifier(HookPartner, routeParam(req.params.id));
     const context = await resolveAccessContext(req.user!.sub); assertScope(context, partner.stateId);
-    const updated = await HookPartner.findByIdAndUpdate(partner._id, { $set: req.body }, { returnDocument: 'after' }).lean({ virtuals: true });
+    const location = await resolveLocation({
+      stateId: req.body.stateId || partner.stateId,
+      cityId: req.body.cityId || partner.cityId,
+      zoneId: req.body.zoneId || partner.zoneId,
+    });
+    assertScope(context, location.ids.stateId);
+    const updated = await HookPartner.findByIdAndUpdate(
+      partner._id,
+      { $set: { ...req.body, ...location.ids } },
+      { returnDocument: 'after' },
+    ).lean({ virtuals: true });
     await recordAudit(req, { action: 'partner.updated', entityType: 'partner', entityId: partner._id.toString(), entityPublicId: partner.publicId, stateId: partner.stateId, before: partner, after: updated, reason: req.body.reason });
-    sendSuccess(res, updated);
+    await sendPlatformSuccess(res, updated);
   };
   partnerStatus = async (req: Request, res: Response) => {
     await access(req, 'partners.manage');
@@ -607,7 +750,7 @@ export class PlatformController {
     const { page, limit, skip } = getPagination(req.query);
     const filter = context.scopeType === ScopeType.GLOBAL ? {} : { stateIds: { $in: context.stateIds } };
     const [data, total] = await Promise.all([RunnerProfile.find(filter).skip(skip).limit(limit).lean({ virtuals: true }), RunnerProfile.countDocuments(filter)]);
-    sendSuccess(res, paginated(data, total, page, limit));
+    sendSuccess(res, paginated(await presentPlatformRecords(data), total, page, limit));
   };
   runnerDetail = async (req: Request, res: Response) => {
     const context = await access(req, 'runners.view');
@@ -615,7 +758,7 @@ export class PlatformController {
     if (context.scopeType !== ScopeType.GLOBAL && !runner.stateIds.some((stateId) => context.stateIds.includes(stateId))) {
       throw new HttpError(403, 'Runner is outside your assigned operational scope', undefined, 'SCOPE_DENIED');
     }
-    sendSuccess(res, runner);
+    await sendPlatformSuccess(res, runner);
   };
   createRunner = async (req: Request, res: Response) => {
     const context = await access(req, 'runners.manage');
@@ -638,7 +781,7 @@ export class PlatformController {
       invitedBy: req.user!.sub,
     });
     await recordAudit(req, { action: 'runner.created', entityType: 'runner', entityId: runner.id, entityPublicId: publicId, after: runner.toObject() });
-    sendCreated(res, { ...runner.toObject(), invitation });
+    sendCreated(res, { ...await presentPlatformRecords(runner.toObject()), invitation });
   };
   updateRunner = async (req: Request, res: Response) => {
     const context = await access(req, 'runners.manage');
@@ -650,7 +793,7 @@ export class PlatformController {
       $set: { ...req.body, stateIds: scope.stateIds, hubIds: scope.hubIds },
     }, { returnDocument: 'after' }).lean({ virtuals: true });
     await recordAudit(req, { action: 'runner.updated', entityType: 'runner', entityId: runner._id.toString(), entityPublicId: runner.publicId, before: runner, after: updated, reason: req.body.reason });
-    sendSuccess(res, updated);
+    await sendPlatformSuccess(res, updated);
   };
   runnerStatus = async (req: Request, res: Response) => {
     await access(req, 'runners.manage');
@@ -712,41 +855,64 @@ export class PlatformController {
     const context = await access(req, 'runners.assign');
     const runner = await byIdentifier(RunnerProfile, req.body.runnerId);
     const market = await byIdentifier(Market, req.body.marketId);
-    assertScope(context, market.stateId, req.body.preferredHubId);
+    const preferredHub = req.body.preferredHubId
+      ? await ensureHub(req.body.preferredHubId, market.stateId)
+      : undefined;
+    assertScope(context, market.stateId, preferredHub?._id.toString());
     if (!runner.stateIds.includes(market.stateId)) throw new HttpError(409, 'Runner is not assigned to the Market state', undefined, 'CONFLICT');
-    if (req.body.preferredHubId) await ensureHub(req.body.preferredHubId, market.stateId);
     const assignment = await RunnerMarketAssignment.create({
       ...req.body,
       stateId: market.stateId,
       runnerId: runner._id.toString(),
       marketId: market._id.toString(),
+      ...(preferredHub && { preferredHubId: preferredHub._id.toString() }),
       createdBy: req.user!.sub,
       history: [{ action: 'created', at: new Date(), actorId: req.user!.sub }],
     });
     await recordAudit(req, { action: 'runner_assignment.created', entityType: 'runner_assignment', entityId: assignment.id, stateId: assignment.stateId, hubId: assignment.preferredHubId, after: assignment.toObject() });
-    sendCreated(res, assignment);
+    await sendPlatformCreated(res, assignment.toObject());
   };
   updateAssignment = async (req: Request, res: Response) => {
     await access(req, 'runners.assign');
     const assignment = await byIdentifier(RunnerMarketAssignment, routeParam(req.params.id));
     const context = await resolveAccessContext(req.user!.sub); assertScope(context, assignment.stateId, assignment.preferredHubId);
+    const runner = await byIdentifier(RunnerProfile, req.body.runnerId || assignment.runnerId);
+    const market = await byIdentifier(Market, req.body.marketId || assignment.marketId);
+    const preferredHub = req.body.preferredHubId
+      ? await ensureHub(req.body.preferredHubId, market.stateId)
+      : assignment.preferredHubId
+        ? await ensureHub(assignment.preferredHubId, market.stateId)
+        : undefined;
+    if (!runner.stateIds.includes(market.stateId)) {
+      throw new HttpError(409, 'Runner is not assigned to the Market state', undefined, 'CONFLICT');
+    }
+    assertScope(context, market.stateId, preferredHub?._id.toString());
     const updated = await RunnerMarketAssignment.findByIdAndUpdate(assignment._id, {
-      $set: { ...req.body, updatedBy: req.user!.sub },
+      $set: {
+        ...req.body,
+        runnerId: runner._id.toString(),
+        marketId: market._id.toString(),
+        stateId: market.stateId,
+        ...(preferredHub && { preferredHubId: preferredHub._id.toString() }),
+        updatedBy: req.user!.sub,
+      },
       $push: { history: { action: 'updated', at: new Date(), actorId: req.user!.sub, reason: req.body.reason } },
     }, { returnDocument: 'after' }).lean({ virtuals: true });
     await recordAudit(req, { action: 'runner_assignment.updated', entityType: 'runner_assignment', entityId: assignment._id.toString(), stateId: assignment.stateId, hubId: assignment.preferredHubId, before: assignment, after: updated, reason: req.body.reason });
-    sendSuccess(res, updated);
+    await sendPlatformSuccess(res, updated);
   };
   assignmentStatus = async (req: Request, res: Response) => {
     await access(req, 'runners.assign');
     const assignment = await byIdentifier(RunnerMarketAssignment, routeParam(req.params.id));
+    const context = await resolveAccessContext(req.user!.sub);
+    assertScope(context, assignment.stateId, assignment.preferredHubId);
     const status = req.path.endsWith('/activate') ? 'active' : req.path.endsWith('/pause') ? 'paused' : 'ended';
     const updated = await RunnerMarketAssignment.findByIdAndUpdate(assignment._id, {
       $set: { status, updatedBy: req.user!.sub, ...(status === 'ended' && { activeTo: new Date() }) },
       $push: { history: { action: status, at: new Date(), actorId: req.user!.sub, reason: req.body.reason } },
     }, { returnDocument: 'after' }).lean({ virtuals: true });
     await recordAudit(req, { action: `runner_assignment.${status}`, entityType: 'runner_assignment', entityId: assignment._id.toString(), stateId: assignment.stateId, hubId: assignment.preferredHubId, before: { status: assignment.status }, after: { status }, reason: req.body.reason });
-    sendSuccess(res, updated);
+    await sendPlatformSuccess(res, updated);
   };
 
   auditLogs = async (req: Request, res: Response) => {

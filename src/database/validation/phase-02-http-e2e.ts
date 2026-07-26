@@ -6,6 +6,7 @@ import { hashPassword } from '@lib/security';
 import { OperationState } from '@models/platform/geography.model';
 import { Role } from '@models/platform/access.model';
 import { StaffProfile } from '@models/platform/operations-accounts.model';
+import { AccountSession } from '@models/platform/session.model';
 import { User } from '@models/users/user.model';
 import { Category } from '@models/categories/category.model';
 import { Product } from '@models/products/product.model';
@@ -43,6 +44,10 @@ async function main() {
   const superRole = await Role.findOne({ key: 'SUPER_ADMIN' });
   const managerRole = await Role.findOne({ key: 'STATE_OPERATIONS_MANAGER' });
   assert(superRole && managerRole, 'Platform roles were not bootstrapped');
+  assert(
+    managerRole.permissionKeys.includes('orders.view') && managerRole.permissionKeys.includes('orders.edit'),
+    'Retained commerce permissions were not consolidated into the platform Role catalogue',
+  );
 
   const password = 'Phase2-Validation-Password!';
   const superAccount = await User.create({
@@ -145,12 +150,22 @@ async function main() {
     });
     assert(login.status === 200 && login.body.data?.accessToken && login.body.data.refreshToken, 'Staff login failed');
     const originalRefresh = login.body.data.refreshToken;
+    const accountAfterLogin = await User.findById(superAccount.id).lean();
+    const sessionAfterLogin = await AccountSession.findOne({ accountId: superAccount.id }).lean();
+    assert(
+      accountAfterLogin?.isActive && accountAfterLogin.accountStatus === AccountStatus.ACTIVE,
+      `Staff account changed during login: ${JSON.stringify(accountAfterLogin)}`,
+    );
+    assert(sessionAfterLogin, 'Staff session was not linked to the account Mongo identifier');
 
     const rotated = await request<{ accessToken: string; refreshToken: string }>('/api/v1/auth/refresh', {
       method: 'POST',
       body: JSON.stringify({ refreshToken: originalRefresh }),
     });
-    assert(rotated.status === 200 && rotated.body.data?.refreshToken !== originalRefresh, 'Refresh token did not rotate');
+    assert(
+      rotated.status === 200 && rotated.body.data?.refreshToken !== originalRefresh,
+      `Refresh token did not rotate: ${rotated.status} ${rotated.body.error?.code || ''} ${rotated.body.error?.message || ''}`,
+    );
     const replay = await request('/api/v1/auth/refresh', {
       method: 'POST',
       body: JSON.stringify({ refreshToken: originalRefresh }),
@@ -198,6 +213,152 @@ async function main() {
       incompatibleZone.status === 409 && incompatibleZone.body.error?.code === 'CONFLICT',
       'Cross-state geography relationship was not rejected',
     );
+    const lagosZone = await request<{ id: string; publicId: string }>('/api/v1/admin/zones', {
+      method: 'POST',
+      headers: { authorization },
+      body: JSON.stringify({
+        stateId: lagos.body.data!.publicId,
+        cityId: lagosCity.body.data!.publicId,
+        name: 'Lagos Core',
+        code: 'LGC',
+        status: 'active',
+      }),
+    });
+    assert(lagosZone.status === 201, 'Compatible Service Zone creation failed');
+    const incompatibleZoneUpdate = await request(
+      `/api/v1/admin/zones/${lagosZone.body.data!.publicId}`,
+      {
+        method: 'PATCH',
+        headers: { authorization },
+        body: JSON.stringify({ cityId: abujaCity.body.data!.publicId }),
+      },
+    );
+    assert(
+      incompatibleZoneUpdate.status === 409,
+      'Cross-state Service Zone update was not rejected',
+    );
+
+    const incompatibleMarket = await request('/api/v1/admin/markets', {
+      method: 'POST',
+      headers: { authorization },
+      body: JSON.stringify({
+        stateId: lagos.body.data!.publicId,
+        cityId: abujaCity.body.data!.publicId,
+        name: 'Invalid cross-state Market',
+        address: 'Invalid Market address',
+      }),
+    });
+    assert(
+      incompatibleMarket.status === 409 && incompatibleMarket.body.error?.code === 'CONFLICT',
+      'Cross-state Market relationship was not rejected',
+    );
+
+    const incompatibleHub = await request('/api/v1/admin/hubs', {
+      method: 'POST',
+      headers: { authorization },
+      body: JSON.stringify({
+        stateId: lagos.body.data!.publicId,
+        cityId: abujaCity.body.data!.publicId,
+        name: 'Invalid cross-state Hub',
+        address: 'Invalid Hub address',
+        zoneIds: [],
+        marketIds: [],
+        staffIds: [],
+      }),
+    });
+    assert(
+      incompatibleHub.status === 409 && incompatibleHub.body.error?.code === 'CONFLICT',
+      'Cross-state Dispatch Hub relationship was not rejected',
+    );
+
+    const lagosHub = await request<{ id: string; publicId: string; stateId: string; cityId: string }>(
+      '/api/v1/admin/hubs',
+      {
+        method: 'POST',
+        headers: { authorization },
+        body: JSON.stringify({
+          stateId: lagos.body.data!.publicId,
+          cityId: lagosCity.body.data!.publicId,
+          name: 'Lagos Dispatch Hub',
+          address: '1 Hook Way, Lagos',
+          zoneIds: [lagosZone.body.data!.publicId],
+          marketIds: [],
+          staffIds: [],
+          status: 'active',
+        }),
+      },
+    );
+    assert(
+      lagosHub.status === 201
+      && lagosHub.body.data?.id === lagosHub.body.data?.publicId
+      && lagosHub.body.data?.stateId === lagos.body.data!.publicId
+      && lagosHub.body.data?.cityId === lagosCity.body.data!.publicId,
+      'Dispatch Hub response did not preserve the public-ID boundary',
+    );
+
+    const lagosMarket = await request<{ id: string; publicId: string }>('/api/v1/admin/markets', {
+      method: 'POST',
+      headers: { authorization },
+      body: JSON.stringify({
+        stateId: lagos.body.data!.publicId,
+        cityId: lagosCity.body.data!.publicId,
+        zoneId: lagosZone.body.data!.publicId,
+        name: 'Lagos Central Market',
+        address: '2 Hook Way, Lagos',
+        status: 'active',
+      }),
+    });
+    assert(lagosMarket.status === 201, 'Compatible Market creation failed');
+    const incompatibleMarketUpdate = await request(
+      `/api/v1/admin/markets/${lagosMarket.body.data!.publicId}`,
+      {
+        method: 'PATCH',
+        headers: { authorization },
+        body: JSON.stringify({ cityId: abujaCity.body.data!.publicId }),
+      },
+    );
+    assert(
+      incompatibleMarketUpdate.status === 409,
+      'Cross-state Market update was not rejected',
+    );
+    const assignMarkets = await request<{ marketIds: string[] }>(
+      `/api/v1/admin/hubs/${lagosHub.body.data!.publicId}/assign-markets`,
+      {
+        method: 'POST',
+        headers: { authorization },
+        body: JSON.stringify({
+          marketIds: [lagosMarket.body.data!.publicId],
+          reason: 'Validate public identifier assignment',
+        }),
+      },
+    );
+    assert(
+      assignMarkets.status === 200
+      && assignMarkets.body.data?.marketIds[0] === lagosMarket.body.data!.publicId,
+      'Public-ID Hub Market assignment failed',
+    );
+    const incompatibleHubUpdate = await request(
+      `/api/v1/admin/hubs/${lagosHub.body.data!.publicId}`,
+      {
+        method: 'PATCH',
+        headers: { authorization },
+        body: JSON.stringify({ cityId: abujaCity.body.data!.publicId }),
+      },
+    );
+    assert(
+      incompatibleHubUpdate.status === 409,
+      'Cross-state Dispatch Hub update was not rejected',
+    );
+    const stateFilteredHubs = await request<{ data: Array<{ publicId: string }> }>(
+      `/api/v1/admin/hubs?stateId=${lagos.body.data!.publicId}`,
+      { headers: { authorization } },
+    );
+    assert(
+      stateFilteredHubs.status === 200
+      && stateFilteredHubs.body.data?.data.length === 1
+      && stateFilteredHubs.body.data.data[0].publicId === lagosHub.body.data!.publicId,
+      'Public State identifier filtering did not resolve at the API boundary',
+    );
 
     const invitedStaff = await request<{ publicId: string; status: string }>('/api/v1/admin/staff', {
       method: 'POST',
@@ -214,6 +375,10 @@ async function main() {
       }),
     });
     assert(invitedStaff.status === 201 && invitedStaff.body.data?.status === 'invited', 'Staff invitation creation failed');
+    assert(
+      (invitedStaff.body.data as any)?.stateIds?.[0] === lagos.body.data!.publicId,
+      'Staff scope response exposed an internal State identifier',
+    );
     const cancelInvitation = await request<{ status: string }>(
       `/api/v1/admin/staff/${invitedStaff.body.data!.publicId}/cancel-invitation`,
       {
@@ -261,6 +426,17 @@ async function main() {
       body: JSON.stringify({ email: manager.email, password }),
     });
     const managerAuthorization = `Bearer ${managerLogin.body.data!.accessToken}`;
+    assert(
+      (managerLogin.body.data as any)?.user?.assignedStateIds?.[0] === lagos.body.data!.publicId,
+      'Authenticated staff context exposed an internal State identifier',
+    );
+    const financeDenied = await request('/api/v1/admin/financials', {
+      headers: { authorization: managerAuthorization },
+    });
+    assert(
+      financeDenied.status === 403 && financeDenied.body.error?.code === 'ACCESS_DENIED',
+      'Legacy admin role bypassed live Role permissions',
+    );
     const scopedList = await request<{ data: Array<{ publicId: string }> }>('/api/v1/admin/states', {
       headers: { authorization: managerAuthorization },
     });
@@ -279,7 +455,7 @@ async function main() {
     });
     assert(suspendedAccess.status === 401, 'Suspended account retained API access');
 
-    console.log('Phase 2 HTTP E2E passed: envelope, guest lifecycle, public IDs, refresh replay, geography, invitations, scope, suspension');
+    console.log('Phase 2 HTTP E2E passed: envelope, guest lifecycle, public IDs, refresh replay, geography relationships, permissions, invitations, scope, suspension');
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     await mongoose.connection.dropDatabase();

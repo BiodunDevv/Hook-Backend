@@ -133,8 +133,8 @@ export function createAdminRouter() {
   router.get('/runners/stats',   requirePermission('runners.view'), asyncHandler(runners.stats));
   router.get('/runners/queue',   requirePermission('runners.view'), asyncHandler(runners.queue));
   router.get('/runners/:id',     requirePermission('runners.view'), asyncHandler(runners.detail));
-  router.patch('/runners/:id/toggle', requirePermission('runners.edit'), asyncHandler(runners.toggle));
-  router.patch('/runners/:id/state', requirePermission('runners.edit'), validateBody(operationalStateAssignSchema), asyncHandler(runners.setState));
+  router.patch('/runners/:id/toggle', requirePermission('runners.manage'), asyncHandler(runners.toggle));
+  router.patch('/runners/:id/state', requirePermission('runners.manage'), validateBody(operationalStateAssignSchema), asyncHandler(runners.setState));
 
   // ── Support operations ───────────────────────────────────────────────
   router.get('/support/deletion-requests', requirePermission('deletions.view'), asyncHandler(commerce.deletionRequests));

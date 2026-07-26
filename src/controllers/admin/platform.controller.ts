@@ -19,6 +19,7 @@ import { assertPermission, assertScope, resolveAccessContext, scopedFilter } fro
 import { revokeAccountSessions } from '@services/account-session.service';
 import { recordAudit } from '@services/platform-audit.service';
 import { nextPublicId, repairPublicIdCounter, PublicIdDomain } from '@services/public-id.service';
+import { issueAccountInvitation } from '@services/account-invitation.service';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
 
 async function byIdentifier<T>(model: Model<T>, identifier: string) {
@@ -206,8 +207,15 @@ export class PlatformController {
       hubIds: req.body.hubIds,
       status: AccountStatus.INVITED,
     });
+    const invitation = await issueAccountInvitation({
+      accountId: account.id,
+      accountType: AccountType.STAFF,
+      email: account.email,
+      name: `${account.firstName} ${account.lastName}`.trim(),
+      invitedBy: req.user!.sub,
+    });
     await recordAudit(req, { action: 'staff.created', entityType: 'staff', entityId: profile.id, entityPublicId: publicId, after: profile.toObject() });
-    sendCreated(res, { ...profile.toObject(), account: account.toJSON() });
+    sendCreated(res, { ...profile.toObject(), account: account.toJSON(), invitation });
   };
 
   updateStaff = async (req: Request, res: Response) => {
@@ -253,6 +261,24 @@ export class PlatformController {
     await revokeAccountSessions(profile.accountId, req.body.reason || 'administrative_revocation', req.user!.sub);
     await recordAudit(req, { action: 'staff.sessions_revoked', entityType: 'staff', entityId: profile._id.toString(), entityPublicId: profile.publicId, reason: req.body.reason });
     sendSuccess(res, { revoked: true });
+  };
+
+  resendStaffInvitation = async (req: Request, res: Response) => {
+    await access(req, 'staff.create');
+    const profile = await byIdentifier(StaffProfile, routeParam(req.params.id));
+    const account = await User.findById(profile.accountId);
+    if (!account || profile.status !== AccountStatus.INVITED) {
+      throw new HttpError(409, 'Only invited staff accounts can receive a new invitation', undefined, 'CONFLICT');
+    }
+    const invitation = await issueAccountInvitation({
+      accountId: account.id,
+      accountType: AccountType.STAFF,
+      email: account.email,
+      name: `${account.firstName} ${account.lastName}`.trim(),
+      invitedBy: req.user!.sub,
+    });
+    await recordAudit(req, { action: 'staff.invitation_resent', entityType: 'staff', entityId: profile._id.toString(), entityPublicId: profile.publicId });
+    sendSuccess(res, invitation);
   };
 
   listStates = async (req: Request, res: Response) => {
@@ -412,8 +438,15 @@ export class PlatformController {
       isActive: true, isEmailVerified: false, isPhoneVerified: false, scopeType: ScopeType.SELF,
     });
     const partner = await HookPartner.create({ ...req.body, publicId, accountId: account.id, stateId: state._id.toString(), cityId: city._id.toString(), status: 'invited' });
+    const invitation = await issueAccountInvitation({
+      accountId: account.id,
+      accountType: AccountType.PARTNER,
+      email: account.email,
+      name: `${account.firstName} ${account.lastName}`.trim(),
+      invitedBy: req.user!.sub,
+    });
     await recordAudit(req, { action: 'partner.created', entityType: 'partner', entityId: partner.id, entityPublicId: publicId, stateId: partner.stateId, after: partner.toObject() });
-    sendCreated(res, partner);
+    sendCreated(res, { ...partner.toObject(), invitation });
   };
   updatePartner = async (req: Request, res: Response) => {
     await access(req, 'partners.manage');
@@ -434,6 +467,24 @@ export class PlatformController {
     ]);
     await recordAudit(req, { action: `partner.${status}`, entityType: 'partner', entityId: partner._id.toString(), entityPublicId: partner.publicId, stateId: partner.stateId, before: { status: partner.status }, after: { status }, reason: req.body.reason });
     sendSuccess(res, { status });
+  };
+
+  resendPartnerInvitation = async (req: Request, res: Response) => {
+    await access(req, 'partners.manage');
+    const partner = await byIdentifier(HookPartner, routeParam(req.params.id));
+    const account = await User.findById(partner.accountId);
+    if (!account || partner.status !== AccountStatus.INVITED) {
+      throw new HttpError(409, 'Only invited Partner accounts can receive a new invitation', undefined, 'CONFLICT');
+    }
+    const invitation = await issueAccountInvitation({
+      accountId: account.id,
+      accountType: AccountType.PARTNER,
+      email: account.email,
+      name: `${account.firstName} ${account.lastName}`.trim(),
+      invitedBy: req.user!.sub,
+    });
+    await recordAudit(req, { action: 'partner.invitation_resent', entityType: 'partner', entityId: partner._id.toString(), entityPublicId: partner.publicId, stateId: partner.stateId });
+    sendSuccess(res, invitation);
   };
 
   listRunners = async (req: Request, res: Response) => {
@@ -462,8 +513,15 @@ export class PlatformController {
       isActive: true, isEmailVerified: false, isPhoneVerified: false, scopeType: ScopeType.SELF,
     });
     const runner = await RunnerProfile.create({ publicId, accountId: account.id, stateIds: req.body.stateIds, hubIds: req.body.hubIds || [], availability: 'unavailable', status: 'invited' });
+    const invitation = await issueAccountInvitation({
+      accountId: account.id,
+      accountType: AccountType.RUNNER,
+      email: account.email,
+      name: `${account.firstName} ${account.lastName}`.trim(),
+      invitedBy: req.user!.sub,
+    });
     await recordAudit(req, { action: 'runner.created', entityType: 'runner', entityId: runner.id, entityPublicId: publicId, after: runner.toObject() });
-    sendCreated(res, runner);
+    sendCreated(res, { ...runner.toObject(), invitation });
   };
   updateRunner = async (req: Request, res: Response) => {
     const context = await access(req, 'runners.manage');
@@ -484,6 +542,24 @@ export class PlatformController {
     ]);
     await recordAudit(req, { action: `runner.${status}`, entityType: 'runner', entityId: runner._id.toString(), entityPublicId: runner.publicId, before: { status: runner.status }, after: { status }, reason: req.body.reason });
     sendSuccess(res, { status });
+  };
+
+  resendRunnerInvitation = async (req: Request, res: Response) => {
+    await access(req, 'runners.manage');
+    const runner = await byIdentifier(RunnerProfile, routeParam(req.params.id));
+    const account = await User.findById(runner.accountId);
+    if (!account || runner.status !== AccountStatus.INVITED) {
+      throw new HttpError(409, 'Only invited Runner accounts can receive a new invitation', undefined, 'CONFLICT');
+    }
+    const invitation = await issueAccountInvitation({
+      accountId: account.id,
+      accountType: AccountType.RUNNER,
+      email: account.email,
+      name: `${account.firstName} ${account.lastName}`.trim(),
+      invitedBy: req.user!.sub,
+    });
+    await recordAudit(req, { action: 'runner.invitation_resent', entityType: 'runner', entityId: runner._id.toString(), entityPublicId: runner.publicId });
+    sendSuccess(res, invitation);
   };
 
   listAssignments = async (req: Request, res: Response) => sendSuccess(res, await listScoped(req, RunnerMarketAssignment, 'runners.assign'));

@@ -153,6 +153,7 @@ export function createPlatformAdminRouter() {
   router.post('/staff/:id/suspend', validateBody(lifecycleSchema), asyncHandler(controller.staffStatus));
   router.post('/staff/:id/reactivate', validateBody(lifecycleSchema), asyncHandler(controller.staffStatus));
   router.post('/staff/:id/revoke-sessions', validateBody(lifecycleSchema), asyncHandler(controller.revokeStaffSessions));
+  router.post('/staff/:id/resend-invitation', asyncHandler(controller.resendStaffInvitation));
 
   crud(router, '/states', {
     list: controller.listStates, create: controller.createState, detail: controller.stateDetail,
@@ -184,6 +185,7 @@ export function createPlatformAdminRouter() {
   router.post('/partners/:id/activate', validateBody(lifecycleSchema), asyncHandler(controller.partnerStatus));
   router.post('/partners/:id/suspend', validateBody(lifecycleSchema), asyncHandler(controller.partnerStatus));
   router.post('/partners/:id/reactivate', validateBody(lifecycleSchema), asyncHandler(controller.partnerStatus));
+  router.post('/partners/:id/resend-invitation', asyncHandler(controller.resendPartnerInvitation));
 
   router.get('/runners', asyncHandler(controller.listRunners));
   router.post('/runners', validateBody(runnerSchema), asyncHandler(controller.createRunner));
@@ -192,6 +194,7 @@ export function createPlatformAdminRouter() {
   router.post('/runners/:id/activate', validateBody(lifecycleSchema), asyncHandler(controller.runnerStatus));
   router.post('/runners/:id/suspend', validateBody(lifecycleSchema), asyncHandler(controller.runnerStatus));
   router.post('/runners/:id/reactivate', validateBody(lifecycleSchema), asyncHandler(controller.runnerStatus));
+  router.post('/runners/:id/resend-invitation', asyncHandler(controller.resendRunnerInvitation));
 
   router.get('/runner-assignments', asyncHandler(controller.listAssignments));
   router.post('/runner-assignments', validateBody(assignmentSchema), asyncHandler(controller.createAssignment));

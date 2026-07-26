@@ -95,6 +95,14 @@ const schemas = {
       guestId: { type: 'string', description: 'Optional guest id to merge guest cart/orders after Google sign-in.' },
     },
   },
+  AccountInvitationAcceptRequest: {
+    type: 'object',
+    required: ['token', 'password'],
+    properties: {
+      token: { type: 'string', minLength: 32, description: 'Single-use activation token delivered by email.' },
+      password: { type: 'string', minLength: 9, maxLength: 128 },
+    },
+  },
   AuthLookupRequest: {
     type: 'object',
     required: ['email'],
@@ -541,6 +549,7 @@ add('post', `${apiPrefix}/auth/signup/complete`, op('Authentication', 'Complete 
 add('post', `${apiPrefix}/auth/register`, op('Authentication', 'Register shopper account', { public: true, requestBody: body('RegisterRequest') }));
 add('post', `${apiPrefix}/auth/login`, op('Authentication', 'Login shopper/mobile user', { public: true, requestBody: body('LoginRequest') }));
 add('post', `${apiPrefix}/auth/google`, op('Authentication', 'Login or create shopper account with a verified Google ID token', { public: true, requestBody: body('GoogleAuthRequest') }));
+add('post', `${apiPrefix}/auth/invitations/accept`, op('Authentication', 'Activate an invited Staff, Runner, or Partner account and create its password', { public: true, requestBody: body('AccountInvitationAcceptRequest') }));
 add('post', `${apiPrefix}/auth/verify-otp`, op('Authentication', 'Verify email OTP', { public: true, requestBody: body('OtpRequest') }));
 add('post', `${apiPrefix}/auth/refresh`, op('Authentication', 'Refresh access token', { public: true, requestBody: body('RefreshRequest') }));
 add('post', `${apiPrefix}/auth/password/forgot`, op('Authentication', 'Request password reset code', { public: true, requestBody: body('PasswordForgotRequest') }));
@@ -720,6 +729,11 @@ for (const [resource, tag] of platformResources) {
 }
 add('get', `${apiPrefix}/admin/public-id-counters`, op('Platform Governance', 'Inspect annual public Hook ID counters'));
 add('post', `${apiPrefix}/admin/public-id-counters/repair`, op('Platform Governance', 'Repair a public ID counter with mandatory reason and audit'));
+for (const resource of ['staff', 'runners', 'partners']) {
+  add('post', `${apiPrefix}/admin/${resource}/{id}/resend-invitation`, op('Platform Governance', `Revoke the previous token and resend a ${resource.slice(0, -1)} activation invitation`, {
+    parameters: [param('id', 'Public Hook ID')],
+  }));
+}
 add('get', `${apiPrefix}/runner/profile`, op('Runner Foundation', 'Get the authenticated Runner profile and scope'));
 add('post', `${apiPrefix}/runner/auth/login`, op('Runner Foundation', 'Sign in to the Runner portal with server-enforced Runner account type', { requestBody: body('LoginRequest') }));
 add('get', `${apiPrefix}/runner/markets`, op('Runner Foundation', 'List only Markets assigned to the authenticated Runner'));

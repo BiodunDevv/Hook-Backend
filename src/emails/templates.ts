@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import {
+  AccountInvitationEmailPayload,
   OrderEmailPayload,
   OtpEmailPayload,
   VendorDecisionEmailPayload,
@@ -90,6 +91,19 @@ export function welcomeEmailTemplate(payload: WelcomeEmailPayload) {
     subject: 'Welcome to Hook',
     html: renderTemplate('welcome.html', baseValues({ name: payload.name || 'there' })),
     text: `Welcome to Hook${payload.name ? `, ${payload.name}` : ''}.`,
+  };
+}
+
+export function accountInvitationEmailTemplate(payload: AccountInvitationEmailPayload) {
+  return {
+    subject: 'Activate your Hook account',
+    html: renderTemplate('account-invitation.html', baseValues({
+      name: payload.name || 'there',
+      accountType: payload.accountType,
+      activationUrl: payload.activationUrl,
+      expiresIn: `${payload.expiresInHours} hours`,
+    })),
+    text: `Activate your Hook ${payload.accountType} account: ${payload.activationUrl}. This link expires in ${payload.expiresInHours} hours.`,
   };
 }
 

@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>{{emailStyles}}</style>
+</head>
+<body>
+  <main class="email-shell">
+    <section class="email-card">
+      <div class="wordmark">hook<span>.</span></div>
+      <p>Hello {{name}},</p>
+      <h1>Activate your Hook account</h1>
+      <p>You have been invited to join Hook as a {{accountType}} account. Create your password using the secure button below.</p>
+      <p><a class="button" href="{{activationUrl}}">Activate account</a></p>
+      <p class="muted">This single-use link expires in {{expiresIn}}. If you were not expecting this invitation, you can ignore this email.</p>
+    </section>
+  </main>
+</body>
+</html>

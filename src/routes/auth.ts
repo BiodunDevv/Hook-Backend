@@ -11,7 +11,8 @@ import {
   profileSchema,
   registerSchema,
 } from '@validations/common.schemas';
-import { asyncHandler } from '@utils/http';
+import { asyncHandler, sendSuccess } from '@utils/http';
+import { acceptAccountInvitation } from '@services/account-invitation.service';
 
 const otpSchema = z.object({ email: z.string().email(), code: z.string().min(4) });
 const refreshSchema = z.object({ refreshToken: z.string().min(1) });
@@ -54,6 +55,17 @@ export function createAuthRouter() {
   router.post('/register', validateBody(registerSchema), asyncHandler(controller.register));
   router.post('/login', validateBody(loginSchema), asyncHandler(controller.login));
   router.post('/google', validateBody(googleAuthSchema), asyncHandler(controller.googleLogin));
+  router.post('/invitations/accept', validateBody(z.object({
+    token: z.string().min(32),
+    password: z.string().min(9).max(128),
+  })), asyncHandler(async (req, res) => {
+    const result = await acceptAccountInvitation(req.body.token, req.body.password, {
+      requestId: req.requestId,
+      ipAddress: req.ip,
+      userAgent: req.header('user-agent'),
+    });
+    sendSuccess(res, result);
+  }));
   router.post('/verify-otp', validateBody(otpSchema), asyncHandler(controller.verifyOtp));
   router.post('/refresh', validateBody(refreshSchema), asyncHandler(controller.refresh));
   router.post('/logout', validateBody(logoutSchema), asyncHandler(controller.logout));

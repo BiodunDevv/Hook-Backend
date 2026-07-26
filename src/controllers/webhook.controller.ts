@@ -5,7 +5,7 @@ import { Payment } from '@models/payments/payment.model';
 import { EscrowLedger } from '@models/payments/escrow-ledger.model';
 import { PaymentService } from '@services/payment.service';
 import { routeParam } from '@lib/api-utils';
-import { sendSuccess } from '@utils/http';
+import { sendError, sendSuccess } from '@utils/http';
 
 export class WebhookController {
   private readonly payments = new PaymentService(
@@ -17,12 +17,12 @@ export class WebhookController {
   payment = async (req: Request, res: Response) => {
     const gateway = routeParam(req.params.gateway);
     if (gateway !== 'opay') {
-      res.status(410).json({ success: false, message: 'Legacy payment webhooks are no longer active', timestamp: new Date().toISOString() });
+      sendError(res, 410, 'INVALID_STATE_TRANSITION', 'Legacy payment webhooks are no longer active');
       return;
     }
     const transactionId = String(req.header('x-opay-tranid') || req.body?.transactionId || req.body?.data?.orderNo || '');
     if (!transactionId) {
-      res.status(400).json({ success: false, message: 'Missing OPay transaction id', timestamp: new Date().toISOString() });
+      sendError(res, 400, 'VALIDATION_ERROR', 'Missing OPay transaction id');
       return;
     }
     const signature = String(req.body?.sha512 || req.header('signature') || req.header('x-opay-signature') || '');

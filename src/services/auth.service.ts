@@ -1,6 +1,6 @@
 import type { MongoRepository as Repository } from '@lib/mongo-repository';
 import { createHash, randomBytes } from 'crypto';
-import { UserRole } from '@lib/constants';
+import { AccountStatus, AccountType, ScopeType, UserRole } from '@lib/constants';
 import { comparePassword, hashPassword } from '@lib/security';
 import { EmailService } from '@emails/email.service';
 import { Otp } from '@models/auth/otp.model';
@@ -13,7 +13,8 @@ import { User } from '@models/users/user.model';
 import { NotificationService } from '@services/notification.service';
 import { HttpError } from '@utils/http';
 import { verifyGoogleIdToken } from './google-auth.service';
-import { AuthUserPayload, signAccessToken, signRefreshToken } from './token.service';
+import { issueAccountSession, revokeAccountSession, revokeAccountSessions, rotateAccountSession } from './account-session.service';
+import { nextPublicId } from './public-id.service';
 
 function hashToken(token: string) {
   return createHash('sha256').update(token).digest('hex');
@@ -99,6 +100,9 @@ export class AuthService {
     if (user.accountStatus === 'pending_password') {
       throw new HttpError(403, 'Set your password from the email sent after checkout before signing in');
     }
+    if (user.accountStatus && user.accountStatus !== AccountStatus.ACTIVE) {
+      throw new HttpError(403, 'This account is not available for sign in', undefined, 'ACCESS_DENIED');
+    }
 
     if (
       options?.adminOnly &&
@@ -108,11 +112,11 @@ export class AuthService {
     }
 
     user.lastLoginAt = new Date();
-    const response = this.buildAuthResponse(user);
+    const response = await this.buildAuthResponse(user);
     if (options?.guestId) await this.mergeGuestIntoUser(options.guestId, user.id);
     await this.userRepo.update(user.id, {
       lastLoginAt: user.lastLoginAt,
-      refreshToken: hashToken(response.refreshToken),
+      refreshToken: undefined,
     });
     await this.notifications?.sendWelcome(
       { userId: user.id },
@@ -133,7 +137,9 @@ export class AuthService {
     const isNewUser = !user;
 
     if (user) {
-      if (!user.isActive) throw new HttpError(401, 'Account not activated. Complete your profile first.');
+      if (!user.isActive || (user.accountStatus && user.accountStatus !== AccountStatus.ACTIVE)) {
+        throw new HttpError(403, 'This account is not available for sign in', undefined, 'ACCESS_DENIED');
+      }
       user.googleId = user.googleId || payload.sub;
       user.email = user.email || email;
       user.authProvider = user.authProvider === 'google' ? 'google' : user.authProvider || 'password';
@@ -145,6 +151,10 @@ export class AuthService {
       await this.userRepo.save(user);
     } else {
       user = await this.userRepo.save(this.userRepo.create({
+        publicId: await nextPublicId('customer'),
+        accountType: AccountType.CUSTOMER,
+        accountStatus: AccountStatus.ACTIVE,
+        scopeType: ScopeType.SELF,
         email,
         password: undefined,
         authProvider: 'google',
@@ -162,9 +172,9 @@ export class AuthService {
 
     if (!user) throw new HttpError(401, 'Google sign-in could not be completed');
     const authUser = user;
-    const response = this.buildAuthResponse(authUser);
+    const response = await this.buildAuthResponse(authUser);
     await Promise.all([
-      this.userRepo.update(authUser.id, { refreshToken: hashToken(response.refreshToken), lastLoginAt: new Date() }),
+      this.userRepo.update(authUser.id, { refreshToken: undefined, lastLoginAt: new Date() }),
       this.mergeGuestIntoUser(input.guestId, authUser.id),
     ]);
 
@@ -184,6 +194,10 @@ export class AuthService {
     }
 
     const user = this.userRepo.create({
+      publicId: await nextPublicId('customer'),
+      accountType: AccountType.CUSTOMER,
+      accountStatus: AccountStatus.ACTIVE,
+      scopeType: ScopeType.SELF,
       email,
       password: await hashPassword(password),
       authProvider: 'password',
@@ -283,6 +297,10 @@ export class AuthService {
     if (existing) throw new HttpError(400, 'An account with this email already exists. Please login.');
 
     const user = await this.userRepo.save(this.userRepo.create({
+      publicId: await nextPublicId('customer'),
+      accountType: AccountType.CUSTOMER,
+      accountStatus: AccountStatus.ACTIVE,
+      scopeType: ScopeType.SELF,
       email: session.email,
       password: session.passwordHash,
       authProvider: 'password',
@@ -299,9 +317,9 @@ export class AuthService {
       lastLoginAt: new Date(),
     }));
 
-    const response = this.buildAuthResponse(user);
+    const response = await this.buildAuthResponse(user);
     await Promise.all([
-      this.userRepo.update(user.id, { refreshToken: hashToken(response.refreshToken) }),
+      this.userRepo.update(user.id, { refreshToken: undefined }),
       this.signupSessions!.delete({ id: session.id }),
       this.mergeGuestIntoUser(body.guestId || session.guestId, user.id),
     ]);
@@ -353,24 +371,12 @@ export class AuthService {
   }
 
   async refresh(refreshToken: string) {
-    const user = await this.userRepo.findOne({ where: { refreshToken: hashToken(refreshToken) } });
-    if (!user) throw new HttpError(401, 'Invalid refresh token');
-    if (!user.isActive) throw new HttpError(401, 'Invalid refresh token');
-    const response = this.buildAuthResponse(user);
-    await this.userRepo.update(user.id, { refreshToken: hashToken(response.refreshToken) });
-    return response;
+    return rotateAccountSession(refreshToken);
   }
 
-  async logout(refreshToken?: string, userId?: string) {
-    if (userId) {
-      await this.userRepo.update(userId, { refreshToken: undefined });
-      return { message: 'Logged out successfully.' };
-    }
-    if (refreshToken) {
-      const user = await this.userRepo.findOne({ where: { refreshToken: hashToken(refreshToken) } });
-      if (user) await this.userRepo.update(user.id, { refreshToken: undefined });
-    }
-    return { message: 'Logged out successfully.' };
+  async logout(refreshToken?: string, _userId?: string, sessionId?: string) {
+    await revokeAccountSession(refreshToken, sessionId);
+    return { loggedOut: true };
   }
 
   async requestPasswordReset(email: string) {
@@ -403,7 +409,7 @@ export class AuthService {
 
     user.password = await hashPassword(password);
     user.refreshToken = undefined;
-    user.accountStatus = 'active';
+    user.accountStatus = AccountStatus.ACTIVE;
     user.isActive = true;
     user.isEmailVerified = true;
     await Promise.all([
@@ -411,8 +417,8 @@ export class AuthService {
       this.userRepo.save(user),
     ]);
 
-    const response = this.buildAuthResponse(user);
-    await this.userRepo.update(user.id, { refreshToken: hashToken(response.refreshToken) });
+    await revokeAccountSessions(user.id, 'password_reset');
+    const response = await this.buildAuthResponse(user);
     await this.notifications?.sendWelcome(
       { userId: user.id },
       `${user.firstName || ''} ${user.lastName || ''}`.trim() || undefined,
@@ -524,26 +530,6 @@ export class AuthService {
   }
 
   private buildAuthResponse(user: User) {
-    const payload: AuthUserPayload = {
-      sub: user.id,
-      email: user.email,
-      role: user.role,
-    };
-    const accessToken = signAccessToken(payload);
-    const refreshToken = signRefreshToken(payload);
-
-    return {
-      accessToken,
-      refreshToken,
-      user: {
-        id: user.id,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        role: user.role,
-        avatarUrl: user.avatarUrl,
-        isEmailVerified: user.isEmailVerified,
-      },
-    };
+    return issueAccountSession(user);
   }
 }

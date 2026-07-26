@@ -86,7 +86,7 @@ export class AuthController {
   };
 
   logout = async (req: Request, res: Response) => {
-    sendSuccess(res, await this.auth.logout(req.body.refreshToken, req.user?.sub));
+    sendSuccess(res, await this.auth.logout(req.body.refreshToken, req.user?.sub, req.user?.sid));
   };
 
   requestPasswordReset = async (req: Request, res: Response) => {

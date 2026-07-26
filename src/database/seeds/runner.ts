@@ -350,6 +350,13 @@ function slugify(value: string) {
 }
 
 async function resetSeedData() {
+  const databaseName = mongoose.connection.db?.databaseName || '';
+  const clearlyDisposable = /(?:^|[-_])(dev|development|test|qa)(?:$|[-_])/i.test(databaseName);
+  if (!clearlyDisposable && process.env.ALLOW_DATABASE_RESET !== 'true') {
+    throw new Error(
+      `Refusing to reset MongoDB database "${databaseName}". Use a disposable dev/test database or set ALLOW_DATABASE_RESET=true explicitly.`,
+    );
+  }
   await mongoose.connection.dropDatabase();
   console.log('Database cleared for fresh seed');
 }

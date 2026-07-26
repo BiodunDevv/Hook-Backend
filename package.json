@@ -20,7 +20,10 @@
     "seed": "TS_NODE_FILES=true ts-node -r tsconfig-paths/register src/database/seeds/runner.ts",
     "seed:dev": "NODE_ENV=development TS_NODE_FILES=true ts-node -r tsconfig-paths/register src/database/seeds/runner.ts",
     "migrate:cart-variants": "TS_NODE_FILES=true ts-node -r tsconfig-paths/register src/database/migrations/cart-variant-index.ts",
-    "migrate:product-colors": "TS_NODE_FILES=true ts-node -r tsconfig-paths/register src/database/migrations/product-colors.ts"
+    "migrate:product-colors": "TS_NODE_FILES=true ts-node -r tsconfig-paths/register src/database/migrations/product-colors.ts",
+    "migrate:phase2:analyze": "TS_NODE_FILES=true ts-node -r tsconfig-paths/register src/database/migrations/phase-02-foundation.ts --mode=analyze",
+    "migrate:phase2:dry-run": "TS_NODE_FILES=true ts-node -r tsconfig-paths/register src/database/migrations/phase-02-foundation.ts --mode=dry-run",
+    "migrate:phase2": "TS_NODE_FILES=true ts-node -r tsconfig-paths/register src/database/migrations/phase-02-foundation.ts --mode=execute"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

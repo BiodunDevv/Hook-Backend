@@ -1,11 +1,14 @@
 import jwt, { SignOptions } from 'jsonwebtoken';
-import { UserRole } from '@lib/constants';
+import { AccountType, UserRole } from '@lib/constants';
 import { jwtSecret } from '@config/env';
 
 export interface AuthUserPayload {
   sub: string;
   email: string;
   role: UserRole;
+  accountType?: AccountType;
+  sid?: string;
+  familyId?: string;
 }
 
 export function signAccessToken(payload: AuthUserPayload) {

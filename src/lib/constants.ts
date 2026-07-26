@@ -13,6 +13,48 @@ export enum UserRole {
   SUPER_ADMIN = 'super_admin',
 }
 
+export enum AccountType {
+  CUSTOMER = 'customer',
+  STAFF = 'staff',
+  RUNNER = 'runner',
+  PARTNER = 'partner',
+}
+
+export enum AccountStatus {
+  INVITED = 'invited',
+  ACTIVE = 'active',
+  SUSPENDED = 'suspended',
+  DISABLED = 'disabled',
+  PENDING_PASSWORD = 'pending_password',
+  DELETION_REQUESTED = 'deletion_requested',
+  ANONYMIZED = 'anonymized',
+}
+
+export enum ScopeType {
+  GLOBAL = 'global',
+  MULTI_STATE = 'multi_state',
+  SINGLE_STATE = 'single_state',
+  HUB = 'hub',
+  SELF = 'self',
+}
+
+export const PLATFORM_ROLE_KEYS = [
+  'SUPER_ADMIN',
+  'OPERATIONS_LEAD',
+  'STATE_OPERATIONS_MANAGER',
+  'COMMERCIAL_MANAGER',
+  'COMMERCIAL_OFFICER',
+  'CATALOG_REVIEWER',
+  'DISPATCH_HUB_MANAGER',
+  'DISPATCH_HUB_OFFICER',
+  'LOGISTICS_OFFICER',
+  'CUSTOMER_SUPPORT_OFFICER',
+  'FINANCE_OFFICER',
+  'MANAGEMENT_VIEWER',
+] as const;
+
+export type PlatformRoleKey = (typeof PLATFORM_ROLE_KEYS)[number];
+
 // ============================================================
 // Order lifecycle
 // ============================================================

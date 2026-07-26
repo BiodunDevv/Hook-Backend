@@ -14,7 +14,9 @@ import { AdminStaffController } from '@controllers/admin/staff.controller';
 import { AdminUsersController } from '@controllers/admin/users.controller';
 import { AdminCommerceController } from '@controllers/admin/commerce.controller';
 import { createAdminAuthRouter } from '@controllers/admin/admin-auth.controller';
+import { createPlatformAdminRouter } from './platform';
 import { requireAuth } from '@middleware/auth';
+import { platformContext } from '@middleware/platform-context';
 import { requireAdmin, requireSuperAdmin } from '@middleware/roles';
 import { requirePermission } from '@middleware/permissions';
 import { validateBody } from '@middleware/validate';
@@ -65,6 +67,8 @@ export function createAdminRouter() {
 
   // ── All routes below require a valid admin token ───────────────────────
   router.use(requireAuth, requireAdmin);
+  router.use(platformContext);
+  router.use('/', createPlatformAdminRouter());
 
   // ── Search (permission-scoped — controller reads user from req) ────────
   router.get('/search', asyncHandler(search.global));

@@ -17,7 +17,8 @@ export type Permission =
   | 'analytics.checkout'
   | 'reports.view'
   | 'ai_negotiation.view'
-  | 'settings.view';
+  | 'settings.view'
+  | string;
 
 /**
  * requirePermission(perm)
@@ -34,6 +35,12 @@ export function requirePermission(permission: Permission) {
     const user = req.user;
     if (!user) return next(new HttpError(401, 'Authentication required'));
 
+    if (user.roleKeys?.includes('SUPER_ADMIN')) {
+      return next();
+    }
+    if (user.accountType === 'staff' && user.permissions.includes(permission)) {
+      return next();
+    }
     if (user.role === UserRole.SUPER_ADMIN || user.role === UserRole.ADMIN) {
       return next();
     }

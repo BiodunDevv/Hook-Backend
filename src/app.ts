@@ -14,7 +14,10 @@ import { createDeviceRouter } from './routes/devices';
 import { createPublicRouter } from './routes/public';
 import { createUploadRouter } from './routes/upload';
 import { createWebhookRouter } from './routes/webhooks';
-import { errorHandler, sendSuccess } from './utils/http';
+import { createGuestSessionRouter } from './routes/guest-sessions';
+import { createPartnerRouter, createRunnerRouter } from './routes/platform-self';
+import { createPublicGeographyRouter } from './routes/public-geography';
+import { errorHandler, requestContext, sendError, sendSuccess } from './utils/http';
 
 export function createApp() {
   const app = express();
@@ -25,6 +28,7 @@ export function createApp() {
 
   app.disable('x-powered-by');
   app.set('trust proxy', 1);
+  app.use(requestContext);
   app.use(helmet({
     crossOriginResourcePolicy: { policy: 'cross-origin' },
   }));
@@ -50,7 +54,7 @@ export function createApp() {
 
   app.get('/docs-json', (_req, res) => {
     if (!docsEnabled) {
-      res.status(404).json({ success: false, message: 'Route not found', timestamp: new Date().toISOString() });
+      sendError(res, 404, 'NOT_FOUND', 'Route not found');
       return;
     }
     res.setHeader('Cache-Control', 'no-store, max-age=0');
@@ -59,7 +63,7 @@ export function createApp() {
 
   app.get(['/swagger-spec.json', '/docs/swagger-spec.json'], (_req, res) => {
     if (!docsEnabled) {
-      res.status(404).json({ success: false, message: 'Route not found', timestamp: new Date().toISOString() });
+      sendError(res, 404, 'NOT_FOUND', 'Route not found');
       return;
     }
     res.setHeader('Cache-Control', 'no-store, max-age=0');
@@ -68,7 +72,7 @@ export function createApp() {
 
   app.use('/docs', (_req: Request, res: Response, next: NextFunction) => {
     if (!docsEnabled) {
-      res.status(404).json({ success: false, message: 'Route not found', timestamp: new Date().toISOString() });
+      sendError(res, 404, 'NOT_FOUND', 'Route not found');
       return;
     }
     res.setHeader(
@@ -96,8 +100,12 @@ export function createApp() {
   }));
 
   app.use(`${apiPrefix}/auth`, authLimiter, createAuthRouter());
+  app.use(`${apiPrefix}/guest-sessions`, authLimiter, createGuestSessionRouter());
   app.use(`${apiPrefix}/devices`, createDeviceRouter());
   app.use(`${apiPrefix}/admin`, createAdminRouter());
+  app.use(`${apiPrefix}/runner`, createRunnerRouter());
+  app.use(`${apiPrefix}/partner`, createPartnerRouter());
+  app.use(`${apiPrefix}/public`, createPublicGeographyRouter());
   app.use(`${apiPrefix}/upload`, uploadLimiter, createUploadRouter());
   app.use(`${apiPrefix}/webhooks`, createWebhookRouter());
   app.use(apiPrefix, createPublicRouter());
@@ -110,8 +118,8 @@ export function createApp() {
   app.use((_req, res) => {
     res.status(404).json({
       success: false,
-      message: 'Route not found',
-      timestamp: new Date().toISOString(),
+      error: { code: 'NOT_FOUND', message: 'Route not found' },
+      meta: { requestId: _req.requestId, timestamp: new Date().toISOString() },
     });
   });
 

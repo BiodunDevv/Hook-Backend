@@ -1,6 +1,6 @@
 import type { MongoRepository as Repository } from '@lib/mongo-repository';
 import { AppDataSource } from '@config/data-source';
-import { DEFAULT_DELIVERY_FEE, DELIVERY_SLA_HOURS, OrderStatus, OrderType, PaymentMode, PaymentStatus, ProductStatus } from '@lib/constants';
+import { AccountStatus, AccountType, DEFAULT_DELIVERY_FEE, DELIVERY_SLA_HOURS, OrderStatus, OrderType, PaymentMode, PaymentStatus, ProductStatus, ScopeType } from '@lib/constants';
 import { EmailService } from '@emails/email.service';
 import { Cart } from '@models/cart/cart.model';
 import { CartItem } from '@models/cart/cart-item.model';
@@ -13,6 +13,7 @@ import { CustomerOwner } from './cart.service';
 import { HttpError } from '@utils/http';
 import { Otp } from '@models/auth/otp.model';
 import { randomInt } from 'crypto';
+import { nextPublicId } from './public-id.service';
 
 type CheckoutBody = Pick<Order, 'deliveryAddress' | 'deliveryNotes' | 'scheduledDeliveryAt' | 'guestEmail' | 'guestName' | 'paymentMode' | 'orderType' | 'giftRecipient'>;
 
@@ -197,9 +198,12 @@ export class OrderService {
     if (existing) return existing;
     const [firstName, ...last] = name.trim().split(/\s+/);
     const user = await users.save(users.create({
+      publicId: await nextPublicId('customer'),
+      accountType: AccountType.CUSTOMER,
+      scopeType: ScopeType.SELF,
       email: normalized, firstName: firstName || '', lastName: last.join(' '),
       role: 'shopper' as any, isActive: true, isEmailVerified: false, isPhoneVerified: false,
-      accountStatus: 'pending_password', originatingGuestId: guestId,
+      accountStatus: AccountStatus.PENDING_PASSWORD, originatingGuestId: guestId,
     }));
     const otps = AppDataSource.getRepository(Otp);
     await Otp.updateMany({ email: normalized, type: 'password_reset', isUsed: false }, { $set: { isUsed: true } });

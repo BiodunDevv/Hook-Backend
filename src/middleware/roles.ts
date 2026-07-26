@@ -12,5 +12,12 @@ export function requireRoles(...roles: UserRole[]) {
   };
 }
 
-export const requireAdmin = requireRoles(UserRole.SUPPORT, UserRole.ADMIN, UserRole.SUPER_ADMIN);
-export const requireSuperAdmin = requireRoles(UserRole.SUPER_ADMIN);
+export function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  if (req.user?.accountType === 'staff') return next();
+  return requireRoles(UserRole.SUPPORT, UserRole.ADMIN, UserRole.SUPER_ADMIN)(req, res, next);
+}
+
+export function requireSuperAdmin(req: Request, res: Response, next: NextFunction) {
+  if (req.user?.roleKeys?.includes('SUPER_ADMIN')) return next();
+  return requireRoles(UserRole.SUPER_ADMIN)(req, res, next);
+}

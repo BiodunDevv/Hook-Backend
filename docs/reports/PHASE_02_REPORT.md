@@ -12,21 +12,25 @@
 - Shopper contract, guest-session, and public-geography integration.
 - Idempotent analyze/dry-run migration with destructive-seed guard.
 - Updated OpenAPI and focused unit tests.
+- Verified production backup and restore, checkpointed migration execution, explicit production index creation, and post-migration checks.
+- Secure single-use activation invitations for Staff, Runner, and Partner accounts, with isolated activation routes, audited acceptance, and resend controls.
+- Relationship-aware State and City selectors for City, Zone, Market, Hub, and Partner administration.
+- Permission-aware staff console plus isolated Runner and Partner route groups. Super Admin remains an RBAC role inside the staff console rather than a duplicated dashboard application.
 
 ## Validation
 
-Backend tests 9/9, backend build, Swagger, Admin targeted lint/type/build, Shopper lint/type, and Expo Doctor 18/18 passed. Backend lint has no errors and 261 recorded legacy warnings.
+Backend tests 9/9, isolated Phase 2 database integration checks, backend build, Swagger (138 paths), Admin full lint/type/build (46 routes), Shopper lint/type, and Expo Doctor 18/18 passed. Backend lint has no errors and 261 recorded legacy warnings.
 
 ## Migration safety result
 
-Analyze and dry-run passed against production Atlas database `hook`. Execution was intentionally blocked because MongoDB Database Tools are not installed, preventing the mandatory dump and restore verification. No production mutation occurred.
+The production Atlas database `hook` was backed up with signed MongoDB Database Tools 100.17.0. A full restore into an isolated database matched 43 collections and 213 documents, then the temporary database was removed. Analyze and dry-run passed. The migration executed successfully and was rerun idempotently. Post-migration checks found 37 Operation States, 3 Runner profiles, 6 Staff profiles, 12 Roles, 27 Permissions, no duplicate public IDs, correct TTL/unique indexes, and 9 disabled legacy Vendor/Driver identities. No source collection was deleted.
 
 ## Remaining blockers
 
-- Install Database Tools, create and restore-verify backup, execute and verify migration.
-- Add isolated database integration/E2E coverage for concurrency, refresh replay, suspension, scope, and relationship scenarios.
-- Replace compact generic administration forms with relationship-aware selectors and complete mutation controls.
-- Complete secure invitation/password activation for Staff, Runner, and Partner accounts.
-- Audit remaining legacy controllers for direct response construction and public Mongo-ID leakage.
+- Add full HTTP E2E coverage for refresh replay, suspension, scope, and relationship scenarios.
+- Replace remaining comma-separated role/state/Hub inputs with searchable multi-select controls and complete every detail-page mutation.
+- Add an explicit invitation cancellation control; resending already revokes earlier tokens.
+- Complete the retained commerce-controller public-ID boundary; several legacy resources still expose Mongo-backed `id` values.
+- Finish the exact endpoint-to-permission matrix audit before enabling Phase 3 commerce work.
 
 NOT READY FOR PHASE 3

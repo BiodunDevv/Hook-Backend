@@ -629,10 +629,12 @@ add('post', `${apiPrefix}/admin/orders/{orderId}/fulfilments/{vendorId}/{decisio
 add('get', `${apiPrefix}/admin/dispatch/active`, op('Admin Dispatch', 'List active deliveries'));
 add('get', `${apiPrefix}/admin/dispatch`, op('Admin Dispatch', 'List delivery records', { parameters: [query('page', { type: 'integer' }), query('limit', { type: 'integer' })] }));
 add('get', `${apiPrefix}/admin/dispatch/drivers`, op('Admin Dispatch', 'List active drivers', { parameters: [query('stateCode')] }));
-add('get', `${apiPrefix}/admin/field-agents`, op('Admin Field Agents', 'List field agents', { parameters: [query('page', { type: 'integer' }), query('limit', { type: 'integer' }), query('stateCode')] }));
-add('get', `${apiPrefix}/admin/field-agents/{id}`, op('Admin Field Agents', 'Get field-agent detail', { parameters: [param('id', 'Field-agent id')] }));
-add('patch', `${apiPrefix}/admin/field-agents/{id}/toggle`, op('Admin Field Agents', 'Toggle field-agent active status', { parameters: [param('id', 'Field-agent id')] }));
-add('patch', `${apiPrefix}/admin/field-agents/{id}/state`, op('Admin Field Agents', 'Assign field agent to an active operating state', { parameters: [param('id', 'Field-agent id')], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['stateCode'], properties: { stateCode: { type: 'string', example: 'LA' } } } } } } }));
+add('get', `${apiPrefix}/admin/runners`, op('Admin Runners', 'List runners', { parameters: [query('page', { type: 'integer' }), query('limit', { type: 'integer' }), query('stateCode')] }));
+add('get', `${apiPrefix}/admin/runners/stats`, op('Admin Runners', 'Get runner operational statistics'));
+add('get', `${apiPrefix}/admin/runners/queue`, op('Admin Runners', 'List runner catalog review queue'));
+add('get', `${apiPrefix}/admin/runners/{id}`, op('Admin Runners', 'Get runner detail', { parameters: [param('id', 'Runner id')] }));
+add('patch', `${apiPrefix}/admin/runners/{id}/toggle`, op('Admin Runners', 'Toggle runner active status', { parameters: [param('id', 'Runner id')] }));
+add('patch', `${apiPrefix}/admin/runners/{id}/state`, op('Admin Runners', 'Assign runner to an active operating state', { parameters: [param('id', 'Runner id')], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['stateCode'], properties: { stateCode: { type: 'string', example: 'LA' } } } } } } }));
 add('get', `${apiPrefix}/admin/booths`, op('Admin Booths', 'List booths', { parameters: [query('page', { type: 'integer' }), query('limit', { type: 'integer' }), query('stateCode')] }));
 add('get', `${apiPrefix}/admin/booths/analytics`, op('Admin Booths', 'Get booth analytics'));
 add('get', `${apiPrefix}/admin/booths/{id}`, op('Admin Booths', 'Get booth detail', { parameters: [param('id', 'Booth id')] }));
@@ -664,18 +666,49 @@ add('post', `${apiPrefix}/admin/reports/generate`, op('Admin Reports', 'Generate
 add('get', `${apiPrefix}/admin/settings`, op('Admin Settings', 'Get platform settings'));
 add('patch', `${apiPrefix}/admin/settings`, op('Admin Settings', 'Update platform settings (super-admin)', { requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } } } }));
 
+const obsoletePrefixes = [
+  `${apiPrefix}/vendors`,
+  `${apiPrefix}/booths`,
+  `${apiPrefix}/logistics`,
+  `${apiPrefix}/admin/vendors`,
+  `${apiPrefix}/admin/booths`,
+  `${apiPrefix}/admin/dispatch`,
+];
+const obsoletePaths = new Set([
+  `${apiPrefix}/admin/orders/{orderId}/fulfilments/{vendorId}/{decision}`,
+  `${apiPrefix}/admin/financials/settlements`,
+  `${apiPrefix}/admin/financials/settlements/trigger/{vendorId}`,
+]);
+for (const path of Object.keys(paths)) {
+  if (obsoletePaths.has(path) || obsoletePrefixes.some((prefix) => path.startsWith(prefix))) {
+    delete paths[path];
+  }
+}
+
+const inactiveTags = new Set([
+  'Vendor Portal',
+  'Logistics',
+  'Admin Vendors',
+  'Admin Dispatch',
+  'Admin Field Agents',
+  'Admin Booths',
+]);
+
 const spec = {
   openapi: '3.0.3',
   info: {
     title: 'Hook API',
     version: '1.0.0',
-    description: 'Express + TypeScript API documentation for Hook customer, vendor, logistics, upload, webhook, and admin workflows. All responses keep the standard shape: { success, message, data, timestamp }.',
+    description: 'Express + TypeScript API documentation for Hook customer, commercial catalog, runner, upload, webhook, and admin workflows. All responses keep the standard shape: { success, message, data, timestamp }.',
   },
   servers: [
     { url: 'http://localhost:4000', description: 'Local development server' },
     { url: 'https://hook-api.onrender.com', description: 'Production server' },
   ],
-  tags,
+  tags: tags.filter((tag) => !inactiveTags.has(tag.name)).concat({
+    name: 'Admin Runners',
+    description: 'Admin runner directory, review queue, state assignment, and status controls.',
+  }),
   paths,
   components: {
     securitySchemes: {

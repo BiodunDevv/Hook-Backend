@@ -90,7 +90,14 @@ export async function rotateAccountSession(refreshToken: string) {
     await revokeAccountSessions(session.accountId, 'account_inactive');
     throw new HttpError(401, 'Account is not active', undefined, 'TOKEN_INVALID');
   }
-  const nextPayload = { ...payload, role: user.role, accountType: user.accountType };
+  const nextPayload: AuthUserPayload = {
+    sub: user.id,
+    email: user.email,
+    role: user.role,
+    accountType: user.accountType,
+    sid: session.id,
+    familyId: session.familyId,
+  };
   const nextRefresh = signRefreshToken(nextPayload);
   session.refreshTokenHash = hash(nextRefresh);
   session.lastUsedAt = new Date();

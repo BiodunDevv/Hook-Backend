@@ -6,6 +6,7 @@ import { Category } from '@models/categories/category.model';
 import { OperationalState } from '@models/operations/operational-state.model';
 import { Product } from '@models/products/product.model';
 import { sendSuccess } from '@utils/http';
+import { publicProduct } from '@lib/public-resource';
 
 const routeParam = (value: string | string[] | undefined) =>
   Array.isArray(value) ? value[0] : value || '';
@@ -29,14 +30,14 @@ export class PublicController {
       if (maxPrice !== undefined && Number(product.sellingPrice) > maxPrice) return false;
       return true;
     });
-    sendSuccess(res, paginated(filtered.slice(skip, skip + limit), filtered.length, page, limit));
+    sendSuccess(res, paginated(filtered.slice(skip, skip + limit).map((product) => publicProduct(product as any)), filtered.length, page, limit));
   };
 
   getProduct = async (req: Request, res: Response) => {
-    sendSuccess(res, await this.products.findOne({
+    sendSuccess(res, publicProduct(await this.products.findOne({
       where: { id: routeParam(req.params.id) },
       relations: { category: true },
-    }));
+    }) as any));
   };
 
   getCategories = async (_req: Request, res: Response) => {
@@ -57,7 +58,7 @@ export class PublicController {
       this.products.find({ where: { status: ProductStatus.APPROVED }, relations: { category: true }, take: 12, order: { createdAt: 'DESC' } }),
       this.categories.find({ where: { isActive: true }, take: 12, order: { sortOrder: 'ASC', name: 'ASC' } }),
     ]);
-    sendSuccess(res, { featuredProducts, categories });
+    sendSuccess(res, { featuredProducts: featuredProducts.map((product) => publicProduct(product as any)), categories });
   };
 
   getOperatingStates = async (_req: Request, res: Response) => {
@@ -75,7 +76,10 @@ export class PublicController {
 
     const term = q.toLowerCase();
     return sendSuccess(res, {
-      products: products.filter((product: any) => [product.title, product.description].some((value) => String(value || '').toLowerCase().includes(term))).slice(0, 20),
+      products: products
+        .filter((product: any) => [product.title, product.description].some((value) => String(value || '').toLowerCase().includes(term)))
+        .slice(0, 20)
+        .map((product) => publicProduct(product as any)),
     });
   };
 

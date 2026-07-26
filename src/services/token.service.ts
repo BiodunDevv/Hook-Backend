@@ -1,4 +1,5 @@
 import jwt, { SignOptions } from 'jsonwebtoken';
+import { randomUUID } from 'crypto';
 import { AccountType, UserRole } from '@lib/constants';
 import { jwtSecret } from '@config/env';
 
@@ -22,6 +23,7 @@ export function signAccessToken(payload: AuthUserPayload) {
 export function signRefreshToken(payload: AuthUserPayload) {
   const options: SignOptions = {
     expiresIn: (process.env.JWT_REFRESH_EXPIRY || '30d') as SignOptions['expiresIn'],
+    jwtid: randomUUID(),
   };
 
   return jwt.sign(payload, jwtSecret(), options);

@@ -47,7 +47,7 @@ const VendorSchema = createSchema<Vendor>({
   imsType: { type: String },
   imsConfig: { type: Object },
   isActive: { type: Boolean, default: true, index: true },
-  ownerId: { type: String, required: true, index: true },
+  ownerId: { type: String, required: true },
   deletedAt: { type: Date },
 });
 

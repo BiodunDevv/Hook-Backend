@@ -45,7 +45,6 @@ const BoothSchema = createSchema<Booth>({
   deletedAt: { type: Date },
 });
 
-BoothSchema.index({ isActive: 1 });
 BoothSchema.index({ 'location.stateCode': 1, isActive: 1 });
 
 export const Booth = createModel<Booth>('Booth', BoothSchema);

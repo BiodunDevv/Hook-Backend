@@ -3,6 +3,7 @@ import { ProductStatus, UserRole } from '@lib/constants';
 import { auditAdminAction } from '@lib/audit';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
 import { adminRepos, getPagination, paginated, routeParam } from './admin.helpers';
+import { publicProduct } from '@lib/public-resource';
 
 function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'product';
@@ -42,7 +43,7 @@ export class AdminProductsController {
       skip,
       take: limit,
     });
-    sendSuccess(res, { ...paginated(data, total, page, limit), queueSize: total });
+    sendSuccess(res, { ...paginated(data.map((product) => publicProduct(product as any)), total, page, limit), queueSize: total });
   };
 
   list = async (req: Request, res: Response) => {
@@ -64,7 +65,7 @@ export class AdminProductsController {
       managers: managers.get(product.categoryId) || [],
     }));
     const stats = await this.statsData();
-    sendSuccess(res, { ...paginated(data, filtered.length, page, limit), stats });
+    sendSuccess(res, { ...paginated(data.map(publicProduct), filtered.length, page, limit), stats });
   };
 
   stats = async (_req: Request, res: Response) => {
@@ -78,7 +79,7 @@ export class AdminProductsController {
     });
     if (!product) throw new HttpError(404, 'Product not found');
     const managers = await categoryManagersMap();
-    sendSuccess(res, { ...product, categoryManagers: managers.get(product.categoryId) || [] });
+    sendSuccess(res, publicProduct({ ...product, categoryManagers: managers.get(product.categoryId) || [] }));
   };
 
   create = async (req: Request, res: Response) => {
@@ -96,7 +97,7 @@ export class AdminProductsController {
       hookId: `HK-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
     } as any)) as any;
     await auditAdminAction(req, 'product.create', 'product', product.id, { title: product.title });
-    sendCreated(res, await products.findOne({ where: { id: product.id }, relations: { category: true } }));
+    sendCreated(res, publicProduct(await products.findOne({ where: { id: product.id }, relations: { category: true } }) as any));
   };
 
   update = async (req: Request, res: Response) => {
@@ -114,7 +115,7 @@ export class AdminProductsController {
     if (req.body.title && !req.body.slug) product.slug = `${slugify(req.body.title)}-${Date.now().toString().slice(-6)}`;
     await products.save(product);
     await auditAdminAction(req, 'product.update', 'product', product.id, { fields: Object.keys(req.body) });
-    sendSuccess(res, await products.findOne({ where: { id: product.id }, relations: { category: true } }));
+    sendSuccess(res, publicProduct(await products.findOne({ where: { id: product.id }, relations: { category: true } }) as any));
   };
 
   review = async (req: Request, res: Response) => {
@@ -125,7 +126,7 @@ export class AdminProductsController {
     product.sellingPrice = req.body.adjustedSellingPrice ?? product.sellingPrice;
     await products.save(product);
     await auditAdminAction(req, 'product.review', 'product', product.id, { status: product.status });
-    sendSuccess(res, product);
+    sendSuccess(res, publicProduct(product as any));
   };
 
   disable = async (req: Request, res: Response) => {
@@ -135,7 +136,7 @@ export class AdminProductsController {
     product.status = ProductStatus.DISABLED;
     await products.save(product);
     await auditAdminAction(req, 'product.disable', 'product', product.id);
-    sendSuccess(res, product);
+    sendSuccess(res, publicProduct(product as any));
   };
 
   private async statsData() {

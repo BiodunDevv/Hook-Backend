@@ -18,6 +18,7 @@
     "test:cov": "jest --coverage",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "test:phase2:integration": "TS_NODE_FILES=true ts-node -r tsconfig-paths/register src/database/validation/phase-02-integration.ts",
+    "test:phase2:http": "TS_NODE_FILES=true TS_NODE_TRANSPILE_ONLY=true ts-node -r tsconfig-paths/register src/database/validation/phase-02-http-e2e.ts",
     "seed": "TS_NODE_FILES=true ts-node -r tsconfig-paths/register src/database/seeds/runner.ts",
     "seed:dev": "NODE_ENV=development TS_NODE_FILES=true ts-node -r tsconfig-paths/register src/database/seeds/runner.ts",
     "migrate:cart-variants": "TS_NODE_FILES=true ts-node -r tsconfig-paths/register src/database/migrations/cart-variant-index.ts",

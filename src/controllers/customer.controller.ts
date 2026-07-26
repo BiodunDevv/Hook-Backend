@@ -25,6 +25,7 @@ import { routeParam } from '@lib/api-utils';
 import { sendCreated, sendSuccess } from '@utils/http';
 import { RefundRequest } from '@models/orders/refund-request.model';
 import { OrderStatus, PaymentStatus } from '@lib/constants';
+import { publicCart, publicOrder } from '@lib/public-resource';
 
 function owner(req: Request) {
   return req.user?.sub ? { userId: req.user.sub } : { guestId: req.guestId };
@@ -67,39 +68,39 @@ export class CustomerController {
   );
 
   getCart = async (req: Request, res: Response) => {
-    sendSuccess(res, await this.cart.getCart(owner(req)));
+    sendSuccess(res, publicCart(await this.cart.getCart(owner(req))));
   };
 
   addCartItem = async (req: Request, res: Response) => {
-    sendCreated(res, await this.cart.addItem(owner(req), req.body.productId, req.body.quantity, req.body.selectedVariants));
+    sendCreated(res, publicCart(await this.cart.addItem(owner(req), req.body.productId, req.body.quantity, req.body.selectedVariants)));
   };
 
   updateCartItem = async (req: Request, res: Response) => {
-    sendSuccess(res, await this.cart.updateItem(owner(req), routeParam(req.params.itemId), req.body.quantity));
+    sendSuccess(res, publicCart(await this.cart.updateItem(owner(req), routeParam(req.params.itemId), req.body.quantity)));
   };
 
   removeCartItem = async (req: Request, res: Response) => {
-    sendSuccess(res, await this.cart.removeItem(owner(req), routeParam(req.params.itemId)));
+    sendSuccess(res, publicCart(await this.cart.removeItem(owner(req), routeParam(req.params.itemId))));
   };
 
   clearCart = async (req: Request, res: Response) => {
-    sendSuccess(res, await this.cart.clear(owner(req)));
+    sendSuccess(res, publicCart(await this.cart.clear(owner(req))));
   };
 
   checkout = async (req: Request, res: Response) => {
-    sendCreated(res, await this.orders.checkout(owner(req), req.body));
+    sendCreated(res, publicOrder(await this.orders.checkout(owner(req), req.body)));
   };
 
   listOrders = async (req: Request, res: Response) => {
-    sendSuccess(res, await this.orders.listCustomerOrders(owner(req)));
+    sendSuccess(res, (await this.orders.listCustomerOrders(owner(req))).map((order) => publicOrder(order as any)));
   };
 
   getOrder = async (req: Request, res: Response) => {
-    sendSuccess(res, await this.orders.getCustomerOrder(owner(req), routeParam(req.params.id)));
+    sendSuccess(res, publicOrder(await this.orders.getCustomerOrder(owner(req), routeParam(req.params.id))));
   };
 
   cancelOrder = async (req: Request, res: Response) => {
-    sendSuccess(res, await this.orders.cancelCustomerOrder(owner(req), routeParam(req.params.id), req.body.reason));
+    sendSuccess(res, publicOrder(await this.orders.cancelCustomerOrder(owner(req), routeParam(req.params.id), req.body.reason)));
   };
 
   startNegotiation = async (req: Request, res: Response) => {

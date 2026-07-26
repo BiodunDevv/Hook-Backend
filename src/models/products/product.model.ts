@@ -57,7 +57,6 @@ const ProductSchema = createSchema<Product>({
 });
 
 ProductSchema.index({ vendorId: 1, status: 1 });
-ProductSchema.index({ categoryId: 1 });
 ProductSchema.index({ title: 'text', description: 'text' });
 
 ProductSchema.pre('validate', function normalizeColors() {

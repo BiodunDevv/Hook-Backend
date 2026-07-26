@@ -4,6 +4,7 @@ import { auditAdminAction } from '@lib/audit';
 import { EmailService } from '@emails/email.service';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
 import { adminRepos, getPagination, paginated, routeParam } from './admin.helpers';
+import { publicOrder } from '@lib/public-resource';
 
 export class AdminOrdersController {
   private readonly email = new EmailService();
@@ -52,7 +53,7 @@ export class AdminOrdersController {
     }
     const data = await Promise.all(filtered.slice(skip, skip + limit).map((order) => this.enrichOrder(order)));
     const stats = await this.statsData();
-    sendSuccess(res, { ...paginated(data, filtered.length, page, limit), stats });
+    sendSuccess(res, { ...paginated(data.map(publicOrder), filtered.length, page, limit), stats });
   };
 
   stats = async (_req: Request, res: Response) => {
@@ -65,7 +66,7 @@ export class AdminOrdersController {
       relations: { user: true, items: true, payment: true, logistics: true },
     });
     if (!order) throw new HttpError(404, 'Order not found');
-    sendSuccess(res, await this.enrichOrder(order));
+    sendSuccess(res, publicOrder(await this.enrichOrder(order)));
   };
 
   status = async (req: Request, res: Response) => {
@@ -98,7 +99,7 @@ export class AdminOrdersController {
         status: order.status,
       });
     }
-    sendSuccess(res, order);
+    sendSuccess(res, publicOrder(order as any));
   };
 
   update = async (req: Request, res: Response) => {
@@ -121,10 +122,10 @@ export class AdminOrdersController {
     if (order.status === OrderStatus.DELIVERED && !order.deliveredAt) order.deliveredAt = new Date();
     await orders.save(order);
     await auditAdminAction(req, 'order.update', 'order', order.id, { fields: Object.keys(req.body) });
-    sendSuccess(res, await this.enrichOrder(await orders.findOne({
+    sendSuccess(res, publicOrder(await this.enrichOrder(await orders.findOne({
       where: { id: order.id },
       relations: { user: true },
-    })));
+    }))));
   };
 
   create = async (req: Request, res: Response) => {
@@ -226,10 +227,10 @@ export class AdminOrdersController {
         itemCount,
       });
     }
-    sendCreated(res, await this.enrichOrder(await orders.findOne({
+    sendCreated(res, publicOrder(await this.enrichOrder(await orders.findOne({
       where: { id: order.id },
       relations: { user: true },
-    })));
+    }))));
   };
 
   private async statsData() {

@@ -19,7 +19,7 @@ import { assertPermission, assertScope, resolveAccessContext, scopedFilter } fro
 import { revokeAccountSessions } from '@services/account-session.service';
 import { recordAudit } from '@services/platform-audit.service';
 import { nextPublicId, repairPublicIdCounter, PublicIdDomain } from '@services/public-id.service';
-import { issueAccountInvitation } from '@services/account-invitation.service';
+import { issueAccountInvitation, revokeAccountInvitations } from '@services/account-invitation.service';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
 
 async function byIdentifier<T>(model: Model<T>, identifier: string) {
@@ -91,6 +91,66 @@ async function ensureHub(id: string, stateId: string) {
   const hub = await byIdentifier(DispatchHub, id);
   if (hub.stateId !== stateId) throw new HttpError(409, 'Dispatch Hub does not belong to the selected state', undefined, 'CONFLICT');
   return hub;
+}
+
+async function resolveIdentifiers<T>(model: Model<T>, identifiers: string[]) {
+  return Promise.all(identifiers.map(async (identifier) => {
+    const record = await byIdentifier(model, identifier);
+    return record._id.toString();
+  }));
+}
+
+async function resolveStaffScope(input: {
+  roleIds: string[];
+  stateIds?: string[];
+  hubIds?: string[];
+  scopeType: ScopeType;
+}) {
+  const roleIds = await resolveIdentifiers(Role, input.roleIds);
+  const roles = await Role.find({ _id: { $in: roleIds }, isActive: true }).lean();
+  if (roles.length !== roleIds.length) {
+    throw new HttpError(409, 'Every selected role must be active', undefined, 'CONFLICT');
+  }
+  const states = await Promise.all((input.stateIds || []).map((id) => ensureState(id, true)));
+  const stateIds = states.map((state) => state._id.toString());
+  const hubs = await Promise.all((input.hubIds || []).map(async (id) => {
+    const hub = await byIdentifier(DispatchHub, id);
+    if (hub.status !== 'active') {
+      throw new HttpError(409, 'Every selected Dispatch Hub must be active', undefined, 'CONFLICT');
+    }
+    if (!stateIds.includes(hub.stateId)) {
+      throw new HttpError(409, 'Every selected Dispatch Hub must belong to a selected state', undefined, 'CONFLICT');
+    }
+    return hub;
+  }));
+  const hubIds = hubs.map((hub) => hub._id.toString());
+
+  if (input.scopeType === ScopeType.GLOBAL && (stateIds.length || hubIds.length)) {
+    throw new HttpError(409, 'Global staff cannot have state or Hub restrictions', undefined, 'CONFLICT');
+  }
+  if (input.scopeType === ScopeType.SINGLE_STATE && stateIds.length !== 1) {
+    throw new HttpError(409, 'Single-state scope requires exactly one state', undefined, 'CONFLICT');
+  }
+  if (input.scopeType === ScopeType.MULTI_STATE && stateIds.length < 2) {
+    throw new HttpError(409, 'Multi-state scope requires at least two states', undefined, 'CONFLICT');
+  }
+  if (input.scopeType === ScopeType.HUB && (!stateIds.length || !hubIds.length)) {
+    throw new HttpError(409, 'Hub scope requires at least one state and Dispatch Hub', undefined, 'CONFLICT');
+  }
+  return { roleIds, stateIds, hubIds };
+}
+
+async function resolveRunnerScope(stateIdentifiers: string[], hubIdentifiers: string[] = []) {
+  const states = await Promise.all(stateIdentifiers.map((id) => ensureState(id, true)));
+  const stateIds = states.map((state) => state._id.toString());
+  const hubs = await Promise.all(hubIdentifiers.map(async (id) => {
+    const hub = await byIdentifier(DispatchHub, id);
+    if (hub.status !== 'active' || !stateIds.includes(hub.stateId)) {
+      throw new HttpError(409, 'Every selected Dispatch Hub must be active and belong to a Runner state', undefined, 'CONFLICT');
+    }
+    return hub;
+  }));
+  return { stateIds, hubIds: hubs.map((hub) => hub._id.toString()) };
 }
 
 async function lifecycle(
@@ -177,8 +237,9 @@ export class PlatformController {
 
   createStaff = async (req: Request, res: Response) => {
     const context = await access(req, 'staff.create');
-    for (const stateId of req.body.stateIds || []) assertScope(context, stateId);
-    for (const hubId of req.body.hubIds || []) assertScope(context, undefined, hubId);
+    const scope = await resolveStaffScope(req.body);
+    for (const stateId of scope.stateIds) assertScope(context, stateId);
+    for (const hubId of scope.hubIds) assertScope(context, undefined, hubId);
     const publicId = await nextPublicId('staff');
     const account = await User.create({
       publicId,
@@ -190,10 +251,10 @@ export class PlatformController {
       firstName: req.body.firstName,
       lastName: req.body.lastName,
       role: UserRole.SUPPORT,
-      roleIds: req.body.roleIds,
+      roleIds: scope.roleIds,
       scopeType: req.body.scopeType,
-      assignedStateIds: req.body.stateIds,
-      assignedHubIds: req.body.hubIds,
+      assignedStateIds: scope.stateIds,
+      assignedHubIds: scope.hubIds,
       isEmailVerified: false,
       isPhoneVerified: false,
       isActive: true,
@@ -201,10 +262,10 @@ export class PlatformController {
     const profile = await StaffProfile.create({
       publicId,
       accountId: account.id,
-      roleIds: req.body.roleIds,
+      roleIds: scope.roleIds,
       scopeType: req.body.scopeType,
-      stateIds: req.body.stateIds,
-      hubIds: req.body.hubIds,
+      stateIds: scope.stateIds,
+      hubIds: scope.hubIds,
       status: AccountStatus.INVITED,
     });
     const invitation = await issueAccountInvitation({
@@ -221,20 +282,27 @@ export class PlatformController {
   updateStaff = async (req: Request, res: Response) => {
     const context = await access(req, 'staff.edit');
     const profile = await byIdentifier(StaffProfile, routeParam(req.params.id));
-    for (const stateId of req.body.stateIds || profile.stateIds) assertScope(context, stateId);
+    const scope = await resolveStaffScope({
+      roleIds: req.body.roleIds || profile.roleIds,
+      scopeType: req.body.scopeType || profile.scopeType,
+      stateIds: req.body.stateIds || profile.stateIds,
+      hubIds: req.body.hubIds || profile.hubIds,
+    });
+    for (const stateId of scope.stateIds) assertScope(context, stateId);
+    for (const hubId of scope.hubIds) assertScope(context, undefined, hubId);
     const patch = {
-      ...(req.body.roleIds && { roleIds: req.body.roleIds }),
+      roleIds: scope.roleIds,
       ...(req.body.scopeType && { scopeType: req.body.scopeType }),
-      ...(req.body.stateIds && { stateIds: req.body.stateIds }),
-      ...(req.body.hubIds && { hubIds: req.body.hubIds }),
+      stateIds: scope.stateIds,
+      hubIds: scope.hubIds,
     };
     const updated = await StaffProfile.findByIdAndUpdate(profile._id, { $set: patch }, { returnDocument: 'after' }).lean({ virtuals: true });
     await User.updateOne({ _id: profile.accountId }, {
       $set: {
-        ...(req.body.roleIds && { roleIds: req.body.roleIds }),
+        roleIds: scope.roleIds,
         ...(req.body.scopeType && { scopeType: req.body.scopeType }),
-        ...(req.body.stateIds && { assignedStateIds: req.body.stateIds }),
-        ...(req.body.hubIds && { assignedHubIds: req.body.hubIds }),
+        assignedStateIds: scope.stateIds,
+        assignedHubIds: scope.hubIds,
       },
     });
     await recordAudit(req, { action: 'staff.updated', entityType: 'staff', entityId: profile._id.toString(), entityPublicId: profile.publicId, before: profile, after: updated, reason: req.body.reason });
@@ -279,6 +347,29 @@ export class PlatformController {
     });
     await recordAudit(req, { action: 'staff.invitation_resent', entityType: 'staff', entityId: profile._id.toString(), entityPublicId: profile.publicId });
     sendSuccess(res, invitation);
+  };
+
+  cancelStaffInvitation = async (req: Request, res: Response) => {
+    await access(req, 'staff.suspend');
+    const profile = await byIdentifier(StaffProfile, routeParam(req.params.id));
+    if (profile.status !== AccountStatus.INVITED) {
+      throw new HttpError(409, 'Only pending staff invitations can be cancelled', undefined, 'INVALID_STATE_TRANSITION');
+    }
+    const revokedInvitations = await revokeAccountInvitations(profile.accountId);
+    await Promise.all([
+      StaffProfile.updateOne({ _id: profile._id }, { $set: { status: AccountStatus.DISABLED } }),
+      User.updateOne({ _id: profile.accountId }, { $set: { accountStatus: AccountStatus.DISABLED, isActive: false } }),
+    ]);
+    await recordAudit(req, {
+      action: 'staff.invitation_cancelled',
+      entityType: 'staff',
+      entityId: profile._id.toString(),
+      entityPublicId: profile.publicId,
+      before: { status: profile.status },
+      after: { status: AccountStatus.DISABLED, revokedInvitations },
+      reason: req.body.reason,
+    });
+    sendSuccess(res, { status: AccountStatus.DISABLED, revokedInvitations });
   };
 
   listStates = async (req: Request, res: Response) => {
@@ -487,6 +578,30 @@ export class PlatformController {
     sendSuccess(res, invitation);
   };
 
+  cancelPartnerInvitation = async (req: Request, res: Response) => {
+    await access(req, 'partners.manage');
+    const partner = await byIdentifier(HookPartner, routeParam(req.params.id));
+    if (partner.status !== AccountStatus.INVITED) {
+      throw new HttpError(409, 'Only pending Partner invitations can be cancelled', undefined, 'INVALID_STATE_TRANSITION');
+    }
+    const revokedInvitations = await revokeAccountInvitations(partner.accountId);
+    await Promise.all([
+      HookPartner.updateOne({ _id: partner._id }, { $set: { status: AccountStatus.DISABLED } }),
+      User.updateOne({ _id: partner.accountId }, { $set: { accountStatus: AccountStatus.DISABLED, isActive: false } }),
+    ]);
+    await recordAudit(req, {
+      action: 'partner.invitation_cancelled',
+      entityType: 'partner',
+      entityId: partner._id.toString(),
+      entityPublicId: partner.publicId,
+      stateId: partner.stateId,
+      before: { status: partner.status },
+      after: { status: AccountStatus.DISABLED, revokedInvitations },
+      reason: req.body.reason,
+    });
+    sendSuccess(res, { status: AccountStatus.DISABLED, revokedInvitations });
+  };
+
   listRunners = async (req: Request, res: Response) => {
     const context = await access(req, 'runners.view');
     const { page, limit, skip } = getPagination(req.query);
@@ -504,7 +619,9 @@ export class PlatformController {
   };
   createRunner = async (req: Request, res: Response) => {
     const context = await access(req, 'runners.manage');
-    for (const stateId of req.body.stateIds) assertScope(context, stateId);
+    const scope = await resolveRunnerScope(req.body.stateIds, req.body.hubIds);
+    for (const stateId of scope.stateIds) assertScope(context, stateId);
+    for (const hubId of scope.hubIds) assertScope(context, undefined, hubId);
     const publicId = await nextPublicId('runner');
     const account = await User.create({
       publicId, accountType: AccountType.RUNNER, accountStatus: AccountStatus.INVITED,
@@ -512,7 +629,7 @@ export class PlatformController {
       firstName: req.body.firstName, lastName: req.body.lastName, role: UserRole.FIELD_AGENT,
       isActive: true, isEmailVerified: false, isPhoneVerified: false, scopeType: ScopeType.SELF,
     });
-    const runner = await RunnerProfile.create({ publicId, accountId: account.id, stateIds: req.body.stateIds, hubIds: req.body.hubIds || [], availability: 'unavailable', status: 'invited' });
+    const runner = await RunnerProfile.create({ publicId, accountId: account.id, stateIds: scope.stateIds, hubIds: scope.hubIds, availability: 'unavailable', status: 'invited' });
     const invitation = await issueAccountInvitation({
       accountId: account.id,
       accountType: AccountType.RUNNER,
@@ -526,8 +643,12 @@ export class PlatformController {
   updateRunner = async (req: Request, res: Response) => {
     const context = await access(req, 'runners.manage');
     const runner = await byIdentifier(RunnerProfile, routeParam(req.params.id));
-    for (const stateId of req.body.stateIds || runner.stateIds) assertScope(context, stateId);
-    const updated = await RunnerProfile.findByIdAndUpdate(runner._id, { $set: req.body }, { returnDocument: 'after' }).lean({ virtuals: true });
+    const scope = await resolveRunnerScope(req.body.stateIds || runner.stateIds, req.body.hubIds || runner.hubIds);
+    for (const stateId of scope.stateIds) assertScope(context, stateId);
+    for (const hubId of scope.hubIds) assertScope(context, undefined, hubId);
+    const updated = await RunnerProfile.findByIdAndUpdate(runner._id, {
+      $set: { ...req.body, stateIds: scope.stateIds, hubIds: scope.hubIds },
+    }, { returnDocument: 'after' }).lean({ virtuals: true });
     await recordAudit(req, { action: 'runner.updated', entityType: 'runner', entityId: runner._id.toString(), entityPublicId: runner.publicId, before: runner, after: updated, reason: req.body.reason });
     sendSuccess(res, updated);
   };
@@ -560,6 +681,29 @@ export class PlatformController {
     });
     await recordAudit(req, { action: 'runner.invitation_resent', entityType: 'runner', entityId: runner._id.toString(), entityPublicId: runner.publicId });
     sendSuccess(res, invitation);
+  };
+
+  cancelRunnerInvitation = async (req: Request, res: Response) => {
+    await access(req, 'runners.manage');
+    const runner = await byIdentifier(RunnerProfile, routeParam(req.params.id));
+    if (runner.status !== AccountStatus.INVITED) {
+      throw new HttpError(409, 'Only pending Runner invitations can be cancelled', undefined, 'INVALID_STATE_TRANSITION');
+    }
+    const revokedInvitations = await revokeAccountInvitations(runner.accountId);
+    await Promise.all([
+      RunnerProfile.updateOne({ _id: runner._id }, { $set: { status: AccountStatus.DISABLED } }),
+      User.updateOne({ _id: runner.accountId }, { $set: { accountStatus: AccountStatus.DISABLED, isActive: false } }),
+    ]);
+    await recordAudit(req, {
+      action: 'runner.invitation_cancelled',
+      entityType: 'runner',
+      entityId: runner._id.toString(),
+      entityPublicId: runner.publicId,
+      before: { status: runner.status },
+      after: { status: AccountStatus.DISABLED, revokedInvitations },
+      reason: req.body.reason,
+    });
+    sendSuccess(res, { status: AccountStatus.DISABLED, revokedInvitations });
   };
 
   listAssignments = async (req: Request, res: Response) => sendSuccess(res, await listScoped(req, RunnerMarketAssignment, 'runners.assign'));

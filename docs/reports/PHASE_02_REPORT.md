@@ -16,10 +16,15 @@
 - Secure single-use activation invitations for Staff, Runner, and Partner accounts, with isolated activation routes, audited acceptance, and resend controls.
 - Relationship-aware State and City selectors for City, Zone, Market, Hub, and Partner administration.
 - Permission-aware staff console plus isolated Runner and Partner route groups. Super Admin remains an RBAC role inside the staff console rather than a duplicated dashboard application.
+- Searchable relationship selectors for Staff roles, State scope, Hub scope, and Runner State scope, backed by active-record and geographic compatibility validation.
+- Audited Staff, Runner, Partner, State, City, Zone, Market, and Hub lifecycle controls, including explicit invitation cancellation.
+- HTTP-level validation of request IDs, guest sessions, refresh replay-family revocation, State scope isolation, and immediate suspension.
+- Reviewed Phase 2 endpoint-to-permission matrix.
+- Public Product, Order, and Customer response identifiers now prefer `hookId`, `orderCode`, and `publicId`; retained repositories resolve those route identifiers without changing internal Mongo relationships.
 
 ## Validation
 
-Backend tests 9/9, isolated Phase 2 database integration checks, backend build, Swagger (138 paths), Admin full lint/type/build (46 routes), Shopper lint/type, and Expo Doctor 18/18 passed. Backend lint has no errors and 261 recorded legacy warnings.
+Backend tests 9/9, isolated Phase 2 direct integration checks, isolated HTTP E2E checks, backend build, Swagger, Admin full lint/type/build (46 routes), Shopper lint/type, and Expo Doctor 18/18 passed. Backend lint has no errors and 261 recorded legacy warnings.
 
 ## Migration safety result
 
@@ -27,10 +32,8 @@ The production Atlas database `hook` was backed up with signed MongoDB Database 
 
 ## Remaining blockers
 
-- Add full HTTP E2E coverage for refresh replay, suspension, scope, and relationship scenarios.
-- Replace remaining comma-separated role/state/Hub inputs with searchable multi-select controls and complete every detail-page mutation.
-- Add an explicit invitation cancellation control; resending already revokes earlier tokens.
-- Complete the retained commerce-controller public-ID boundary; several legacy resources still expose Mongo-backed `id` values.
-- Finish the exact endpoint-to-permission matrix audit before enabling Phase 3 commerce work.
+- Extend HTTP relationship scenarios through every City/Zone/Market/Hub incompatibility mutation, not only the currently covered State scope boundary.
+- Consolidate retained pre-Phase-2 commerce permissions into the reviewed platform permission catalogue before Phase 3 enables new commerce behavior.
+- Complete public-ID presentation for Phase 2 platform relationship arrays without exposing internal State/Hub references needed by the current admin selectors.
 
 NOT READY FOR PHASE 3

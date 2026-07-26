@@ -1,5 +1,13 @@
 # Phase 2 Testing And Validation
 
+## Automated Coverage
+
+- `npm test`: focused unit coverage for response envelopes, public-ID counters, and access-scope policies.
+- `npm run test:phase2:integration`: isolated direct-domain verification for concurrent public IDs, invitation activation/single use, session revocation, and append-only audit behavior.
+- `npm run test:phase2:http`: real Express HTTP verification in a uniquely named temporary database. It covers request IDs, the success/error envelope, guest create/restore/revoke, refresh rotation and replay-family revocation, State-scoped list/detail denial, and immediate suspension denial.
+
+Both Phase 2 validation scripts refuse unsafe database names and drop their temporary database in success and failure paths.
+
 Run on 2026-07-26:
 
 - Backend `npm test -- --runInBand`: 3 suites, 9 tests passed.

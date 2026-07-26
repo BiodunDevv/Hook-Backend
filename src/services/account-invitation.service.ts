@@ -58,6 +58,18 @@ export async function issueAccountInvitation(input: {
   return { expiresAt, delivery };
 }
 
+export async function revokeAccountInvitations(accountId: string) {
+  const result = await AccountInvitation.updateMany(
+    {
+      accountId,
+      acceptedAt: { $exists: false },
+      revokedAt: { $exists: false },
+    },
+    { $set: { revokedAt: new Date() } },
+  );
+  return result.modifiedCount;
+}
+
 export async function acceptAccountInvitation(
   token: string,
   password: string,

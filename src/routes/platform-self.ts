@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { AccountType } from '@lib/constants';
 import { AuthController } from '@controllers/auth.controller';
 import { requireAccountType, requireAuth } from '@middleware/auth';
@@ -8,10 +9,13 @@ import { Market } from '@models/platform/network.model';
 import { User } from '@models/users/user.model';
 import { asyncHandler, HttpError, sendSuccess } from '@utils/http';
 import { loginSchema } from '@validations/common.schemas';
+import { RunnerCatalogController } from '@controllers/runner/catalog.controller';
+import { runnerSubmissionDraftSchema } from '@validations/catalog.schemas';
 
 export function createRunnerRouter() {
   const router = Router();
   const auth = new AuthController();
+  const catalog = new RunnerCatalogController();
   router.post('/auth/login', validateBody(loginSchema), asyncHandler(auth.runnerLogin));
   router.use(requireAuth, requireAccountType(AccountType.RUNNER));
   router.get('/profile', asyncHandler(async (req, res) => {
@@ -34,6 +38,16 @@ export function createRunnerRouter() {
     const markets = await Market.find({ _id: { $in: assignments.map((item) => item.marketId) }, status: 'active' }).lean({ virtuals: true });
     sendSuccess(res, { assignments, markets });
   }));
+  router.get('/dashboard', asyncHandler(catalog.dashboard));
+  router.get('/product-submissions', asyncHandler(catalog.list));
+  router.post('/product-submissions', validateBody(runnerSubmissionDraftSchema), asyncHandler(catalog.create));
+  router.get('/product-submissions/:id', asyncHandler(catalog.detail));
+  router.patch('/product-submissions/:id', validateBody(runnerSubmissionDraftSchema), asyncHandler(catalog.update));
+  router.post(
+    '/product-submissions/:id/submit',
+    validateBody(z.object({ version: z.coerce.number().int().positive() }).strict()),
+    asyncHandler(catalog.submit),
+  );
   return router;
 }
 

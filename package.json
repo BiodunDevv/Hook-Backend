@@ -25,10 +25,16 @@
     "migrate:product-colors": "TS_NODE_FILES=true ts-node -r tsconfig-paths/register src/database/migrations/product-colors.ts",
     "migrate:phase2:analyze": "TS_NODE_FILES=true ts-node -r tsconfig-paths/register src/database/migrations/phase-02-foundation.ts --mode=analyze",
     "migrate:phase2:dry-run": "TS_NODE_FILES=true ts-node -r tsconfig-paths/register src/database/migrations/phase-02-foundation.ts --mode=dry-run",
-    "migrate:phase2": "TS_NODE_FILES=true ts-node -r tsconfig-paths/register src/database/migrations/phase-02-foundation.ts --mode=execute"
+    "migrate:phase2": "TS_NODE_FILES=true ts-node -r tsconfig-paths/register src/database/migrations/phase-02-foundation.ts --mode=execute",
+    "migrate:phase3:analyze": "TS_NODE_FILES=true ts-node -r tsconfig-paths/register src/database/migrations/phase-03-catalog.ts --mode=analyze",
+    "migrate:phase3:dry-run": "TS_NODE_FILES=true ts-node -r tsconfig-paths/register src/database/migrations/phase-03-catalog.ts --mode=dry-run",
+    "migrate:phase3": "TS_NODE_FILES=true ts-node -r tsconfig-paths/register src/database/migrations/phase-03-catalog.ts --mode=execute",
+    "migrate:phase3:verify": "TS_NODE_FILES=true ts-node -r tsconfig-paths/register src/database/migrations/phase-03-catalog.ts --mode=verify",
+    "migrate:phase3:rollback": "TS_NODE_FILES=true ts-node -r tsconfig-paths/register src/database/migrations/phase-03-catalog.ts --mode=rollback"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
+    "cloudinary": "^2.10.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
@@ -38,6 +44,7 @@
     "mongoose": "^9.7.3",
     "morgan": "^1.11.0",
     "multer": "^2.2.0",
+    "openai": "^6.49.0",
     "swagger-ui-dist": "^5.32.8",
     "swagger-ui-express": "^5.0.1",
     "tsconfig-paths": "^4.2.0",
@@ -46,6 +53,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/jest": "^30.0.0",

@@ -1,8 +1,12 @@
-import { ProductStatus } from '@lib/constants';
+import { ProductAvailabilityStatus, ProductStatus } from '@lib/constants';
 import { BaseEntity, createModel, createSchema } from '@models/base.model';
 import { normalizeProductColors } from '@lib/product-color';
 
 export interface Product extends BaseEntity {
+  publicId?: string;
+  sourceSubmissionId?: string;
+  marketId?: string;
+  sourceStateId?: string;
   title: string;
   slug: string;
   description?: string;
@@ -10,6 +14,33 @@ export interface Product extends BaseEntity {
   sellingPrice: number;
   discountedPrice?: number;
   minAcceptablePrice: number;
+  basePriceMinor?: number;
+  sellingPriceMinor?: number;
+  markupMinor?: number;
+  discountMinor?: number;
+  currency?: string;
+  mediaAssetIds?: string[];
+  negotiationRules?: {
+    enabled: boolean;
+    minimumNegotiablePriceMinor?: number;
+    maximumDiscountMinor?: number;
+    maximumCustomerOffers: number;
+    acceptedQuoteExpiryMinutes: number;
+  };
+  availabilityStatus?: ProductAvailabilityStatus;
+  customerAvailabilityNote?: string;
+  lastMarketVerifiedAt?: Date;
+  lastPriceVerifiedAt?: Date;
+  lastAvailabilityConfirmedAt?: Date;
+  publishedAt?: Date;
+  publishedBy?: string;
+  commercialApproval?: {
+    approved: boolean;
+    approvedBy?: string;
+    approvedAt?: Date;
+  };
+  catalogMigrationVersion?: number;
+  catalogVersion?: number;
   quantity: number;
   reservedQuantity: number;
   colors?: string[];
@@ -31,6 +62,10 @@ export interface Product extends BaseEntity {
 }
 
 const ProductSchema = createSchema<Product>({
+  publicId: { type: String, unique: true, sparse: true, index: true },
+  sourceSubmissionId: { type: String, unique: true, sparse: true, index: true },
+  marketId: { type: String, index: true, sparse: true },
+  sourceStateId: { type: String, index: true, sparse: true },
   title: { type: String, required: true, trim: true },
   slug: { type: String, required: true, unique: true, trim: true },
   description: { type: String },
@@ -38,6 +73,35 @@ const ProductSchema = createSchema<Product>({
   sellingPrice: { type: Number, required: true },
   discountedPrice: { type: Number },
   minAcceptablePrice: { type: Number, required: true },
+  basePriceMinor: { type: Number, min: 0 },
+  sellingPriceMinor: { type: Number, min: 0 },
+  markupMinor: { type: Number, min: 0 },
+  discountMinor: { type: Number, min: 0 },
+  currency: { type: String, uppercase: true, default: 'NGN' },
+  mediaAssetIds: { type: [String], default: [] },
+  negotiationRules: {
+    type: Object,
+    default: {
+      enabled: false,
+      maximumCustomerOffers: 3,
+      acceptedQuoteExpiryMinutes: 30,
+    },
+  },
+  availabilityStatus: {
+    type: String,
+    enum: Object.values(ProductAvailabilityStatus),
+    default: ProductAvailabilityStatus.UNCONFIRMED,
+    index: true,
+  },
+  customerAvailabilityNote: { type: String, maxlength: 500 },
+  lastMarketVerifiedAt: { type: Date },
+  lastPriceVerifiedAt: { type: Date },
+  lastAvailabilityConfirmedAt: { type: Date },
+  publishedAt: { type: Date, index: true },
+  publishedBy: { type: String },
+  commercialApproval: { type: Object, default: { approved: false } },
+  catalogMigrationVersion: { type: Number, default: 0 },
+  catalogVersion: { type: Number, default: 1, min: 1 },
   quantity: { type: Number, default: 0 },
   reservedQuantity: { type: Number, default: 0 },
   colors: [{ type: String }],
@@ -58,6 +122,7 @@ const ProductSchema = createSchema<Product>({
 
 ProductSchema.index({ vendorId: 1, status: 1 });
 ProductSchema.index({ title: 'text', description: 'text' });
+ProductSchema.index({ sourceStateId: 1, marketId: 1, status: 1, publishedAt: -1 });
 
 ProductSchema.pre('validate', function normalizeColors() {
   this.colors = normalizeProductColors(this.colors);

@@ -533,6 +533,71 @@ function op(tag, summary, options = {}) {
 }
 
 const paths = {};
+
+Object.assign(schemas, {
+  RunnerSubmissionRequest: {
+    type: 'object',
+    required: ['marketId', 'categorySuggestionId', 'basicTitle', 'basePriceMinor', 'currency', 'availabilityStatus'],
+    properties: {
+      marketId: { type: 'string', example: 'MAR-2026-000001' },
+      categorySuggestionId: { type: 'string', example: 'CAT-2026-000001' },
+      basicTitle: { type: 'string', maxLength: 180 },
+      notes: { type: 'string', maxLength: 2000 },
+      mediaIds: { type: 'array', maxItems: 12, items: { type: 'string' } },
+      basePriceMinor: { type: 'integer', minimum: 1, description: 'Observed Market price in kobo.' },
+      currency: { type: 'string', enum: ['NGN'] },
+      availabilityStatus: { type: 'string', enum: ['available', 'limited', 'unconfirmed'] },
+      variants: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            size: { type: 'string' },
+            colour: { type: 'string' },
+            attributes: { type: 'object', additionalProperties: { type: 'string' } },
+            active: { type: 'boolean' },
+          },
+        },
+      },
+      version: { type: 'integer', minimum: 1 },
+    },
+  },
+  CatalogReviewDecision: {
+    type: 'object',
+    required: ['reason', 'version'],
+    properties: {
+      reason: { type: 'string', minLength: 5, maxLength: 1000 },
+      fields: { type: 'array', items: { type: 'string' } },
+      version: { type: 'integer', minimum: 1 },
+    },
+  },
+  CatalogPricingRequest: {
+    type: 'object',
+    required: ['basePriceMinor', 'sellingPriceMinor', 'discountMinor', 'currency', 'reason', 'version'],
+    properties: {
+      basePriceMinor: { type: 'integer', minimum: 1 },
+      sellingPriceMinor: { type: 'integer', minimum: 1 },
+      discountMinor: { type: 'integer', minimum: 0 },
+      currency: { type: 'string', enum: ['NGN'] },
+      reason: { type: 'string', minLength: 5 },
+      version: { type: 'integer', minimum: 1 },
+    },
+  },
+  NegotiationCreateRequest: {
+    type: 'object',
+    required: ['productId', 'variantId', 'quantity'],
+    properties: {
+      productId: { type: 'string', example: 'PRD-2026-000001' },
+      variantId: { type: 'string', example: 'VAR-2026-000001' },
+      quantity: { type: 'integer', minimum: 1, maximum: 20 },
+    },
+  },
+  NegotiationOfferRequest: {
+    type: 'object',
+    required: ['offeredPriceMinor'],
+    properties: { offeredPriceMinor: { type: 'integer', minimum: 1 } },
+  },
+});
 function add(method, path, operation) {
   paths[path] = paths[path] || {};
   paths[path][method] = operation;
@@ -741,6 +806,42 @@ add('post', `${apiPrefix}/partner/auth/login`, op('Partner Foundation', 'Sign in
 add('get', `${apiPrefix}/partner/profile`, op('Partner Foundation', 'Get the authenticated Hook Partner profile'));
 add('get', `${apiPrefix}/partner/location`, op('Partner Foundation', 'Get only the authenticated Hook Partner location'));
 
+// Phase 3: Runner capture, Commercial Catalog, and deterministic negotiation.
+add('get', `${apiPrefix}/runner/dashboard`, op('Runner Catalog Capture', 'Get self-scoped catalog capture metrics.'));
+add('get', `${apiPrefix}/runner/product-submissions`, op('Runner Catalog Capture', 'List the authenticated Runner submissions with cursor pagination.'));
+add('post', `${apiPrefix}/runner/product-submissions`, op('Runner Catalog Capture', 'Create a Runner product-submission draft.', { requestBody: body('RunnerSubmissionRequest') }));
+add('get', `${apiPrefix}/runner/product-submissions/{id}`, op('Runner Catalog Capture', 'Get one owned submission.', { parameters: [param('id', 'SUB public ID')] }));
+add('patch', `${apiPrefix}/runner/product-submissions/{id}`, op('Runner Catalog Capture', 'Update an owned draft or requested-changes submission with optimistic versioning.', { parameters: [param('id', 'SUB public ID')], requestBody: body('RunnerSubmissionRequest') }));
+add('post', `${apiPrefix}/runner/product-submissions/{id}/submit`, op('Runner Catalog Capture', 'Submit a complete capture to Catalog Review.', { parameters: [param('id', 'SUB public ID')] }));
+add('post', `${apiPrefix}/catalog/media/upload-intents`, op('Catalog Media', 'Create a signed authenticated Cloudinary upload intent.'));
+add('post', `${apiPrefix}/catalog/media/finalize`, op('Catalog Media', 'Verify provider metadata and finalize an owned catalog asset.'));
+
+add('get', `${apiPrefix}/admin/catalog/review/dashboard`, op('Catalog Review', 'Get scoped review metrics.'));
+add('get', `${apiPrefix}/admin/catalog/review`, op('Catalog Review', 'List scoped submission review queue.'));
+add('get', `${apiPrefix}/admin/catalog/review/{id}`, op('Catalog Review', 'Get submission evidence and immutable Runner snapshot.', { parameters: [param('id', 'SUB public ID')] }));
+add('post', `${apiPrefix}/admin/catalog/review/{id}/start`, op('Catalog Review', 'Claim and start a versioned review.', { parameters: [param('id', 'SUB public ID')] }));
+for (const action of ['request-changes', 'approve', 'reject']) {
+  add('post', `${apiPrefix}/admin/catalog/review/{id}/${action}`, op('Catalog Review', `${action.replace('-', ' ')} a submission with an audited reason.`, { parameters: [param('id', 'SUB public ID')], requestBody: body('CatalogReviewDecision') }));
+}
+add('get', `${apiPrefix}/admin/commercial/dashboard`, op('Commercial Catalog', 'Get scoped Commercial Catalog metrics.'));
+add('get', `${apiPrefix}/admin/commercial/products`, op('Commercial Catalog', 'List Commercial Product drafts and published products.'));
+add('get', `${apiPrefix}/admin/commercial/products/{id}`, op('Commercial Catalog', 'Get internal Commercial Product workspace.', { parameters: [param('id', 'PRD public ID')] }));
+add('get', `${apiPrefix}/admin/commercial/products/{id}/preview`, op('Commercial Catalog', 'Get the safe customer-facing preview without internal pricing fields.', { parameters: [param('id', 'PRD public ID')] }));
+add('patch', `${apiPrefix}/admin/commercial/products/{id}/pricing`, op('Commercial Catalog', 'Set integer minor-unit pricing; margins are derived by the backend.', { parameters: [param('id', 'PRD public ID')], requestBody: body('CatalogPricingRequest') }));
+for (const action of ['publish', 'pause', 'availability-unconfirmed', 'unpublish']) {
+  add('post', `${apiPrefix}/admin/commercial/products/{id}/${action}`, op('Commercial Catalog', `${action.replaceAll('-', ' ')} a Commercial Product through the audited lifecycle.`, { parameters: [param('id', 'PRD public ID')] }));
+}
+add('get', `${apiPrefix}/public/home`, op('Public Catalog', 'Get safe published catalog foundations for Home.', { public: true }));
+add('get', `${apiPrefix}/public/categories`, op('Public Catalog', 'List safe active categories.', { public: true }));
+add('get', `${apiPrefix}/public/products`, op('Public Catalog', 'List safe published products using cursor pagination.', { public: true, parameters: [query('cursor'), query('limit', { type: 'integer' }), query('stateId'), query('marketId'), query('categoryId'), query('q')] }));
+add('get', `${apiPrefix}/public/products/{id}`, op('Public Catalog', 'Get one safe published product by PRD ID or slug.', { public: true, parameters: [param('id', 'PRD public ID or slug')] }));
+add('get', `${apiPrefix}/public/search`, op('Public Catalog', 'Search only safe published catalog fields.', { public: true, parameters: [query('q'), query('cursor'), query('limit', { type: 'integer' })] }));
+add('post', `${apiPrefix}/negotiations`, op('AI Negotiation', 'Start a deterministic three-offer product negotiation.', { requestBody: body('NegotiationCreateRequest') }));
+add('post', `${apiPrefix}/negotiations/{id}/offers`, op('AI Negotiation', 'Submit one integer minor-unit offer. Requires Idempotency-Key.', { parameters: [param('id', 'NEG public ID')], requestBody: body('NegotiationOfferRequest') }));
+add('get', `${apiPrefix}/negotiations/{id}`, op('AI Negotiation', 'Get an owned negotiation session.', { parameters: [param('id', 'NEG public ID')] }));
+add('post', `${apiPrefix}/negotiations/{id}/accept`, op('AI Negotiation', 'Accept the current deterministic counter and create one 30-minute verified-customer quote.', { parameters: [param('id', 'NEG public ID')] }));
+add('post', `${apiPrefix}/negotiations/{id}/close`, op('AI Negotiation', 'Close an owned active negotiation.', { parameters: [param('id', 'NEG public ID')] }));
+
 const obsoletePrefixes = [
   `${apiPrefix}/vendors`,
   `${apiPrefix}/booths`,
@@ -774,7 +875,7 @@ const spec = {
   info: {
     title: 'Hook API',
     version: '1.0.0',
-    description: 'Hook Phase 2 platform API. Success responses use { success, data, meta }; errors use { success, error, meta }. X-Request-Id is accepted and returned on every request.',
+    description: 'Hook Phase 3 platform API. Catalog capture, Commercial Catalog, public catalog, and deterministic AI negotiation use public Hook IDs and the standard { success, data, meta } contract.',
   },
   servers: [
     { url: 'http://localhost:4000', description: 'Local development server' },
@@ -792,6 +893,12 @@ const spec = {
     { name: 'Platform Governance', description: 'Super-admin platform counter governance.' },
     { name: 'Runner Foundation', description: 'Self-scoped Runner account foundation.' },
     { name: 'Partner Foundation', description: 'Self-scoped Hook Partner account foundation.' },
+    { name: 'Runner Catalog Capture', description: 'Self-scoped Runner Market catalog capture and submission workflow.' },
+    { name: 'Catalog Media', description: 'Signed private catalog media upload and verification.' },
+    { name: 'Catalog Review', description: 'Scoped submission review and approval workflow.' },
+    { name: 'Commercial Catalog', description: 'Commercial content, pricing, negotiation rules, and publication lifecycle.' },
+    { name: 'Public Catalog', description: 'Safe customer-facing published categories and products.' },
+    { name: 'AI Negotiation', description: 'Deterministic three-offer negotiation; Azure OpenAI controls wording only.' },
   ]),
   paths,
   components: {

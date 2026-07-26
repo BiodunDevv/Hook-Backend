@@ -11,6 +11,12 @@ export const PUBLIC_ID_PREFIXES = {
   runner: 'RUN',
   customer: 'CUS',
   staff: 'STF',
+  category: 'CAT',
+  submission: 'SUB',
+  product: 'PRD',
+  variant: 'VAR',
+  negotiation: 'NEG',
+  quote: 'QTE',
   audit: 'AUD',
 } as const;
 

@@ -17,6 +17,7 @@ import { createWebhookRouter } from './routes/webhooks';
 import { createGuestSessionRouter } from './routes/guest-sessions';
 import { createPartnerRouter, createRunnerRouter } from './routes/platform-self';
 import { createPublicGeographyRouter } from './routes/public-geography';
+import { createCatalogMediaRouter } from './routes/catalog-media';
 import { errorHandler, requestContext, sendError, sendSuccess } from './utils/http';
 
 export function createApp() {
@@ -105,6 +106,7 @@ export function createApp() {
   app.use(`${apiPrefix}/admin`, createAdminRouter());
   app.use(`${apiPrefix}/runner`, createRunnerRouter());
   app.use(`${apiPrefix}/partner`, createPartnerRouter());
+  app.use(`${apiPrefix}/catalog/media`, uploadLimiter, createCatalogMediaRouter());
   app.use(`${apiPrefix}/public`, createPublicGeographyRouter());
   app.use(`${apiPrefix}/upload`, uploadLimiter, createUploadRouter());
   app.use(`${apiPrefix}/webhooks`, createWebhookRouter());

@@ -109,9 +109,12 @@ export enum PaymentStatus {
 
 export enum NegotiationStatus {
   ACTIVE = 'active',
+  AGREED = 'agreed',
+  /** @deprecated Retained while legacy negotiation records are migrated. */
   ACCEPTED = 'accepted',
   DECLINED = 'declined',
   EXPIRED = 'expired',
+  CLOSED = 'closed',
   WITHDRAWN = 'withdrawn',
 }
 
@@ -128,11 +131,40 @@ export enum LogisticsStatus {
 
 export enum ProductStatus {
   DRAFT = 'draft',
+  PUBLISHED = 'published',
+  PAUSED = 'paused',
+  AVAILABILITY_UNCONFIRMED = 'availability_unconfirmed',
+  UNPUBLISHED = 'unpublished',
+  /** @deprecated Legacy catalog workflow status. */
   PENDING_APPROVAL = 'pending_approval',
+  /** @deprecated Legacy published status. */
   APPROVED = 'approved',
   REJECTED = 'rejected',
   DISABLED = 'disabled',
   SOLD_OUT = 'sold_out',
+}
+
+export enum ProductSubmissionStatus {
+  DRAFT = 'draft',
+  SUBMITTED = 'submitted',
+  IN_REVIEW = 'in_review',
+  CHANGES_REQUESTED = 'changes_requested',
+  APPROVED = 'approved',
+  REJECTED = 'rejected',
+}
+
+export enum ProductAvailabilityStatus {
+  AVAILABLE = 'available',
+  LIMITED = 'limited',
+  UNAVAILABLE = 'unavailable',
+  UNCONFIRMED = 'unconfirmed',
+}
+
+export enum NegotiatedQuoteStatus {
+  ACTIVE = 'active',
+  USED = 'used',
+  EXPIRED = 'expired',
+  CANCELLED = 'cancelled',
 }
 
 /** @deprecated Vendor tiers are retained for legacy product/source records. */

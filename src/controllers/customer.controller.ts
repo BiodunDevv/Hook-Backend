@@ -3,7 +3,6 @@ import { AppDataSource } from '@config/data-source';
 import { CartItem } from '@models/cart/cart-item.model';
 import { Cart } from '@models/cart/cart.model';
 import { Logistics } from '@models/logistics/logistics.model';
-import { Negotiation } from '@models/negotiations/negotiation.model';
 import { OrderItem } from '@models/orders/order-item.model';
 import { Order } from '@models/orders/order.model';
 import { Payment } from '@models/payments/payment.model';
@@ -16,7 +15,6 @@ import { AccountDeletionRequest } from '@models/support/account-deletion-request
 import { CheckoutEvent } from '@models/analytics/checkout-event.model';
 import { SavedPaymentMethod } from '@models/payments/saved-payment-method.model';
 import { CartService } from '@services/cart.service';
-import { NegotiationService } from '@services/negotiation.service';
 import { NotificationService } from '@services/notification.service';
 import { OrderService } from '@services/order.service';
 import { PaymentService } from '@services/payment.service';
@@ -49,11 +47,6 @@ export class CustomerController {
     AppDataSource.getRepository(OrderItem),
     AppDataSource.getRepository(Product),
     AppDataSource.getRepository(Logistics),
-  );
-
-  private readonly negotiations = new NegotiationService(
-    AppDataSource.getRepository(Negotiation),
-    AppDataSource.getRepository(Product),
   );
 
   private readonly payments = new PaymentService(
@@ -101,26 +94,6 @@ export class CustomerController {
 
   cancelOrder = async (req: Request, res: Response) => {
     sendSuccess(res, publicOrder(await this.orders.cancelCustomerOrder(owner(req), routeParam(req.params.id), req.body.reason)));
-  };
-
-  startNegotiation = async (req: Request, res: Response) => {
-    sendCreated(res, await this.negotiations.start(ownerId(req), req.body.productId, req.body.offeredPrice, req.body.message));
-  };
-
-  counterNegotiation = async (req: Request, res: Response) => {
-    sendSuccess(res, await this.negotiations.counter(ownerId(req), routeParam(req.params.id), req.body.offeredPrice, req.body.message));
-  };
-
-  acceptNegotiation = async (req: Request, res: Response) => {
-    sendSuccess(res, await this.negotiations.accept(ownerId(req), routeParam(req.params.id)));
-  };
-
-  listNegotiations = async (req: Request, res: Response) => {
-    sendSuccess(res, await this.negotiations.list(ownerId(req)));
-  };
-
-  getNegotiation = async (req: Request, res: Response) => {
-    sendSuccess(res, await this.negotiations.detail(ownerId(req), routeParam(req.params.id)));
   };
 
   initializePayment = async (req: Request, res: Response) => {

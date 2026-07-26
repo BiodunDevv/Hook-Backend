@@ -13,6 +13,11 @@ const domains: Record<string, string[]> = {
   runners: ['view', 'manage', 'assign'],
   orders: ['view', 'create', 'edit'],
   products: ['view', 'review', 'edit'],
+  'catalog.submission': ['view', 'review', 'request_changes', 'approve', 'reject'],
+  'catalog.product': ['view', 'edit', 'publish', 'pause', 'unpublish'],
+  'catalog.pricing': ['view_internal', 'edit'],
+  'catalog.negotiation_rules': ['view_internal', 'edit'],
+  'catalog.media': ['upload', 'review'],
   customers: ['view', 'edit'],
   financials: ['view', 'refund', 'reconcile'],
   refunds: ['view', 'manage'],
@@ -33,7 +38,25 @@ const operationsPermissions = PLATFORM_PERMISSION_KEYS.filter((key) =>
 );
 const orderRead = ['orders.view', 'customers.view', 'reports.view'];
 const orderOperations = [...orderRead, 'orders.create', 'orders.edit'];
-const catalogRead = ['products.view', 'markets.view', 'partners.view'];
+const catalogRead = [
+  'products.view',
+  'markets.view',
+  'catalog.submission.view',
+  'catalog.product.view',
+];
+const commercialManage = [
+  ...catalogRead,
+  'catalog.product.edit',
+  'catalog.product.publish',
+  'catalog.product.pause',
+  'catalog.product.unpublish',
+  'catalog.pricing.view_internal',
+  'catalog.pricing.edit',
+  'catalog.negotiation_rules.view_internal',
+  'catalog.negotiation_rules.edit',
+  'catalog.media.review',
+  'ai_negotiation.view',
+];
 const supportPermissions = [
   ...orderRead,
   'customers.edit',
@@ -56,9 +79,32 @@ const roles = [
   { key: 'SUPER_ADMIN', name: 'Super Admin', scope: ScopeType.GLOBAL, permissions: PLATFORM_PERMISSION_KEYS },
   { key: 'OPERATIONS_LEAD', name: 'Operations Lead', scope: ScopeType.MULTI_STATE, permissions: [...operationsPermissions, ...orderOperations, 'staff.view'] },
   { key: 'STATE_OPERATIONS_MANAGER', name: 'State Operations Manager', scope: ScopeType.SINGLE_STATE, permissions: [...operationsPermissions, ...orderOperations] },
-  { key: 'COMMERCIAL_MANAGER', name: 'Commercial Manager', scope: ScopeType.MULTI_STATE, permissions: [...catalogRead, 'products.review', 'products.edit', 'partners.manage', 'audit.view'] },
-  { key: 'COMMERCIAL_OFFICER', name: 'Commercial Officer', scope: ScopeType.SINGLE_STATE, permissions: catalogRead },
-  { key: 'CATALOG_REVIEWER', name: 'Catalog Reviewer', scope: ScopeType.MULTI_STATE, permissions: [...catalogRead, 'products.review'] },
+  {
+    key: 'COMMERCIAL_MANAGER',
+    name: 'Commercial Manager',
+    scope: ScopeType.MULTI_STATE,
+    permissions: [...commercialManage, 'products.review', 'products.edit', 'audit.view'],
+  },
+  {
+    key: 'COMMERCIAL_OFFICER',
+    name: 'Commercial Officer',
+    scope: ScopeType.SINGLE_STATE,
+    permissions: [...catalogRead, 'catalog.product.edit', 'catalog.pricing.view_internal', 'catalog.pricing.edit'],
+  },
+  {
+    key: 'CATALOG_REVIEWER',
+    name: 'Catalog Reviewer',
+    scope: ScopeType.MULTI_STATE,
+    permissions: [
+      ...catalogRead,
+      'catalog.submission.review',
+      'catalog.submission.request_changes',
+      'catalog.submission.approve',
+      'catalog.submission.reject',
+      'products.review',
+      'catalog.media.review',
+    ],
+  },
   { key: 'DISPATCH_HUB_MANAGER', name: 'Dispatch Hub Manager', scope: ScopeType.HUB, permissions: ['hubs.view', 'markets.view', 'runners.view', 'runners.assign', ...orderOperations] },
   { key: 'DISPATCH_HUB_OFFICER', name: 'Dispatch Hub Officer', scope: ScopeType.HUB, permissions: ['hubs.view', 'markets.view', 'runners.view', 'orders.view', 'orders.edit'] },
   { key: 'LOGISTICS_OFFICER', name: 'Logistics Officer', scope: ScopeType.MULTI_STATE, permissions: ['hubs.view', 'markets.view', 'runners.view', 'orders.view', 'orders.edit'] },

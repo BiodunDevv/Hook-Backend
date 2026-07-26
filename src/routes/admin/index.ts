@@ -13,6 +13,8 @@ import { AdminSettingsController } from '@controllers/admin/settings.controller'
 import { AdminStaffController } from '@controllers/admin/staff.controller';
 import { AdminUsersController } from '@controllers/admin/users.controller';
 import { AdminCommerceController } from '@controllers/admin/commerce.controller';
+import { AdminCatalogReviewController } from '@controllers/admin/catalog-review.controller';
+import { AdminCommercialCatalogController } from '@controllers/admin/commercial-catalog.controller';
 import { createAdminAuthRouter } from '@controllers/admin/admin-auth.controller';
 import { createPlatformAdminRouter } from './platform';
 import { requireAuth } from '@middleware/auth';
@@ -43,6 +45,14 @@ import {
   deletionUpdateSchema,
   refundSchema,
 } from '@validations/common.schemas';
+import {
+  commercialProductSchema,
+  lifecycleReasonSchema,
+  negotiationRulesSchema,
+  pricingSchema,
+  reviewReasonSchema,
+  reviewStartSchema,
+} from '@validations/catalog.schemas';
 import { asyncHandler } from '@utils/http';
 
 export function createAdminRouter() {
@@ -61,6 +71,8 @@ export function createAdminRouter() {
   const categories  = new AdminCategoriesController();
   const operations  = new AdminOperationsController();
   const commerce    = new AdminCommerceController();
+  const catalogReview = new AdminCatalogReviewController();
+  const commercial = new AdminCommercialCatalogController();
 
   // ── Public admin auth (no token required) ──────────────────────────────
   router.use('/auth', createAdminAuthRouter());
@@ -110,6 +122,26 @@ export function createAdminRouter() {
   router.delete('/categories/:id',       requireSuperAdmin, asyncHandler(categories.remove));
 
   // ── Products ───────────────────────────────────────────────────────────
+  router.get('/catalog/review/dashboard', requirePermission('catalog.submission.view'), asyncHandler(catalogReview.dashboard));
+  router.get('/catalog/review', requirePermission('catalog.submission.view'), asyncHandler(catalogReview.list));
+  router.get('/catalog/review/:id', requirePermission('catalog.submission.view'), asyncHandler(catalogReview.detail));
+  router.post('/catalog/review/:id/start', requirePermission('catalog.submission.review'), validateBody(reviewStartSchema), asyncHandler(catalogReview.start));
+  router.post('/catalog/review/:id/request-changes', requirePermission('catalog.submission.request_changes'), validateBody(reviewReasonSchema), asyncHandler(catalogReview.requestChanges));
+  router.post('/catalog/review/:id/approve', requirePermission('catalog.submission.approve'), validateBody(reviewReasonSchema), asyncHandler(catalogReview.approve));
+  router.post('/catalog/review/:id/reject', requirePermission('catalog.submission.reject'), validateBody(reviewReasonSchema), asyncHandler(catalogReview.reject));
+
+  router.get('/commercial/dashboard', requirePermission('catalog.product.view'), asyncHandler(commercial.dashboard));
+  router.get('/commercial/products', requirePermission('catalog.product.view'), asyncHandler(commercial.list));
+  router.get('/commercial/products/:id', requirePermission('catalog.product.view'), asyncHandler(commercial.detail));
+  router.get('/commercial/products/:id/preview', requirePermission('catalog.product.view'), asyncHandler(commercial.preview));
+  router.patch('/commercial/products/:id', requirePermission('catalog.product.edit'), validateBody(commercialProductSchema), asyncHandler(commercial.update));
+  router.patch('/commercial/products/:id/pricing', requirePermission('catalog.pricing.edit'), validateBody(pricingSchema), asyncHandler(commercial.pricing));
+  router.patch('/commercial/products/:id/negotiation-rules', requirePermission('catalog.negotiation_rules.edit'), validateBody(negotiationRulesSchema), asyncHandler(commercial.rules));
+  router.post('/commercial/products/:id/publish', requirePermission('catalog.product.publish'), validateBody(lifecycleReasonSchema), asyncHandler(commercial.publish));
+  router.post('/commercial/products/:id/pause', requirePermission('catalog.product.pause'), validateBody(lifecycleReasonSchema), asyncHandler(commercial.pause));
+  router.post('/commercial/products/:id/unpublish', requirePermission('catalog.product.unpublish'), validateBody(lifecycleReasonSchema), asyncHandler(commercial.unpublish));
+  router.post('/commercial/products/:id/availability-unconfirmed', requirePermission('catalog.product.pause'), validateBody(lifecycleReasonSchema), asyncHandler(commercial.availabilityUnconfirmed));
+
   router.get('/products/review', requirePermission('products.review'), asyncHandler(products.reviewQueue));
   router.get('/products/stats',  requirePermission('products.view'),   asyncHandler(products.stats));
   router.get('/products',        requirePermission('products.view'),   asyncHandler(products.list));

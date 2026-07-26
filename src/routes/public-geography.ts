@@ -2,9 +2,16 @@ import { Router } from 'express';
 import { OperationCity, OperationState, ServiceZone } from '@models/platform/geography.model';
 import { Market } from '@models/platform/network.model';
 import { asyncHandler, sendSuccess } from '@utils/http';
+import { PublicCatalogController } from '@controllers/public-catalog.controller';
 
 export function createPublicGeographyRouter() {
   const router = Router();
+  const catalog = new PublicCatalogController();
+  router.get('/home', asyncHandler(catalog.home));
+  router.get('/products', asyncHandler(catalog.products));
+  router.get('/products/:id', asyncHandler(catalog.product));
+  router.get('/categories', asyncHandler(catalog.categories));
+  router.get('/search', asyncHandler(catalog.search));
   router.get('/states', asyncHandler(async (_req, res) => {
     sendSuccess(res, await OperationState.find({ status: 'active' })
       .select('publicId name code timezone currency deliveryPromiseHours payAtHubEnabled')

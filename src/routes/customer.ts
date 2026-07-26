@@ -1,23 +1,25 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { CustomerController } from '@controllers/customer.controller';
+import { NegotiationController } from '@controllers/negotiation.controller';
 import { requireCustomerIdentity } from '@middleware/auth';
 import { validateBody } from '@middleware/validate';
 import {
   cartItemSchema,
   cartQuantitySchema,
   checkoutSchema,
-  negotiationSchema,
   paymentInitializeSchema,
   customerRefundRequestSchema,
   deletionRequestSchema,
   checkoutEventSchema,
 } from '@validations/common.schemas';
+import { negotiationCreateSchema, negotiationOfferSchema } from '@validations/catalog.schemas';
 import { asyncHandler } from '@utils/http';
 
 export function createCustomerRouter() {
   const router = Router();
   const controller = new CustomerController();
+  const negotiations = new NegotiationController();
 
   router.use(requireCustomerIdentity);
 
@@ -33,11 +35,12 @@ export function createCustomerRouter() {
   router.post('/orders/:id/cancel', validateBody(z.object({ reason: z.string().optional() })), asyncHandler(controller.cancelOrder));
   router.post('/orders/:id/refunds', validateBody(customerRefundRequestSchema), asyncHandler(controller.requestRefund));
 
-  router.get('/negotiations', asyncHandler(controller.listNegotiations));
-  router.post('/negotiations', validateBody(negotiationSchema), asyncHandler(controller.startNegotiation));
-  router.get('/negotiations/:id', asyncHandler(controller.getNegotiation));
-  router.post('/negotiations/:id/counter', validateBody(negotiationSchema.omit({ productId: true })), asyncHandler(controller.counterNegotiation));
-  router.post('/negotiations/:id/accept', asyncHandler(controller.acceptNegotiation));
+  router.get('/negotiations', asyncHandler(negotiations.list));
+  router.post('/negotiations', validateBody(negotiationCreateSchema), asyncHandler(negotiations.create));
+  router.get('/negotiations/:id', asyncHandler(negotiations.detail));
+  router.post('/negotiations/:id/offers', validateBody(negotiationOfferSchema), asyncHandler(negotiations.offer));
+  router.post('/negotiations/:id/accept', asyncHandler(negotiations.accept));
+  router.post('/negotiations/:id/close', asyncHandler(negotiations.close));
 
   router.post('/payments/initialize', validateBody(paymentInitializeSchema), asyncHandler(controller.initializePayment));
   router.post('/payments/verify/:reference', asyncHandler(controller.verifyPayment));

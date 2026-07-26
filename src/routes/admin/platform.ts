@@ -211,7 +211,10 @@ export function createPlatformAdminRouter() {
   router.get('/audit-logs/:id', asyncHandler(controller.auditDetail));
   router.get('/public-id-counters', asyncHandler(controller.counters));
   router.post('/public-id-counters/repair', validateBody(z.object({
-    domain: z.enum(['state', 'city', 'zone', 'market', 'hub', 'partner', 'runner', 'customer', 'staff', 'audit']),
+    domain: z.enum([
+      'state', 'city', 'zone', 'market', 'hub', 'partner', 'runner', 'customer', 'staff', 'audit',
+      'category', 'submission', 'product', 'variant', 'negotiation', 'quote',
+    ]),
     year: z.number().int().min(2020).optional(), sequence: z.number().int().nonnegative(), reason: z.string().min(5),
   })), asyncHandler(controller.repairCounter));
 

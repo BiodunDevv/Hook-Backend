@@ -49,6 +49,11 @@ export function assertSafeEnvironment() {
       requireEnv('CLOUDINARY_CLOUD_NAME');
       requireEnv('CLOUDINARY_UPLOAD_PRESET');
     }
+    if (process.env.CATALOG_SIGNED_MEDIA_ENABLED !== 'false') {
+      requireEnv('CLOUDINARY_CLOUD_NAME');
+      requireEnv('CLOUDINARY_API_KEY');
+      requireEnv('CLOUDINARY_API_SECRET');
+    }
     for (const name of ['BOOTH_ACCESS_SECRET', 'BOOTH_SESSION_SECRET']) {
       const value = requireEnv(name);
       if (value.length < 32 || value.startsWith('replace-with-')) {

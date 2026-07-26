@@ -3,6 +3,7 @@ import { createApp } from './app';
 import { assertSafeEnvironment } from './config/env';
 import { initializeDatabase } from './config/data-source';
 import { ensurePlatformAccessCatalog } from './services/platform-bootstrap.service';
+import { expireNegotiationsAndQuotes } from './services/negotiation.service';
 
 dotenv.config({ quiet: true });
 
@@ -45,6 +46,12 @@ async function bootstrap() {
   assertSafeEnvironment();
   await initializeDatabase();
   await ensurePlatformAccessCatalog();
+  const expiryTimer = setInterval(() => {
+    void expireNegotiationsAndQuotes().catch((error) => {
+      console.error('[catalog-expiry] Failed to expire negotiation records', error);
+    });
+  }, 60_000);
+  expiryTimer.unref();
 
   const app = createApp();
   const port = Number(process.env.PORT || 4000);

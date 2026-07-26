@@ -33,5 +33,6 @@ Pagination is returned in `meta.pagination`. Stable error families are validatio
 - `/api/v1/admin/audit-logs|public-id-counters`
 - `/api/v1/runner/profile|markets`
 - `/api/v1/partner/profile|location`
+- `/api/v1/runner/auth/login` and `/api/v1/partner/auth/login`
 
 The generated `swagger-spec.json` is the detailed catalogue.

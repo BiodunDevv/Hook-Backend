@@ -5,11 +5,11 @@ Run on 2026-07-26:
 - Backend `npm test -- --runInBand`: 3 suites, 9 tests passed.
 - Backend non-fixing ESLint: zero errors, 261 existing warnings.
 - Backend `npm run build`: passed.
-- Swagger generation: passed, 132 paths.
+- Swagger generation: passed, 134 paths.
 - Migration analyze and dry-run: passed.
 - Admin targeted Phase 2 ESLint: passed.
 - Admin `npx tsc --noEmit`: passed.
-- Admin production build: passed, 43 routes generated.
+- Admin production build after route-group migration: passed, 43 routes generated.
 - Shopper `npm run lint`: passed.
 - Shopper `npx tsc --noEmit`: passed.
 - Expo Doctor after patch alignment: 18/18 checks passed.

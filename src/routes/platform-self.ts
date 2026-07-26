@@ -1,13 +1,18 @@
 import { Router } from 'express';
 import { AccountType } from '@lib/constants';
+import { AuthController } from '@controllers/auth.controller';
 import { requireAccountType, requireAuth } from '@middleware/auth';
+import { validateBody } from '@middleware/validate';
 import { HookPartner, RunnerMarketAssignment, RunnerProfile } from '@models/platform/operations-accounts.model';
 import { Market } from '@models/platform/network.model';
 import { User } from '@models/users/user.model';
 import { asyncHandler, HttpError, sendSuccess } from '@utils/http';
+import { loginSchema } from '@validations/common.schemas';
 
 export function createRunnerRouter() {
   const router = Router();
+  const auth = new AuthController();
+  router.post('/auth/login', validateBody(loginSchema), asyncHandler(auth.runnerLogin));
   router.use(requireAuth, requireAccountType(AccountType.RUNNER));
   router.get('/profile', asyncHandler(async (req, res) => {
     const [account, profile] = await Promise.all([
@@ -34,6 +39,8 @@ export function createRunnerRouter() {
 
 export function createPartnerRouter() {
   const router = Router();
+  const auth = new AuthController();
+  router.post('/auth/login', validateBody(loginSchema), asyncHandler(auth.partnerLogin));
   router.use(requireAuth, requireAccountType(AccountType.PARTNER));
   router.get('/profile', asyncHandler(async (req, res) => {
     const [account, partner] = await Promise.all([

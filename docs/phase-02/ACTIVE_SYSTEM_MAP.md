@@ -6,15 +6,15 @@ Express request context -> authentication/session validation -> live RBAC -> sta
 
 ## Admin
 
-`/dashboard` retains valid operations surfaces. Phase 2 adds `/dashboard/administration`, `/dashboard/markets`, `/dashboard/hubs`, `/dashboard/partners`, and `/dashboard/runners`. State and Hub selectors send requested context headers.
+The source lives under `app/(admin)/dashboard`; public URLs remain `/dashboard/*`. It retains valid operations surfaces and adds Administration, Markets, Hubs, Partners, and Runners. State and Hub selectors send requested context headers. Staff roles share this shell and receive permission-aware navigation.
 
 ## Runner
 
-`/runner/login`, dashboard, assigned Markets, profile, and security. Data comes from self-scoped Runner endpoints.
+Source lives under `app/(runner)/runner`. `/runner/login`, dashboard, assigned Markets, profile, and security use a Runner-only backend login and account-type guard.
 
 ## Partner
 
-`/partner/login`, dashboard, profile, location, and security. Data comes from self-scoped Partner endpoints.
+Source lives under `app/(partner)/partner`. `/partner/login`, dashboard, profile, location, and security use a Partner-only backend login and account-type guard.
 
 ## Shopper
 

@@ -26,7 +26,7 @@ Analyze and dry-run passed against production Atlas database `hook`. Execution w
 - Install Database Tools, create and restore-verify backup, execute and verify migration.
 - Add isolated database integration/E2E coverage for concurrency, refresh replay, suspension, scope, and relationship scenarios.
 - Replace compact generic administration forms with relationship-aware selectors and complete mutation controls.
-- Add hardened server-side portal route guards.
+- Complete secure invitation/password activation for Staff, Runner, and Partner accounts.
 - Audit remaining legacy controllers for direct response construction and public Mongo-ID leakage.
 
 NOT READY FOR PHASE 3

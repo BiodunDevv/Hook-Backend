@@ -721,7 +721,9 @@ for (const [resource, tag] of platformResources) {
 add('get', `${apiPrefix}/admin/public-id-counters`, op('Platform Governance', 'Inspect annual public Hook ID counters'));
 add('post', `${apiPrefix}/admin/public-id-counters/repair`, op('Platform Governance', 'Repair a public ID counter with mandatory reason and audit'));
 add('get', `${apiPrefix}/runner/profile`, op('Runner Foundation', 'Get the authenticated Runner profile and scope'));
+add('post', `${apiPrefix}/runner/auth/login`, op('Runner Foundation', 'Sign in to the Runner portal with server-enforced Runner account type', { requestBody: body('LoginRequest') }));
 add('get', `${apiPrefix}/runner/markets`, op('Runner Foundation', 'List only Markets assigned to the authenticated Runner'));
+add('post', `${apiPrefix}/partner/auth/login`, op('Partner Foundation', 'Sign in to the Hook Partner portal with server-enforced Partner account type', { requestBody: body('LoginRequest') }));
 add('get', `${apiPrefix}/partner/profile`, op('Partner Foundation', 'Get the authenticated Hook Partner profile'));
 add('get', `${apiPrefix}/partner/location`, op('Partner Foundation', 'Get only the authenticated Hook Partner location'));
 

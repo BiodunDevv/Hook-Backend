@@ -21,9 +21,9 @@ All `/api/v1` responses use `{ success, data, meta }` or `{ success, error, meta
 
 ## Applications
 
-- Admin: retained operations console plus Phase 2 Administration, Markets, Dispatch Hubs, Hook Partners, and Runners.
-- Runner: isolated `/runner` route group with only real identity and assignment data.
-- Partner: isolated `/partner` route group with only the authenticated location.
+- Admin: one permission-aware staff application in `app/(admin)/dashboard`. Super Admin is an RBAC role, not a duplicated dashboard tree.
+- Runner: isolated `app/(runner)/runner` route group, preserving `/runner/*` URLs, with server-enforced Runner login and session guard.
+- Partner: isolated `app/(partner)/partner` route group, preserving `/partner/*` URLs, with server-enforced Partner login and session guard.
 - Shopper: customer authentication, backend-issued guest sessions, and public geography.
 
 Commerce behavior remains out of Phase 2.

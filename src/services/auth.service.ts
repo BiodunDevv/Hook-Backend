@@ -73,7 +73,11 @@ export class AuthService {
     };
   }
 
-  async login(email: string, password: string, options?: { adminOnly?: boolean; guestId?: string }) {
+  async login(email: string, password: string, options?: {
+    adminOnly?: boolean;
+    guestId?: string;
+    expectedAccountType?: AccountType;
+  }) {
     const user = await this.userRepo.findOne({
       where: { email },
       select: {
@@ -86,6 +90,8 @@ export class AuthService {
         isActive: true,
         isEmailVerified: true,
         avatarUrl: true,
+        publicId: true,
+        accountType: true,
         accountStatus: true,
       },
     });
@@ -109,6 +115,9 @@ export class AuthService {
       ![UserRole.SUPPORT, UserRole.ADMIN, UserRole.SUPER_ADMIN].includes(user.role)
     ) {
       throw new HttpError(403, 'Admin access required');
+    }
+    if (options?.expectedAccountType && user.accountType !== options.expectedAccountType) {
+      throw new HttpError(403, 'This account cannot access the requested portal', undefined, 'ACCESS_DENIED');
     }
 
     user.lastLoginAt = new Date();

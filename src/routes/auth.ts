@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { AuthController } from '@controllers/auth.controller';
-import { requireAuth } from '@middleware/auth';
+import { optionalCustomerIdentity, requireAuth } from '@middleware/auth';
 import { validateBody } from '@middleware/validate';
 import {
   changePasswordSchema,
@@ -48,13 +48,13 @@ export function createAuthRouter() {
   const controller = new AuthController();
 
   router.post('/lookup', validateBody(lookupSchema), asyncHandler(controller.lookup));
-  router.post('/signup/start', validateBody(signupStartSchema), asyncHandler(controller.startSignup));
+  router.post('/signup/start', optionalCustomerIdentity, validateBody(signupStartSchema), asyncHandler(controller.startSignup));
   router.post('/signup/verify', validateBody(signupVerifySchema), asyncHandler(controller.verifySignup));
   router.post('/signup/resend', validateBody(z.object({ signupSessionToken: z.string().min(32) })), asyncHandler(controller.resendSignupCode));
-  router.post('/signup/complete', validateBody(signupCompleteSchema), asyncHandler(controller.completeSignup));
+  router.post('/signup/complete', optionalCustomerIdentity, validateBody(signupCompleteSchema), asyncHandler(controller.completeSignup));
   router.post('/register', validateBody(registerSchema), asyncHandler(controller.register));
-  router.post('/login', validateBody(loginSchema), asyncHandler(controller.login));
-  router.post('/google', validateBody(googleAuthSchema), asyncHandler(controller.googleLogin));
+  router.post('/login', optionalCustomerIdentity, validateBody(loginSchema), asyncHandler(controller.login));
+  router.post('/google', optionalCustomerIdentity, validateBody(googleAuthSchema), asyncHandler(controller.googleLogin));
   router.post('/invitations/accept', validateBody(z.object({
     token: z.string().min(32),
     password: z.string().min(9).max(128),

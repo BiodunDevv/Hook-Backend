@@ -42,6 +42,16 @@ export function createApp() {
     },
     credentials: true,
   }));
+  // Paystack signs the exact request bytes. This route must run before the
+  // global JSON parser so signature verification cannot be affected by
+  // parsing or serialization differences.
+  app.post(`${apiPrefix}/webhooks/paystack`, express.raw({ type: 'application/json', limit: '256kb' }), async (req, res, next) => {
+    try {
+      const { PaymentService } = await import('@services/payment.service');
+      const signature = String(req.header('x-paystack-signature') || '');
+      sendSuccess(res, await new PaymentService().webhook(req.body as Buffer, signature, req.requestId));
+    } catch (error) { next(error); }
+  });
   app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '1mb' }));
   app.use(express.urlencoded({ extended: true, limit: process.env.FORM_BODY_LIMIT || '1mb' }));
   app.use(sanitizeRequest);

@@ -13,6 +13,9 @@ export interface OperationState extends BaseEntity {
   deliveryPromiseHours: number;
   payAtHubEnabled: boolean;
   payAtHubLimitMinor: number;
+  deliveryFeeMinor?: number;
+  podEnabled?: boolean;
+  podLimitMinor?: number;
   configuration?: Record<string, unknown>;
   legacy?: Record<string, unknown>;
 }
@@ -36,6 +39,9 @@ export interface ServiceZone extends BaseEntity {
   areaRules?: Record<string, unknown>;
   geometry?: Record<string, unknown>;
   deliveryEligible: boolean;
+  deliveryFeeMinor?: number;
+  podEnabled?: boolean;
+  podLimitMinor?: number;
 }
 
 const stateSchema = createSchema<OperationState>({
@@ -49,6 +55,9 @@ const stateSchema = createSchema<OperationState>({
   deliveryPromiseHours: { type: Number, default: 24, min: 1 },
   payAtHubEnabled: { type: Boolean, default: false },
   payAtHubLimitMinor: { type: Number, default: 10000000, min: 0 },
+  deliveryFeeMinor: { type: Number, min: 0 },
+  podEnabled: { type: Boolean, default: false },
+  podLimitMinor: { type: Number, min: 0 },
   configuration: { type: Object },
   legacy: { type: Object },
 });
@@ -73,6 +82,9 @@ const zoneSchema = createSchema<ServiceZone>({
   areaRules: { type: Object },
   geometry: { type: Object },
   deliveryEligible: { type: Boolean, default: false, index: true },
+  deliveryFeeMinor: { type: Number, min: 0 },
+  podEnabled: { type: Boolean, default: false },
+  podLimitMinor: { type: Number, min: 0 },
 });
 zoneSchema.index({ cityId: 1, code: 1 }, { unique: true });
 

@@ -1,10 +1,17 @@
-import { Request, Response } from 'express';
-import { DELIVERY_SLA_HOURS, OrderStatus, PaymentStatus } from '@lib/constants';
-import { auditAdminAction } from '@lib/audit';
-import { EmailService } from '@emails/email.service';
-import { HttpError, sendCreated, sendSuccess } from '@utils/http';
-import { adminRepos, getPagination, paginated, routeParam } from './admin.helpers';
-import { publicOrder } from '@lib/public-resource';
+import { Request, Response } from "express";
+import { DELIVERY_SLA_HOURS, OrderStatus, PaymentStatus } from "@lib/constants";
+import { auditAdminAction } from "@lib/audit";
+import { EmailService } from "@emails/email.service";
+import { HttpError, sendCreated, sendSuccess } from "@utils/http";
+import {
+  adminRepos,
+  getPagination,
+  paginated,
+  routeParam,
+} from "./admin.helpers";
+import { publicOrder } from "@lib/public-resource";
+import { Order } from "@models/orders/order.model";
+import { isValidObjectId } from "mongoose";
 
 export class AdminOrdersController {
   private readonly email = new EmailService();
@@ -12,48 +19,75 @@ export class AdminOrdersController {
   private async enrichOrder(order: any) {
     if (!order) return order;
     const [items, payment, logistics, escrowLedger] = await Promise.all([
-      adminRepos.orderItems().find({ where: { orderId: order.id }, relations: { product: true } }),
+      adminRepos
+        .orderItems()
+        .find({ where: { orderId: order.id }, relations: { product: true } }),
       adminRepos.payments().findOne({ where: { orderId: order.id } }),
       adminRepos.logistics().findOne({ where: { orderId: order.id } }),
-      adminRepos.escrowLedger().find({ where: { orderId: order.id }, order: { createdAt: 'ASC' } }),
+      adminRepos
+        .escrowLedger()
+        .find({ where: { orderId: order.id }, order: { createdAt: "ASC" } }),
     ]);
     return { ...order, items, payment, logistics, escrowLedger };
   }
 
   list = async (req: Request, res: Response) => {
     const { page, limit, skip } = getPagination(req.query);
-    const search = typeof req.query.search === 'string' ? req.query.search.toLowerCase() : undefined;
+    const search =
+      typeof req.query.search === "string"
+        ? req.query.search.toLowerCase()
+        : undefined;
     const where: Record<string, unknown> = {};
-    if (typeof req.query.status === 'string') {
-      if (req.query.status === 'active') {
-        where.status = { $nin: [
+    if (typeof req.query.status === "string") {
+      if (req.query.status === "active") {
+        where.status = {
+          $nin: [
             OrderStatus.DELIVERED,
             OrderStatus.CANCELLED,
             OrderStatus.RETURNED,
             OrderStatus.REFUNDED,
-          ] };
+          ],
+        };
       } else {
         where.status = req.query.status;
       }
     }
-    if (typeof req.query.paymentStatus === 'string') where.paymentStatus = req.query.paymentStatus;
-    if (typeof req.query.paymentMode === 'string') where.paymentMode = req.query.paymentMode;
-    if (typeof req.query.orderType === 'string') where.orderType = req.query.orderType;
-    const all = await adminRepos.orders().find({ where, relations: { user: true }, order: { createdAt: 'DESC' } });
+    if (typeof req.query.paymentStatus === "string")
+      where.paymentStatus = req.query.paymentStatus;
+    if (typeof req.query.paymentMode === "string")
+      where.paymentMode = req.query.paymentMode;
+    if (typeof req.query.orderType === "string")
+      where.orderType = req.query.orderType;
+    const all = await adminRepos
+      .orders()
+      .find({ where, relations: { user: true }, order: { createdAt: "DESC" } });
     let filtered = all as any[];
     if (search) {
-      filtered = filtered.filter((order) => [
-        order.orderCode,
-        order.guestEmail,
-        order.guestName,
-        order.user?.email,
-        order.user?.firstName,
-        order.user?.lastName,
-      ].some((value) => String(value || '').toLowerCase().includes(search)));
+      filtered = filtered.filter((order) =>
+        [
+          order.orderCode,
+          order.guestEmail,
+          order.guestName,
+          order.user?.email,
+          order.user?.firstName,
+          order.user?.lastName,
+        ].some((value) =>
+          String(value || "")
+            .toLowerCase()
+            .includes(search),
+        ),
+      );
     }
-    const data = await Promise.all(filtered.slice(skip, skip + limit).map((order) => this.enrichOrder(order)));
+    const data = await Promise.all(
+      filtered
+        .slice(skip, skip + limit)
+        .map((order) => this.enrichOrder(order)),
+    );
     const stats = await this.statsData();
-    sendSuccess(res, { ...paginated(data.map(publicOrder), filtered.length, page, limit), stats });
+    sendSuccess(res, {
+      ...paginated(data.map(publicOrder), filtered.length, page, limit),
+      stats,
+    });
   };
 
   stats = async (_req: Request, res: Response) => {
@@ -61,35 +95,74 @@ export class AdminOrdersController {
   };
 
   detail = async (req: Request, res: Response) => {
-    const order = await adminRepos.orders().findOne({
-      where: { id: routeParam(req.params.id) },
-      relations: { user: true, items: true, payment: true, logistics: true },
+    const identifier = routeParam(req.params.id);
+    const identity = isValidObjectId(identifier)
+      ? {
+          $or: [
+            { _id: identifier },
+            { publicId: identifier },
+            { orderCode: identifier },
+          ],
+        }
+      : { $or: [{ publicId: identifier }, { orderCode: identifier }] };
+    const scope =
+      req.user?.scopeType === "global"
+        ? {}
+        : { sourceStateId: { $in: req.user?.assignedStateIds || [] } };
+    const order = await Order.findOne({ ...identity, ...scope }).lean({
+      virtuals: true,
     });
-    if (!order) throw new HttpError(404, 'Order not found');
+    if (!order) throw new HttpError(404, "Order not found");
     sendSuccess(res, publicOrder(await this.enrichOrder(order)));
   };
 
   status = async (req: Request, res: Response) => {
     const orders = adminRepos.orders();
-    const order = await orders.findOne({ where: { id: routeParam(req.params.id) } });
-    if (!order) throw new HttpError(404, 'Order not found');
+    const order = await orders.findOne({
+      where: { id: routeParam(req.params.id) },
+    });
+    if (!order) throw new HttpError(404, "Order not found");
     const next = req.body.status || order.status;
     const allowed: Record<string, string[]> = {
-      pending: ['cancelled'], confirmed: ['shipped', 'cancelled'], shipped: ['delivered'], delivered: [], cancelled: ['refunded'], refunded: [],
+      pending: ["cancelled"],
+      confirmed: ["shipped", "cancelled"],
+      shipped: ["delivered"],
+      delivered: [],
+      cancelled: ["refunded"],
+      refunded: [],
     };
-    if (next !== order.status && !(allowed[order.status] || []).includes(next)) {
-      throw new HttpError(409, `Order cannot move from ${order.status} to ${next}`);
+    if (
+      next !== order.status &&
+      !(allowed[order.status] || []).includes(next)
+    ) {
+      throw new HttpError(
+        409,
+        `Order cannot move from ${order.status} to ${next}`,
+      );
     }
-    if (next === OrderStatus.DELIVERED && order.paymentMode === 'pay_on_delivery' && order.paymentStatus !== PaymentStatus.SUCCESSFUL) {
-      throw new HttpError(409, 'Pay on Delivery must be collected before completing delivery');
+    if (
+      next === OrderStatus.DELIVERED &&
+      order.paymentMode === "pay_on_delivery" &&
+      order.paymentStatus !== PaymentStatus.SUCCESSFUL
+    ) {
+      throw new HttpError(
+        409,
+        "Pay on Delivery must be collected before completing delivery",
+      );
     }
     order.status = next;
     if (order.status === OrderStatus.DELIVERED) order.deliveredAt = new Date();
     await orders.save(order);
-    await auditAdminAction(req, 'order.status', 'order', order.id, { status: order.status });
-    const customer = order.userId ? await adminRepos.users().findOne({ where: { id: order.userId } }) : undefined;
+    await auditAdminAction(req, "order.status", "order", order.id, {
+      status: order.status,
+    });
+    const customer = order.userId
+      ? await adminRepos.users().findOne({ where: { id: order.userId } })
+      : undefined;
     const customerEmail = customer?.email || order.guestEmail;
-    const customerName = `${customer?.firstName || ''} ${customer?.lastName || ''}`.trim() || order.guestName;
+    const customerName =
+      `${customer?.firstName || ""} ${customer?.lastName || ""}`.trim() ||
+      order.guestName;
     if (customerEmail) {
       await this.email.sendOrderStatusUpdate({
         to: customerEmail,
@@ -104,8 +177,11 @@ export class AdminOrdersController {
 
   update = async (req: Request, res: Response) => {
     const orders = adminRepos.orders();
-    const order = await orders.findOne({ where: { id: routeParam(req.params.id) }, relations: { items: true } });
-    if (!order) throw new HttpError(404, 'Order not found');
+    const order = await orders.findOne({
+      where: { id: routeParam(req.params.id) },
+      relations: { items: true },
+    });
+    if (!order) throw new HttpError(404, "Order not found");
     const nextSubtotal = Number(order.subtotal || 0);
     const nextDeliveryFee = req.body.deliveryFee ?? order.deliveryFee;
     const nextDiscount = req.body.discount ?? order.discount;
@@ -113,19 +189,33 @@ export class AdminOrdersController {
       deliveryAddress: req.body.deliveryAddress ?? order.deliveryAddress,
       deliveryFee: nextDeliveryFee,
       discount: nextDiscount,
-      total: Math.max(0, nextSubtotal + Number(nextDeliveryFee || 0) - Number(nextDiscount || 0)),
+      total: Math.max(
+        0,
+        nextSubtotal + Number(nextDeliveryFee || 0) - Number(nextDiscount || 0),
+      ),
       deliveryNotes: req.body.deliveryNotes ?? order.deliveryNotes,
-      scheduledDeliveryAt: req.body.scheduledDeliveryAt ?? order.scheduledDeliveryAt,
+      scheduledDeliveryAt:
+        req.body.scheduledDeliveryAt ?? order.scheduledDeliveryAt,
       paymentStatus: req.body.paymentStatus ?? order.paymentStatus,
       status: req.body.status ?? order.status,
     });
-    if (order.status === OrderStatus.DELIVERED && !order.deliveredAt) order.deliveredAt = new Date();
+    if (order.status === OrderStatus.DELIVERED && !order.deliveredAt)
+      order.deliveredAt = new Date();
     await orders.save(order);
-    await auditAdminAction(req, 'order.update', 'order', order.id, { fields: Object.keys(req.body) });
-    sendSuccess(res, publicOrder(await this.enrichOrder(await orders.findOne({
-      where: { id: order.id },
-      relations: { user: true },
-    }))));
+    await auditAdminAction(req, "order.update", "order", order.id, {
+      fields: Object.keys(req.body),
+    });
+    sendSuccess(
+      res,
+      publicOrder(
+        await this.enrichOrder(
+          await orders.findOne({
+            where: { id: order.id },
+            relations: { user: true },
+          }),
+        ),
+      ),
+    );
   };
 
   create = async (req: Request, res: Response) => {
@@ -135,7 +225,7 @@ export class AdminOrdersController {
     const products = adminRepos.products();
     const logistics = adminRepos.logistics();
     const customer = await users.findOne({ where: { id: req.body.userId } });
-    if (!customer) throw new HttpError(404, 'Customer not found');
+    if (!customer) throw new HttpError(404, "Customer not found");
 
     const lines: Array<{
       product: any;
@@ -146,8 +236,13 @@ export class AdminOrdersController {
     }> = [];
     for (const item of req.body.items) {
       const product = await products.findOne({ where: { id: item.productId } });
-      if (!product) throw new HttpError(404, `Product not found: ${item.productId}`);
-      if (product.quantity < item.quantity) throw new HttpError(400, `${product.title} only has ${product.quantity} in stock`);
+      if (!product)
+        throw new HttpError(404, `Product not found: ${item.productId}`);
+      if (product.quantity < item.quantity)
+        throw new HttpError(
+          400,
+          `${product.title} only has ${product.quantity} in stock`,
+        );
       const unitPrice = product.discountedPrice || product.sellingPrice;
       lines.push({
         product,
@@ -162,90 +257,127 @@ export class AdminOrdersController {
     const deliveryFee = Number(req.body.deliveryFee || 0);
     const discount = Number(req.body.discount || 0);
     const total = Math.max(0, subtotal + deliveryFee - discount);
-    const legacySourceIds = [...new Set(lines.map((item) => item.product.vendorId).filter(Boolean))];
-    const order = await orders.save(orders.create({
-      orderCode: `HK-${Date.now().toString().slice(-8)}`,
-      userId: customer.id,
-      subtotal,
-      deliveryFee,
-      discount,
-      total,
-      vendorCount: legacySourceIds.length,
-      status: req.body.status || OrderStatus.PENDING,
-      paymentStatus: req.body.paymentStatus || PaymentStatus.UNPAID,
-      deliveryAddress: req.body.deliveryAddress,
-      deliveryNotes: req.body.deliveryNotes,
-      scheduledDeliveryAt: req.body.scheduledDeliveryAt,
-    }));
+    const legacySourceIds = [
+      ...new Set(lines.map((item) => item.product.vendorId).filter(Boolean)),
+    ];
+    const order = await orders.save(
+      orders.create({
+        orderCode: `HK-${Date.now().toString().slice(-8)}`,
+        userId: customer.id,
+        subtotal,
+        deliveryFee,
+        discount,
+        total,
+        vendorCount: legacySourceIds.length,
+        status: req.body.status || OrderStatus.PENDING,
+        paymentStatus: req.body.paymentStatus || PaymentStatus.UNPAID,
+        deliveryAddress: req.body.deliveryAddress,
+        deliveryNotes: req.body.deliveryNotes,
+        scheduledDeliveryAt: req.body.scheduledDeliveryAt,
+      }),
+    );
 
-    await Promise.all(lines.map(async (line) => {
-      await orderItems.save(orderItems.create({
+    await Promise.all(
+      lines.map(async (line) => {
+        await orderItems.save(
+          orderItems.create({
+            orderId: order.id,
+            productId: line.product.id,
+            productTitle: line.product.title,
+            productImage: line.product.images?.[0],
+            vendorId: line.product.vendorId,
+            quantity: line.quantity,
+            unitPrice: line.unitPrice,
+            totalPrice: line.totalPrice,
+            selectedVariants: line.selectedVariants,
+            commissionAmount: 0,
+          }),
+        );
+        await products.update(line.product.id, {
+          quantity: Math.max(0, line.product.quantity - line.quantity),
+          orderCount: line.product.orderCount + 1,
+        });
+      }),
+    );
+
+    await logistics.save(
+      logistics.create({
         orderId: order.id,
-        productId: line.product.id,
-        productTitle: line.product.title,
-        productImage: line.product.images?.[0],
-        vendorId: line.product.vendorId,
-        quantity: line.quantity,
-        unitPrice: line.unitPrice,
-        totalPrice: line.totalPrice,
-        selectedVariants: line.selectedVariants,
-        commissionAmount: 0,
-      }));
-      await products.update(line.product.id, {
-        quantity: Math.max(0, line.product.quantity - line.quantity),
-        orderCount: line.product.orderCount + 1,
-      });
-    }));
-
-    await logistics.save(logistics.create({
-      orderId: order.id,
-      deliveryLocation: {
-        address: `${req.body.deliveryAddress.street}, ${req.body.deliveryAddress.city}, ${req.body.deliveryAddress.state}`,
-        coordinates: req.body.deliveryAddress.coordinates || { lat: 0, lng: 0 },
-        instructions: req.body.deliveryNotes,
-      },
-      estimatedDeliveryAt: new Date(Date.now() + DELIVERY_SLA_HOURS * 60 * 60 * 1000),
-    }));
-    await auditAdminAction(req, 'order.create', 'order', order.id, { orderCode: order.orderCode });
-    const itemCount = lines.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+        deliveryLocation: {
+          address: `${req.body.deliveryAddress.street}, ${req.body.deliveryAddress.city}, ${req.body.deliveryAddress.state}`,
+          coordinates: req.body.deliveryAddress.coordinates || {
+            lat: 0,
+            lng: 0,
+          },
+          instructions: req.body.deliveryNotes,
+        },
+        estimatedDeliveryAt: new Date(
+          Date.now() + DELIVERY_SLA_HOURS * 60 * 60 * 1000,
+        ),
+      }),
+    );
+    await auditAdminAction(req, "order.create", "order", order.id, {
+      orderCode: order.orderCode,
+    });
+    const itemCount = lines.reduce(
+      (sum, item) => sum + Number(item.quantity || 0),
+      0,
+    );
     if (customer.email) {
       await this.email.sendOrderConfirmation({
         to: customer.email,
-        name: `${customer.firstName || ''} ${customer.lastName || ''}`.trim(),
+        name: `${customer.firstName || ""} ${customer.lastName || ""}`.trim(),
         orderCode: order.orderCode,
         amount: order.total,
         itemCount,
       });
     }
-    const hookOpsEmail = process.env.HOOK_OPS_EMAIL || process.env.BREVO_FROM_EMAIL;
+    const hookOpsEmail =
+      process.env.HOOK_OPS_EMAIL || process.env.BREVO_FROM_EMAIL;
     if (hookOpsEmail) {
       await this.email.sendHookNewOrder({
         to: hookOpsEmail,
-        customerName: customer.email || 'Customer',
+        customerName: customer.email || "Customer",
         orderCode: order.orderCode,
         amount: order.total,
         itemCount,
       });
     }
-    sendCreated(res, publicOrder(await this.enrichOrder(await orders.findOne({
-      where: { id: order.id },
-      relations: { user: true },
-    }))));
+    sendCreated(
+      res,
+      publicOrder(
+        await this.enrichOrder(
+          await orders.findOne({
+            where: { id: order.id },
+            relations: { user: true },
+          }),
+        ),
+      ),
+    );
   };
 
   private async statsData() {
     const orders = adminRepos.orders();
     const [revenueRow] = await orders.aggregate<{ total: number }>([
-      { $group: { _id: null, total: { $sum: '$total' } } },
+      { $group: { _id: null, total: { $sum: "$total" } } },
     ]);
-    const [total, pending, inTransit, delivered, cancelled, unpaid] = await Promise.all([
-      orders.count(),
-      orders.count({ where: { status: OrderStatus.PENDING } }),
-      orders.count({ where: { status: OrderStatus.SHIPPED } }),
-      orders.count({ where: { status: OrderStatus.DELIVERED } }),
-      orders.count({ where: { status: OrderStatus.CANCELLED } }),
-      orders.count({ where: { paymentStatus: PaymentStatus.UNPAID } }),
-    ]);
-    return { total, pending, inTransit, delivered, cancelled, unpaid, revenue: Number(revenueRow?.total || 0) };
+    const [total, pending, inTransit, delivered, cancelled, unpaid] =
+      await Promise.all([
+        orders.count(),
+        orders.count({ where: { status: OrderStatus.PENDING } }),
+        orders.count({ where: { status: OrderStatus.SHIPPED } }),
+        orders.count({ where: { status: OrderStatus.DELIVERED } }),
+        orders.count({ where: { status: OrderStatus.CANCELLED } }),
+        orders.count({ where: { paymentStatus: PaymentStatus.UNPAID } }),
+      ]);
+    return {
+      total,
+      pending,
+      inTransit,
+      delivered,
+      cancelled,
+      unpaid,
+      revenue: Number(revenueRow?.total || 0),
+    };
   }
 }

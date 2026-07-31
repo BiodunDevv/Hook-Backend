@@ -33,13 +33,13 @@ export class AuthController {
   };
 
   login = async (req: Request, res: Response) => {
-    sendSuccess(res, await this.auth.login(req.body.email, req.body.password, { guestId: req.body.guestId }));
+    sendSuccess(res, await this.auth.login(req.body.email, req.body.password, { guestId: req.guestSessionId }));
   };
 
   googleLogin = async (req: Request, res: Response) => {
     sendSuccess(res, await this.auth.loginWithGoogle({
       idToken: req.body.idToken,
-      guestId: req.body.guestId,
+      guestId: req.guestSessionId,
     }));
   };
 
@@ -75,7 +75,7 @@ export class AuthController {
   };
 
   startSignup = async (req: Request, res: Response) => {
-    sendCreated(res, await this.auth.startSignup(req.body.email, req.body.password, req.body.guestId), 'Verification code sent to your email');
+    sendCreated(res, await this.auth.startSignup(req.body.email, req.body.password, req.guestSessionId), 'Verification code sent to your email');
   };
 
   verifySignup = async (req: Request, res: Response) => {
@@ -87,7 +87,7 @@ export class AuthController {
   };
 
   completeSignup = async (req: Request, res: Response) => {
-    sendCreated(res, await this.auth.completeSignup(req.body.signupSessionToken, req.body), 'Account created successfully');
+    sendCreated(res, await this.auth.completeSignup(req.body.signupSessionToken, { ...req.body, guestId: req.guestSessionId }), 'Account created successfully');
   };
 
   completeProfile = async (req: Request, res: Response) => {

@@ -8,6 +8,7 @@ import { Logistics } from '@models/logistics/logistics.model';
 import { OrderItem } from '@models/orders/order-item.model';
 import { Order } from '@models/orders/order.model';
 import { Product } from '@models/products/product.model';
+import { Payment } from '@models/payments/payment.model';
 import { User } from '@models/users/user.model';
 import { CustomerOwner } from './cart.service';
 import { HttpError } from '@utils/http';
@@ -158,20 +159,23 @@ export class OrderService {
   }
 
   async listCustomerOrders(owner: CustomerOwner) {
-    return this.orders.find({
-      where: this.ownerWhere(owner),
-      relations: { items: true, payment: true, logistics: true },
-      order: { createdAt: 'DESC' },
-    });
+    const orders = await Order.find(this.ownerWhere(owner)).sort({ createdAt: -1 }).lean({ virtuals: true });
+    return Promise.all(orders.map(async (order) => ({
+      ...order,
+      items: await OrderItem.find({ orderId: order.id }).lean({ virtuals: true }),
+      payment: await Payment.findOne({ orderId: order.id }).lean({ virtuals: true }),
+    }))) as any;
   }
 
   async getCustomerOrder(owner: CustomerOwner, id: string) {
-    const order = await this.orders.findOne({
-      where: { id, ...this.ownerWhere(owner) },
-      relations: { items: true, payment: true, logistics: true },
-    });
+    const identifier = id.match(/^[a-f\d]{24}$/i) ? { $or: [{ _id: id }, { publicId: id }, { orderCode: id }] } : { $or: [{ publicId: id }, { orderCode: id }] };
+    const order = await Order.findOne({ ...identifier, ...this.ownerWhere(owner) }).lean({ virtuals: true });
     if (!order) throw new HttpError(404, 'Order not found');
-    return order;
+    return {
+      ...order,
+      items: await OrderItem.find({ orderId: order.id }).lean({ virtuals: true }),
+      payment: await Payment.findOne({ orderId: order.id }).lean({ virtuals: true }),
+    } as any;
   }
 
   async cancelCustomerOrder(owner: CustomerOwner, id: string, reason?: string) {

@@ -301,9 +301,7 @@ const schemas = {
     type: 'object',
     required: ['orderId'],
     properties: {
-      orderId: { type: 'string', format: 'uuid' },
-      gateway: { type: 'string', enum: ['opay'], example: 'opay' },
-      paymentMethod: { type: 'string', enum: ['card', 'bank_transfer', 'ussd', 'pos'], example: 'card' },
+      orderId: { type: 'string', example: 'ORD-2026-000001' },
     },
   },
   VendorRegistrationRequest: {
@@ -637,34 +635,28 @@ add('get', `${apiPrefix}/vendors/{id}`, op('Public Marketplace', 'Get vendor det
 add('get', `${apiPrefix}/booths`, op('Public Marketplace', 'List active booths', { public: true }));
 add('get', `${apiPrefix}/booths/nearby`, op('Public Marketplace', 'List nearby booths', { public: true, parameters: [query('lat', { type: 'number' }), query('lng', { type: 'number' })] }));
 add('get', `${apiPrefix}/booths/{id}`, op('Public Marketplace', 'Get booth detail', { public: true, parameters: [param('id', 'Booth id')] }));
-add('get', `${apiPrefix}/booths/scan/{publicId}`, op('Public Marketplace', 'Resolve a booth QR and return active approved inventory', { public: true, parameters: [param('publicId', 'Stable booth QR public id'), query('token')] }));
-add('post', `${apiPrefix}/booths/resolve`, op('Public Marketplace', 'Resolve a six-digit booth access code and return normalized inventory, represented categories, and a short-lived booth session', { public: true, requestBody: body('BoothCodeRequest') }));
-add('post', `${apiPrefix}/booths/scan-session`, op('Public Marketplace', 'Reopen the authorized booth catalog and roll its short-lived session', { public: true, requestBody: body('BoothSessionRequest') }));
-add('post', `${apiPrefix}/booths/scan-session/products/{productId}`, op('Public Marketplace', 'Get one approved product from the authorized booth inventory and roll its session', { public: true, parameters: [param('productId', 'Product id')], requestBody: body('BoothSessionRequest') }));
 add('get', `${apiPrefix}/search`, op('Public Marketplace', 'Search products and vendors', { public: true, parameters: [query('q')] }));
 add('get', `${apiPrefix}/search/suggestions`, op('Public Marketplace', 'Get search suggestions', { public: true, parameters: [query('q')] }));
 
 // Customer
-add('get', `${apiPrefix}/cart`, op('Customer Cart', 'Get the enriched booth-aware cart, stock availability, and booth-session validity', { parameters: [guestHeader(), boothSessionHeader(false)] }));
+add('get', `${apiPrefix}/cart`, op('Customer Cart', 'Get the backend-priced basket grouped by source State.', { parameters: [guestHeader()] }));
 add('post', `${apiPrefix}/cart/items`, op('Customer Cart', 'Add item to cart', { parameters: [guestHeader()], requestBody: body('CartItemRequest') }));
 add('patch', `${apiPrefix}/cart/items/{itemId}`, op('Customer Cart', 'Update cart item quantity', { parameters: [guestHeader(), param('itemId', 'Cart item id')], requestBody: body('QuantityRequest') }));
 add('delete', `${apiPrefix}/cart/items/{itemId}`, op('Customer Cart', 'Remove item from cart', { parameters: [guestHeader(), param('itemId', 'Cart item id')] }));
 add('delete', `${apiPrefix}/cart`, op('Customer Cart', 'Clear current cart', { parameters: [guestHeader()] }));
-add('post', `${apiPrefix}/checkout`, op('Customer Orders', 'Create order from current cart after revalidating booth inventory, session, variants, and stock', { parameters: [guestHeader()], requestBody: body('CheckoutRequest') }));
+add('delete', `${apiPrefix}/cart/states/{stateId}`, op('Customer Cart', 'Clear one State group from the current basket.', { parameters: [guestHeader(), param('stateId', 'STA public ID')] }));
+add('get', `${apiPrefix}/commerce/config`, op('Customer Commerce', 'Get active policy versions and checkout capabilities.'));
 add('get', `${apiPrefix}/orders`, op('Customer Orders', 'List current shopper or guest orders', { parameters: [guestHeader()] }));
 add('get', `${apiPrefix}/orders/{id}`, op('Customer Orders', 'Get current shopper or guest order detail', { parameters: [guestHeader(), param('id', 'Order id')] }));
 add('post', `${apiPrefix}/orders/{id}/cancel`, op('Customer Orders', 'Cancel current shopper or guest order', { parameters: [guestHeader(), param('id', 'Order id')], requestBody: { required: false, content: { 'application/json': { schema: { type: 'object', properties: { reason: { type: 'string' } } } } } } }));
 add('get', `${apiPrefix}/negotiations`, op('Negotiations', 'List current shopper or guest negotiations', { parameters: [guestHeader()] }));
 add('post', `${apiPrefix}/negotiations`, op('Negotiations', 'Start negotiation', { parameters: [guestHeader()], requestBody: body('NegotiationRequest') }));
 add('get', `${apiPrefix}/negotiations/{id}`, op('Negotiations', 'Get negotiation detail', { parameters: [guestHeader(), param('id', 'Negotiation id')] }));
-add('post', `${apiPrefix}/negotiations/{id}/counter`, op('Negotiations', 'Counter negotiation offer', { parameters: [guestHeader(), param('id', 'Negotiation id')], requestBody: body('NegotiationCounterRequest') }));
+add('post', `${apiPrefix}/negotiations/{id}/offers`, op('Negotiations', 'Submit a deterministic negotiation offer', { parameters: [guestHeader(), param('id', 'NEG public ID')], requestBody: body('NegotiationCounterRequest') }));
 add('post', `${apiPrefix}/negotiations/{id}/accept`, op('Negotiations', 'Accept negotiation counter', { parameters: [guestHeader(), param('id', 'Negotiation id')] }));
-add('post', `${apiPrefix}/payments/initialize`, op('Payments', 'Initialize OPay Hosted Cashier for Pay Now. Returns 503 until merchant credentials are configured.', { parameters: [guestHeader()], requestBody: body('PaymentInitializeRequest') }));
-add('post', `${apiPrefix}/payments/verify/{reference}`, op('Payments', 'Query signed OPay provider status; this endpoint never trusts customer-supplied success', { parameters: [guestHeader(), param('reference', 'Payment transaction reference')] }));
-add('get', `${apiPrefix}/payments/orders/{orderId}/status`, op('Payments', 'Get order payment status', { parameters: [guestHeader(), param('orderId', 'Order id')] }));
-add('get', `${apiPrefix}/payment-methods/capability`, op('Payments', 'Check whether OPay reusable tokenization is enabled', { parameters: [guestHeader()] }));
-add('get', `${apiPrefix}/payment-methods`, op('Payments', 'List masked saved payment methods', { parameters: [guestHeader()] }));
-add('delete', `${apiPrefix}/payment-methods/{id}`, op('Payments', 'Revoke a saved payment method token', { parameters: [param('id', 'Saved payment method id')] }));
+add('post', `${apiPrefix}/payments/initialize`, op('Payments', 'Initialize Paystack Hosted Checkout from an immutable Order amount.', { requestBody: body('PaymentInitializeRequest') }));
+add('get', `${apiPrefix}/payments/{orderId}`, op('Payments', 'Poll safe payment status; this endpoint never confirms payment.', { parameters: [param('orderId', 'ORD public ID')] }));
+add('get', `${apiPrefix}/payments/orders/{orderId}/status`, op('Payments', 'Compatibility alias for safe Order payment polling.', { parameters: [param('orderId', 'ORD public ID')] }));
 add('post', `${apiPrefix}/orders/{id}/refunds`, op('Customer Orders', 'Request a support-reviewed refund against captured funds', { parameters: [guestHeader(), param('id', 'Order id')] }));
 add('post', `${apiPrefix}/support/account-deletion`, op('Authentication', 'Open a support-managed deletion request with a cooling-off period'));
 add('post', `${apiPrefix}/analytics/checkout-events`, op('Payments', 'Record a non-sensitive checkout funnel event', { parameters: [guestHeader()] }));
@@ -697,7 +689,7 @@ add('post', `${apiPrefix}/logistics/driver/jobs/{id}/verify-otp`, op('Logistics'
 add('get', `${apiPrefix}/logistics/field-agent/profile`, op('Logistics', 'Get current field-agent profile'));
 add('post', `${apiPrefix}/upload/image`, op('Uploads', 'Upload one image', { requestBody: { required: true, content: { 'multipart/form-data': { schema: { type: 'object', required: ['image'], properties: { image: { type: 'string', format: 'binary' } } } } } } }));
 add('post', `${apiPrefix}/upload/images`, op('Uploads', 'Upload multiple images', { requestBody: { required: true, content: { 'multipart/form-data': { schema: { type: 'object', required: ['images'], properties: { images: { type: 'array', items: { type: 'string', format: 'binary' } } } } } } } }));
-add('post', `${apiPrefix}/webhooks/payments/{gateway}`, op('Webhooks', 'Receive authenticated OPay webhook; legacy providers are read-only', { public: true, parameters: [param('gateway', 'Payment gateway: opay')], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } } } }));
+add('post', `${apiPrefix}/webhooks/paystack`, op('Webhooks', 'Receive a raw, signed Paystack event with replay and amount verification.', { public: true, requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } } } }));
 
 // Admin
 add('post', `${apiPrefix}/admin/auth/login`, op('Admin Auth', 'Login admin or super-admin', { public: true, requestBody: body('LoginRequest') }));
@@ -843,6 +835,41 @@ add('get', `${apiPrefix}/negotiations/{id}`, op('AI Negotiation', 'Get an owned 
 add('post', `${apiPrefix}/negotiations/{id}/accept`, op('AI Negotiation', 'Accept the current deterministic counter and create one 30-minute verified-customer quote.', { parameters: [param('id', 'NEG public ID')] }));
 add('post', `${apiPrefix}/negotiations/{id}/close`, op('AI Negotiation', 'Close an owned active negotiation.', { parameters: [param('id', 'NEG public ID')] }));
 
+// Phase 4: State-grouped customer and Partner commerce with Paystack evidence.
+for (const method of ['get', 'post']) add(method, `${apiPrefix}/addresses`, op('Customer Commerce', `${method === 'get' ? 'List' : 'Create'} customer-owned delivery addresses.`));
+for (const method of ['patch', 'delete']) add(method, `${apiPrefix}/addresses/{id}`, op('Customer Commerce', `${method === 'patch' ? 'Update' : 'Archive'} an owned address.`, { parameters: [param('id', 'ADR public ID')] }));
+add('post', `${apiPrefix}/addresses/{id}/default`, op('Customer Commerce', 'Set the customer default address.', { parameters: [param('id', 'ADR public ID')] }));
+add('get', `${apiPrefix}/cart`, op('Customer Commerce', 'Get the backend-owned basket grouped by source State. Guests use X-Guest-Session.'));
+add('post', `${apiPrefix}/cart/items`, op('Customer Commerce', 'Add a backend-priced catalog line to the basket.'));
+add('patch', `${apiPrefix}/cart/items/{id}`, op('Customer Commerce', 'Update a basket line and invalidate incompatible quotes.', { parameters: [param('id', 'CTI public ID')] }));
+add('delete', `${apiPrefix}/cart/items/{id}`, op('Customer Commerce', 'Remove a basket line.', { parameters: [param('id', 'CTI public ID')] }));
+add('delete', `${apiPrefix}/cart/states/{stateId}`, op('Customer Commerce', 'Clear exactly one State group.', { parameters: [param('stateId', 'STA public ID')] }));
+add('post', `${apiPrefix}/checkout/states/{stateId}/preview`, op('Customer Commerce', 'Create a short-lived server-priced State checkout preview.', { parameters: [param('stateId', 'STA public ID')] }));
+add('post', `${apiPrefix}/checkout/states/{stateId}/confirm`, op('Customer Commerce', 'Confirm one State checkout. Requires Idempotency-Key.', { parameters: [param('stateId', 'STA public ID')] }));
+add('post', `${apiPrefix}/payments/initialize`, op('Payments', 'Initialize Paystack Hosted Checkout from an owned ORD public ID.'));
+add('get', `${apiPrefix}/payments/{id}`, op('Payments', 'Poll safe payment and Order status; this never confirms payment.', { parameters: [param('id', 'PAY or ORD public ID')] }));
+add('post', `${apiPrefix}/webhooks/paystack`, op('Payments', 'Raw-body Paystack webhook with HMAC evidence validation.', { public: true }));
+add('get', `${apiPrefix}/partner/customers/lookup`, op('Partner Commerce', 'Exact customer lookup in the authenticated Partner scope.'));
+add('post', `${apiPrefix}/partner/customers`, op('Partner Commerce', 'Create an attested assisted-ordering customer without verifying email.'));
+add('get', `${apiPrefix}/partner/commerce/config`, op('Partner Commerce', 'Get active policy versions required for assisted customer attestation.'));
+add('get', `${apiPrefix}/partner/customers/{customerId}/cart`, op('Partner Commerce', 'Get the assisted basket for an attested customer.', { parameters: [param('customerId', 'CUS public ID')] }));
+add('post', `${apiPrefix}/partner/customers/{customerId}/cart/items`, op('Partner Commerce', 'Add a backend-priced line to an assisted basket.', { parameters: [param('customerId', 'CUS public ID')] }));
+add('patch', `${apiPrefix}/partner/customers/{customerId}/cart/items/{itemId}`, op('Partner Commerce', 'Update an assisted basket line.', { parameters: [param('customerId', 'CUS public ID'), param('itemId', 'CTI public ID')] }));
+add('delete', `${apiPrefix}/partner/customers/{customerId}/cart/items/{itemId}`, op('Partner Commerce', 'Remove an assisted basket line.', { parameters: [param('customerId', 'CUS public ID'), param('itemId', 'CTI public ID')] }));
+add('post', `${apiPrefix}/partner/customers/{customerId}/checkout/states/{stateId}/preview`, op('Partner Commerce', 'Preview a prepaid assisted checkout for home delivery or initiating-Partner pickup.', { parameters: [param('customerId', 'CUS public ID'), param('stateId', 'STA public ID')] }));
+add('post', `${apiPrefix}/partner/customers/{customerId}/checkout/states/{stateId}/confirm`, op('Partner Commerce', 'Confirm an idempotent prepaid assisted Order.', { parameters: [param('customerId', 'CUS public ID'), param('stateId', 'STA public ID')] }));
+add('get', `${apiPrefix}/partner/orders`, op('Partner Commerce', 'List only Orders initiated by the authenticated Partner.'));
+add('post', `${apiPrefix}/partner/orders/{orderId}/payment-instructions`, op('Partner Commerce', 'Initialize customer Paystack payment instructions for an owned Partner Order.', { parameters: [param('orderId', 'ORD public ID')] }));
+add('get', `${apiPrefix}/admin/commerce/pod`, op('Commerce Operations', 'List State-scoped Pay-at-Handover verification queue.'));
+add('post', `${apiPrefix}/admin/commerce/pod/{id}/calls`, op('Commerce Operations', 'Record an audited confirmation call.', { parameters: [param('id', 'ORD public ID')] }));
+add('post', `${apiPrefix}/admin/commerce/pod/{id}/decision`, op('Commerce Operations', 'Approve, require prepayment, or cancel a POD Order.', { parameters: [param('id', 'ORD public ID')] }));
+add('post', `${apiPrefix}/admin/commerce/pod/{id}/override`, op('Commerce Operations', 'Super Admin one-time high-value POD override.', { parameters: [param('id', 'ORD public ID')] }));
+add('get', `${apiPrefix}/admin/commerce/payments`, op('Commerce Operations', 'List scoped canonical payments.'));
+add('get', `${apiPrefix}/admin/commerce/integration-exceptions`, op('Commerce Operations', 'List unresolved Paystack evidence exceptions.'));
+add('get', `${apiPrefix}/admin/commerce/outbox`, op('Commerce Operations', 'Inspect fulfilment-ready outbox events.'));
+add('get', `${apiPrefix}/admin/commerce/settings`, op('Commerce Operations', 'Get Super Admin commerce defaults.'));
+add('patch', `${apiPrefix}/admin/commerce/settings`, op('Commerce Operations', 'Update audited Super Admin commerce defaults.'));
+
 const obsoletePrefixes = [
   `${apiPrefix}/vendors`,
   `${apiPrefix}/booths`,
@@ -876,7 +903,7 @@ const spec = {
   info: {
     title: 'Hook API',
     version: '1.0.0',
-    description: 'Hook Phase 3 platform API. Catalog capture, Commercial Catalog, public catalog, and deterministic AI negotiation use public Hook IDs and the standard { success, data, meta } contract.',
+    description: 'Hook Phase 4 platform API. State-grouped commerce, Partner-assisted ordering, Paystack evidence, and Pay-at-Handover use public Hook IDs and the standard { success, data, meta } contract.',
   },
   servers: [
     { url: 'http://localhost:4000', description: 'Local development server' },
@@ -900,6 +927,10 @@ const spec = {
     { name: 'Commercial Catalog', description: 'Commercial content, pricing, negotiation rules, and publication lifecycle.' },
     { name: 'Public Catalog', description: 'Safe customer-facing published categories and products.' },
     { name: 'AI Negotiation', description: 'Deterministic three-offer negotiation; Azure OpenAI controls wording only.' },
+    { name: 'Customer Commerce', description: 'Customer addresses, State-grouped baskets, and backend-controlled checkout.' },
+    { name: 'Payments', description: 'Provider-neutral payment lifecycle with active Paystack Hosted Checkout.' },
+    { name: 'Partner Commerce', description: 'Self-scoped prepaid assisted ordering through Hook Partners.' },
+    { name: 'Commerce Operations', description: 'State-scoped POD, payment evidence, settings, and outbox operations.' },
   ]),
   paths,
   components: {

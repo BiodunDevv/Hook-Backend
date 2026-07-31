@@ -34,6 +34,9 @@ export interface User extends BaseEntity {
   passwordChangedAt?: Date;
   migratedFrom?: { model: string; sourceId: string; migratedAt: Date };
   originatingGuestId?: string;
+  podEligible?: boolean;
+  podDisabledReason?: string;
+  podEligibilityUpdatedAt?: Date;
 }
 
 const UserSchema = createSchema<User>({
@@ -69,6 +72,9 @@ const UserSchema = createSchema<User>({
   passwordChangedAt: { type: Date },
   migratedFrom: { type: Object },
   originatingGuestId: { type: String, sparse: true, index: true },
+  podEligible: { type: Boolean, default: true, index: true },
+  podDisabledReason: { type: String, maxlength: 500 },
+  podEligibilityUpdatedAt: { type: Date },
   deletedAt: { type: Date },
 });
 

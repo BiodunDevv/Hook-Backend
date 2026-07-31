@@ -17,6 +17,13 @@ export const PUBLIC_ID_PREFIXES = {
   variant: 'VAR',
   negotiation: 'NEG',
   quote: 'QTE',
+  address: 'ADR',
+  cart: 'CRT',
+  cartItem: 'CTI',
+  order: 'ORD',
+  orderItem: 'ORI',
+  payment: 'PAY',
+  event: 'EVT',
   audit: 'AUD',
 } as const;
 

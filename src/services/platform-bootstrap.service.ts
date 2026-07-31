@@ -27,6 +27,10 @@ const domains: Record<string, string[]> = {
   ai_negotiation: ['view'],
   settings: ['view', 'manage'],
   audit: ['view'],
+  'commerce.pod': ['review', 'override', 'eligibility'],
+  'commerce.payments': ['view', 'reconcile'],
+  'commerce.outbox': ['view'],
+  'commerce.settings': ['view', 'manage'],
 };
 
 export const PLATFORM_PERMISSION_KEYS = Object.entries(domains)
@@ -38,6 +42,7 @@ const operationsPermissions = PLATFORM_PERMISSION_KEYS.filter((key) =>
 );
 const orderRead = ['orders.view', 'customers.view', 'reports.view'];
 const orderOperations = [...orderRead, 'orders.create', 'orders.edit'];
+const commerceOperations = ['commerce.pod.review', 'commerce.pod.eligibility', 'commerce.outbox.view'];
 const catalogRead = [
   'products.view',
   'markets.view',
@@ -63,6 +68,8 @@ const supportPermissions = [
   'refunds.view',
   'deletions.view',
   'deletions.manage',
+  'commerce.pod.review',
+  'commerce.pod.eligibility',
 ];
 const financePermissions = [
   'orders.view',
@@ -73,12 +80,15 @@ const financePermissions = [
   'refunds.manage',
   'reports.view',
   'audit.view',
+  'commerce.payments.view',
+  'commerce.payments.reconcile',
+  'commerce.outbox.view',
 ];
 
 const roles = [
   { key: 'SUPER_ADMIN', name: 'Super Admin', scope: ScopeType.GLOBAL, permissions: PLATFORM_PERMISSION_KEYS },
-  { key: 'OPERATIONS_LEAD', name: 'Operations Lead', scope: ScopeType.MULTI_STATE, permissions: [...operationsPermissions, ...orderOperations, 'staff.view'] },
-  { key: 'STATE_OPERATIONS_MANAGER', name: 'State Operations Manager', scope: ScopeType.SINGLE_STATE, permissions: [...operationsPermissions, ...orderOperations] },
+  { key: 'OPERATIONS_LEAD', name: 'Operations Lead', scope: ScopeType.MULTI_STATE, permissions: [...operationsPermissions, ...orderOperations, ...commerceOperations, 'staff.view'] },
+  { key: 'STATE_OPERATIONS_MANAGER', name: 'State Operations Manager', scope: ScopeType.SINGLE_STATE, permissions: [...operationsPermissions, ...orderOperations, ...commerceOperations] },
   {
     key: 'COMMERCIAL_MANAGER',
     name: 'Commercial Manager',

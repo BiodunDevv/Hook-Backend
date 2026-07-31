@@ -1,0 +1,359 @@
+import { BaseEntity, createModel, createSchema } from "@models/base.model";
+
+export interface CustomerAddress extends BaseEntity {
+  publicId: string;
+  customerId: string;
+  label: string;
+  recipientName: string;
+  phone: string;
+  line1: string;
+  line2?: string;
+  landmark?: string;
+  stateId: string;
+  cityId: string;
+  zoneId: string;
+  postalCode?: string;
+  coordinates?: { latitude: number; longitude: number };
+  isDefault: boolean;
+  status: "active" | "archived";
+}
+
+export interface CheckoutPreview extends BaseEntity {
+  tokenHash: string;
+  publicTokenId: string;
+  actorType: "customer" | "partner";
+  actorId: string;
+  customerId: string;
+  partnerId?: string;
+  stateId: string;
+  cartId: string;
+  cartVersion: number;
+  channel: "SHOPPER_APP" | "PARTNER_ASSISTED";
+  deliveryMethod: "HOME_DELIVERY" | "PARTNER_PICKUP";
+  paymentMethod: "PREPAID" | "PAY_AT_HANDOVER";
+  addressId?: string;
+  addressSnapshot?: Record<string, unknown>;
+  pickupPartnerSnapshot?: Record<string, unknown>;
+  lines: Array<Record<string, unknown>>;
+  subtotalMinor: number;
+  deliveryFeeMinor: number;
+  totalMinor: number;
+  currency: string;
+  policyVersions: Record<string, string>;
+  podDecision: Record<string, unknown>;
+  expiresAt: Date;
+  consumedAt?: Date;
+  orderId?: string;
+}
+
+export interface CommerceSettings extends BaseEntity {
+  key: "commerce";
+  currency: string;
+  defaultDeliveryFeeMinor: number;
+  podEnabled: boolean;
+  defaultPodLimitMinor: number;
+  previewTtlMinutes: number;
+  activePolicyVersions: Record<string, string>;
+  updatedBy?: string;
+}
+
+export interface CommercePolicyVersion extends BaseEntity {
+  publicId: string;
+  type: "TERMS" | "PRIVACY" | "RETURNS";
+  version: string;
+  status: "draft" | "active" | "retired";
+  effectiveAt: Date;
+  contentUrl?: string;
+}
+
+export interface PaymentWebhookEvent extends BaseEntity {
+  provider: "paystack";
+  providerEventId: string;
+  payloadHash: string;
+  eventType: string;
+  reference?: string;
+  signatureVerified: boolean;
+  processingStatus: "received" | "processed" | "ignored" | "failed";
+  processedAt?: Date;
+  failureCode?: string;
+}
+
+export interface CommerceOutboxEvent extends BaseEntity {
+  publicId: string;
+  aggregateType: "order";
+  aggregateId: string;
+  eventType: "ORDER_APPROVED_FOR_FULFILMENT";
+  eventVersion: number;
+  payload: Record<string, unknown>;
+  status: "pending" | "processing" | "published" | "dead_letter";
+  attempts: number;
+  availableAt: Date;
+  processedAt?: Date;
+  lastError?: string;
+}
+
+export interface IntegrationException extends BaseEntity {
+  provider: "paystack";
+  type:
+    | "signature"
+    | "reference"
+    | "amount"
+    | "currency"
+    | "status"
+    | "network"
+    | "replay";
+  reference?: string;
+  paymentId?: string;
+  orderId?: string;
+  requestId?: string;
+  details: Record<string, unknown>;
+  status: "open" | "resolved" | "ignored";
+  resolvedBy?: string;
+  resolvedAt?: Date;
+}
+
+export interface PodCallRecord extends BaseEntity {
+  orderId: string;
+  outcome: "CONFIRMED" | "NO_ANSWER" | "DECLINED" | "INVALID_CONTACT";
+  notes?: string;
+  actorId: string;
+  calledAt: Date;
+}
+
+export interface PodOverride extends BaseEntity {
+  orderId: string;
+  reason: string;
+  actorId: string;
+  approvedAt: Date;
+  amountMinor: number;
+}
+
+const addressSchema = createSchema<CustomerAddress>({
+  publicId: { type: String, required: true, unique: true, index: true },
+  customerId: { type: String, required: true, index: true },
+  label: { type: String, required: true, maxlength: 60 },
+  recipientName: { type: String, required: true, maxlength: 120 },
+  phone: { type: String, required: true, maxlength: 30 },
+  line1: { type: String, required: true, maxlength: 240 },
+  line2: { type: String, maxlength: 240 },
+  landmark: { type: String, maxlength: 240 },
+  stateId: { type: String, required: true, index: true },
+  cityId: { type: String, required: true, index: true },
+  zoneId: { type: String, required: true, index: true },
+  postalCode: { type: String, maxlength: 20 },
+  coordinates: { type: Object },
+  isDefault: { type: Boolean, default: false, index: true },
+  status: {
+    type: String,
+    enum: ["active", "archived"],
+    default: "active",
+    index: true,
+  },
+  deletedAt: { type: Date },
+});
+addressSchema.index({ customerId: 1, status: 1, isDefault: -1, createdAt: -1 });
+
+const previewSchema = createSchema<CheckoutPreview>({
+  tokenHash: { type: String, required: true, unique: true, select: false },
+  publicTokenId: { type: String, required: true, unique: true, index: true },
+  actorType: { type: String, enum: ["customer", "partner"], required: true },
+  actorId: { type: String, required: true, index: true },
+  customerId: { type: String, required: true, index: true },
+  partnerId: { type: String, index: true },
+  stateId: { type: String, required: true, index: true },
+  cartId: { type: String, required: true, index: true },
+  cartVersion: { type: Number, required: true },
+  channel: {
+    type: String,
+    enum: ["SHOPPER_APP", "PARTNER_ASSISTED"],
+    required: true,
+  },
+  deliveryMethod: {
+    type: String,
+    enum: ["HOME_DELIVERY", "PARTNER_PICKUP"],
+    required: true,
+  },
+  paymentMethod: {
+    type: String,
+    enum: ["PREPAID", "PAY_AT_HANDOVER"],
+    required: true,
+  },
+  addressId: { type: String },
+  addressSnapshot: { type: Object },
+  pickupPartnerSnapshot: { type: Object },
+  lines: { type: [Object], required: true },
+  subtotalMinor: { type: Number, required: true, min: 0 },
+  deliveryFeeMinor: { type: Number, required: true, min: 0 },
+  totalMinor: { type: Number, required: true, min: 0 },
+  currency: { type: String, default: "NGN" },
+  policyVersions: { type: Object, required: true },
+  podDecision: { type: Object, default: {} },
+  expiresAt: { type: Date, required: true, index: true },
+  consumedAt: { type: Date },
+  orderId: { type: String, index: true },
+  deletedAt: { type: Date },
+});
+previewSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 86400 });
+
+const settingsSchema = createSchema<CommerceSettings>({
+  key: { type: String, enum: ["commerce"], unique: true, default: "commerce" },
+  currency: { type: String, default: "NGN" },
+  defaultDeliveryFeeMinor: { type: Number, default: 300000, min: 0 },
+  podEnabled: { type: Boolean, default: false },
+  defaultPodLimitMinor: { type: Number, default: 10000000, min: 0 },
+  previewTtlMinutes: { type: Number, default: 10, min: 2, max: 30 },
+  activePolicyVersions: { type: Object, default: {} },
+  updatedBy: { type: String },
+  deletedAt: { type: Date },
+});
+const policySchema = createSchema<CommercePolicyVersion>({
+  publicId: { type: String, required: true, unique: true },
+  type: {
+    type: String,
+    enum: ["TERMS", "PRIVACY", "RETURNS"],
+    required: true,
+    index: true,
+  },
+  version: { type: String, required: true },
+  status: {
+    type: String,
+    enum: ["draft", "active", "retired"],
+    default: "draft",
+    index: true,
+  },
+  effectiveAt: { type: Date, required: true },
+  contentUrl: { type: String },
+  deletedAt: { type: Date },
+});
+policySchema.index({ type: 1, version: 1 }, { unique: true });
+const webhookSchema = createSchema<PaymentWebhookEvent>({
+  provider: { type: String, enum: ["paystack"], required: true },
+  providerEventId: { type: String, required: true },
+  payloadHash: { type: String, required: true },
+  eventType: { type: String, required: true },
+  reference: { type: String, index: true },
+  signatureVerified: { type: Boolean, required: true },
+  processingStatus: {
+    type: String,
+    enum: ["received", "processed", "ignored", "failed"],
+    default: "received",
+  },
+  processedAt: { type: Date },
+  failureCode: { type: String },
+  deletedAt: { type: Date },
+});
+webhookSchema.index({ provider: 1, providerEventId: 1 }, { unique: true });
+const outboxSchema = createSchema<CommerceOutboxEvent>({
+  publicId: { type: String, required: true, unique: true, index: true },
+  aggregateType: { type: String, enum: ["order"], default: "order" },
+  aggregateId: { type: String, required: true, index: true },
+  eventType: {
+    type: String,
+    enum: ["ORDER_APPROVED_FOR_FULFILMENT"],
+    required: true,
+  },
+  eventVersion: { type: Number, default: 1 },
+  payload: { type: Object, required: true },
+  status: {
+    type: String,
+    enum: ["pending", "processing", "published", "dead_letter"],
+    default: "pending",
+    index: true,
+  },
+  attempts: { type: Number, default: 0 },
+  availableAt: { type: Date, default: Date.now, index: true },
+  processedAt: { type: Date },
+  lastError: { type: String, maxlength: 1000 },
+  deletedAt: { type: Date },
+});
+outboxSchema.index(
+  { aggregateId: 1, eventType: 1, eventVersion: 1 },
+  { unique: true },
+);
+const exceptionSchema = createSchema<IntegrationException>({
+  provider: { type: String, enum: ["paystack"], default: "paystack" },
+  type: {
+    type: String,
+    enum: [
+      "signature",
+      "reference",
+      "amount",
+      "currency",
+      "status",
+      "network",
+      "replay",
+    ],
+    required: true,
+  },
+  reference: { type: String, index: true },
+  paymentId: { type: String, index: true },
+  orderId: { type: String, index: true },
+  requestId: { type: String },
+  details: { type: Object, default: {} },
+  status: {
+    type: String,
+    enum: ["open", "resolved", "ignored"],
+    default: "open",
+    index: true,
+  },
+  resolvedBy: { type: String },
+  resolvedAt: { type: Date },
+  deletedAt: { type: Date },
+});
+const podCallSchema = createSchema<PodCallRecord>({
+  orderId: { type: String, required: true, index: true },
+  outcome: {
+    type: String,
+    enum: ["CONFIRMED", "NO_ANSWER", "DECLINED", "INVALID_CONTACT"],
+    required: true,
+  },
+  notes: { type: String, maxlength: 1000 },
+  actorId: { type: String, required: true },
+  calledAt: { type: Date, default: Date.now },
+  deletedAt: { type: Date },
+});
+const podOverrideSchema = createSchema<PodOverride>({
+  orderId: { type: String, required: true, unique: true, index: true },
+  reason: { type: String, required: true, maxlength: 1000 },
+  actorId: { type: String, required: true },
+  approvedAt: { type: Date, default: Date.now },
+  amountMinor: { type: Number, required: true, min: 0 },
+  deletedAt: { type: Date },
+});
+
+export const CustomerAddress = createModel<CustomerAddress>(
+  "CustomerAddress",
+  addressSchema,
+);
+export const CheckoutPreview = createModel<CheckoutPreview>(
+  "CheckoutPreview",
+  previewSchema,
+);
+export const CommerceSettings = createModel<CommerceSettings>(
+  "CommerceSettings",
+  settingsSchema,
+);
+export const CommercePolicyVersion = createModel<CommercePolicyVersion>(
+  "CommercePolicyVersion",
+  policySchema,
+);
+export const PaymentWebhookEvent = createModel<PaymentWebhookEvent>(
+  "PaymentWebhookEvent",
+  webhookSchema,
+);
+export const CommerceOutboxEvent = createModel<CommerceOutboxEvent>(
+  "CommerceOutboxEvent",
+  outboxSchema,
+);
+export const IntegrationException = createModel<IntegrationException>(
+  "IntegrationException",
+  exceptionSchema,
+);
+export const PodCallRecord = createModel<PodCallRecord>(
+  "PodCallRecord",
+  podCallSchema,
+);
+export const PodOverride = createModel<PodOverride>(
+  "PodOverride",
+  podOverrideSchema,
+);

@@ -2,7 +2,7 @@ export function publicProduct<T extends Record<string, any> | null | undefined>(
   if (!product) return product;
   return {
     ...product,
-    id: product.hookId || product.publicId || product.id,
+    id: product.publicId || product.hookId || product.id,
   };
 }
 
@@ -10,7 +10,7 @@ export function publicOrder<T extends Record<string, any> | null | undefined>(or
   if (!order) return order;
   return {
     ...order,
-    id: order.orderCode || order.publicId || order.id,
+    id: order.publicId || order.orderCode || order.id,
     items: Array.isArray(order.items)
       ? order.items.map((item: Record<string, any>) => ({
           ...item,

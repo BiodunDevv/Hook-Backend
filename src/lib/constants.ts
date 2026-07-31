@@ -59,6 +59,9 @@ export type PlatformRoleKey = (typeof PLATFORM_ROLE_KEYS)[number];
 // Order lifecycle
 // ============================================================
 export enum OrderStatus {
+  VERIFICATION_PENDING = 'verification_pending',
+  OPERATIONS_REVIEW = 'operations_review',
+  APPROVED_FOR_FULFILMENT = 'approved_for_fulfilment',
   AWAITING_PAYMENT = 'awaiting_payment',
   PENDING = 'pending',
   CONFIRMED = 'confirmed',
@@ -67,6 +70,39 @@ export enum OrderStatus {
   CANCELLED = 'cancelled',
   RETURNED = 'returned',
   REFUNDED = 'refunded',
+}
+
+export enum CommercePaymentMethod {
+  PREPAID = 'PREPAID',
+  PAY_AT_HANDOVER = 'PAY_AT_HANDOVER',
+}
+
+export enum CommercePaymentStatus {
+  PENDING = 'PENDING',
+  PROCESSING = 'PROCESSING',
+  CONFIRMED = 'CONFIRMED',
+  FAILED = 'FAILED',
+  DUE_AT_HANDOVER = 'DUE_AT_HANDOVER',
+  REFUND_PENDING = 'REFUND_PENDING',
+  REFUNDED = 'REFUNDED',
+}
+
+export enum CommerceOrderStatus {
+  AWAITING_PAYMENT = 'AWAITING_PAYMENT',
+  VERIFICATION_PENDING = 'VERIFICATION_PENDING',
+  OPERATIONS_REVIEW = 'OPERATIONS_REVIEW',
+  APPROVED_FOR_FULFILMENT = 'APPROVED_FOR_FULFILMENT',
+  CANCELLED = 'CANCELLED',
+}
+
+export enum CommerceChannel {
+  SHOPPER_APP = 'SHOPPER_APP',
+  PARTNER_ASSISTED = 'PARTNER_ASSISTED',
+}
+
+export enum DeliveryMethod {
+  HOME_DELIVERY = 'HOME_DELIVERY',
+  PARTNER_PICKUP = 'PARTNER_PICKUP',
 }
 
 export enum PaymentMode {
@@ -200,5 +236,7 @@ export const VENDOR_COMMISSION_PERCENTAGE = 15;
 export const ESCROW_HOLD_HOURS = 24;
 export const DELIVERY_SLA_HOURS = 24;
 export const DEFAULT_DELIVERY_FEE = 3000;
+export const DEFAULT_DELIVERY_FEE_MINOR = 300000;
+export const DEFAULT_POD_LIMIT_MINOR = 10000000;
 export const VENDOR_CONFIRMATION_HOURS = 2;
 export const GIFT_EXPIRY_DAYS = 7;

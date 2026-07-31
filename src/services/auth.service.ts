@@ -15,6 +15,11 @@ import { HttpError } from '@utils/http';
 import { verifyGoogleIdToken } from './google-auth.service';
 import { issueAccountSession, revokeAccountSession, revokeAccountSessions, rotateAccountSession } from './account-session.service';
 import { nextPublicId } from './public-id.service';
+import { CartItem } from '@models/cart/cart-item.model';
+import { Negotiation } from '@models/negotiations/negotiation.model';
+import { NegotiatedQuote } from '@models/catalog/catalog.model';
+import { NegotiatedQuoteStatus, NegotiationStatus } from '@lib/constants';
+import { GuestSession } from '@models/platform/session.model';
 
 function hashToken(token: string) {
   return createHash('sha256').update(token).digest('hex');
@@ -504,10 +509,34 @@ export class AuthService {
 
   private async mergeGuestIntoUser(guestId: string | undefined, userId: string) {
     if (!guestId) return;
-    await Promise.all([
-      this.carts?.update({ guestId, isCheckedOut: false } as any, { userId, guestId: undefined } as any),
-      this.orders?.update({ guestId } as any, { userId, guestId: undefined } as any),
-    ]);
+    const guestCart = await Cart.findOne({ guestSessionId: guestId, status: 'active', isCheckedOut: false });
+    const customerCart = await Cart.findOne({ customerId: userId, status: 'active', isCheckedOut: false });
+    if (guestCart && !customerCart) {
+      guestCart.ownerType = 'customer'; guestCart.customerId = userId; guestCart.guestSessionId = undefined; guestCart.version = Number(guestCart.version || 1) + 1; await guestCart.save();
+    } else if (guestCart && customerCart) {
+      const guestItems = await CartItem.find({ cartId: guestCart.id });
+      for (const item of guestItems) {
+        const existing = await CartItem.findOne({ cartId: customerCart.id, productId: item.productId, variantKey: item.variantKey });
+        if (existing) {
+          existing.quantity = Math.min(99, existing.quantity + item.quantity);
+          existing.quoteId = undefined; existing.quoteVersion = undefined;
+          existing.totalPriceMinor = existing.quantity * Number(existing.unitPriceMinor || 0);
+          existing.totalPrice = Number(existing.totalPriceMinor) / 100; await existing.save(); await item.deleteOne();
+        } else { item.cartId = customerCart.id; await item.save(); }
+      }
+      guestCart.status = 'converted'; guestCart.isCheckedOut = true; await guestCart.save();
+      customerCart.version = Number(customerCart.version || 1) + 1; await customerCart.save();
+    }
+    const negotiations = await Negotiation.find({ guestSessionId: guestId, status: { $in: [NegotiationStatus.ACTIVE, NegotiationStatus.AGREED, NegotiationStatus.ACCEPTED] } });
+    for (const negotiation of negotiations) {
+      negotiation.customerId = userId; negotiation.guestSessionId = undefined;
+      if ([NegotiationStatus.AGREED, NegotiationStatus.ACCEPTED].includes(negotiation.status) && negotiation.agreedPriceMinor && negotiation.variantId && negotiation.expiresAt && negotiation.expiresAt > new Date() && !negotiation.quoteId) {
+        const quote = await NegotiatedQuote.create({ publicId: await nextPublicId('quote'), negotiationId: negotiation.id, customerId: userId, productId: negotiation.productId, variantId: negotiation.variantId, quantity: negotiation.quantity, currency: negotiation.currency, originalPriceMinor: negotiation.rulesSnapshot?.sellingPriceMinor || negotiation.agreedPriceMinor, agreedPriceMinor: negotiation.agreedPriceMinor, expiresAt: negotiation.expiresAt, status: NegotiatedQuoteStatus.ACTIVE, version: 1 });
+        negotiation.quoteId = quote.id;
+      }
+      await negotiation.save();
+    }
+    await GuestSession.updateOne({ _id: guestId, revokedAt: null }, { $set: { convertedAccountId: userId, revokedAt: new Date() } });
   }
 
   private async findValidOtp(email: string, code: string, type: Otp['type']) {

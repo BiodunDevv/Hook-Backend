@@ -90,6 +90,11 @@ export interface NegotiatedQuote extends BaseEntity {
   agreedPriceMinor: number;
   expiresAt: Date;
   status: NegotiatedQuoteStatus;
+  version?: number;
+  reservedByCheckoutPreviewId?: string;
+  reservedUntil?: Date;
+  usedByOrderId?: string;
+  usedAt?: Date;
 }
 
 const submissionSchema = createSchema<ProductSubmission>({
@@ -182,6 +187,11 @@ const quoteSchema = createSchema<NegotiatedQuote>({
   agreedPriceMinor: { type: Number, required: true, min: 1 },
   expiresAt: { type: Date, required: true, index: true },
   status: { type: String, enum: Object.values(NegotiatedQuoteStatus), default: NegotiatedQuoteStatus.ACTIVE, index: true },
+  version: { type: Number, default: 1, min: 1 },
+  reservedByCheckoutPreviewId: { type: String, index: true, sparse: true },
+  reservedUntil: { type: Date, index: true },
+  usedByOrderId: { type: String, index: true, sparse: true },
+  usedAt: { type: Date },
   deletedAt: { type: Date },
 });
 quoteSchema.index({ customerId: 1, status: 1, expiresAt: 1 });

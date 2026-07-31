@@ -44,6 +44,10 @@ Automated tests, fixtures, snapshots, coverage, and test frameworks were intenti
 | Phase 2 migration | Passed and verified |
 | Phase 3 migration | Passed after Atlas-compatible partial-index correction |
 | Phase 3 verification | Passed; no invalid/missing/duplicate catalog records |
+| Live public catalog HTTP smoke | Passed: home, categories, products, search |
+| Live Admin Phase 3 HTTP smoke | Passed: login, review, Commercial, negotiation monitoring |
+| Live Runner Phase 3 HTTP smoke | Passed: login, dashboard, Markets, submissions |
+| Public catalog privacy inspection | Passed: no base price or negotiation-floor rules exposed |
 
 ## Migration Result
 
@@ -55,7 +59,7 @@ Final counts: 21 migrated products, 5 public categories, 8 migrated negotiations
 
 - Legacy Product Naira fields, public image URLs, statuses, and Vendor references remain until verified migration.
 - Cloudinary signed uploads require valid `CLOUDINARY_API_KEY` and `CLOUDINARY_API_SECRET`.
-- Azure wording requires valid Azure OpenAI endpoint, deployment, API version, model, and key; deterministic fallback works without it.
+- Azure wording configuration is present (endpoint, deployment, API version, and key); the model name is optional and falls back to the deployment name.
 - The local DNS resolver intermittently fails Atlas SRV queries; the successful reset used the same credentials through an in-memory direct replica-set URI. No credentials were written or logged.
 - The dependency advisory and 327 warning-level lint findings require scheduled remediation.
 - Phase 4 must integrate quotes and public catalog into basket/order creation without trusting client prices.

@@ -49,7 +49,8 @@ Automated tests, fixtures, snapshots, coverage, and test frameworks were intenti
 | Live Admin Phase 3 HTTP smoke | Passed: login, review, Commercial, negotiation monitoring |
 | Live Runner Phase 3 HTTP smoke | Passed: login, dashboard, Markets, submissions |
 | Public catalog privacy inspection | Passed: no base price or negotiation-floor rules exposed |
-| Signed-media readiness HTTP smoke | Passed: authenticated Runner receives provider capability without credentials; current environment reports unavailable |
+| Signed-media readiness HTTP smoke | Passed: authenticated Runner receives available provider capability without credentials |
+| Signed Cloudinary upload/finalize smoke | Passed: authenticated upload, provider metadata verification, signed delivery URL, and test-artifact cleanup |
 | Admin production build after media-readiness UI | Passed; 50 static/dynamic pages generated |
 
 ## Migration Result
@@ -61,7 +62,7 @@ Final counts: 21 migrated products, 5 public categories, 8 migrated negotiations
 ## Remaining Compatibility And Blockers
 
 - Legacy Product Naira fields, public image URLs, statuses, and Vendor references remain until verified migration.
-- Cloudinary signed uploads require valid `CLOUDINARY_API_KEY` and `CLOUDINARY_API_SECRET`. The Runner portal now preserves draft editing and clearly disables only upload actions until these credentials are supplied.
+- Cloudinary signed uploads are configured and passed a live authenticated upload/finalize smoke test. The Runner portal still preserves draft editing and clearly disables only upload actions during future provider outages.
 - Azure wording configuration is present (endpoint, deployment, API version, and key); the model name is optional and falls back to the deployment name.
 - The local DNS resolver intermittently fails Atlas SRV queries; the successful reset used the same credentials through an in-memory direct replica-set URI. No credentials were written or logged.
 - The dependency advisory and 327 warning-level lint findings require scheduled remediation.
@@ -76,4 +77,4 @@ All work is on `development`. No push, merge, force update, or default-branch mo
 - Shopper alignment: `07fff18` (`refactor: align shopper with public catalog contracts`)
 - Phase 3 architecture/report documents: `8852cd5`.
 
-NOT READY FOR PHASE 4
+READY FOR PHASE 4

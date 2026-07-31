@@ -167,7 +167,7 @@ const variantSchema = createSchema<ProductVariant>({
 });
 variantSchema.index(
   { productId: 1, size: 1, colour: 1, attributes: 1 },
-  { unique: true, partialFilterExpression: { deletedAt: { $exists: false } } },
+  { unique: true, partialFilterExpression: { deletedAt: null } },
 );
 
 const quoteSchema = createSchema<NegotiatedQuote>({

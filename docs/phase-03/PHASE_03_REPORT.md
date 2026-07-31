@@ -40,30 +40,33 @@ Automated tests, fixtures, snapshots, coverage, and test frameworks were intenti
 | Shopper `npm run lint` | Passed |
 | Shopper `npx tsc --noEmit` | Passed |
 | Shopper `npx expo-doctor` | Passed 18/18 checks |
-| `command -v mongodump mongorestore` | Both unavailable |
+| Authorized full reset seed | Passed; database dropped and recreated |
+| Phase 2 migration | Passed and verified |
+| Phase 3 migration | Passed after Atlas-compatible partial-index correction |
+| Phase 3 verification | Passed; no invalid/missing/duplicate catalog records |
 
 ## Migration Result
 
-No persisted data was modified.
+At the user's explicit request, the configured QA database was fully reset on July 31, 2026. The base seed recreated operational QA data, Phase 2 migrated identity/RBAC/geography records, Phase 3 migrated catalog and negotiations, and the Phase 3 fixture stage created Markets, assignments, workflow submissions, and published catalog records.
 
-Read-only analysis of database `hook` found 21 products, 5 categories, and 8 negotiations awaiting migration. The migration cannot be executed safely until a timestamped `mongodump` is created and a `mongorestore` verification succeeds. The execute script also requires `PHASE_03_MIGRATION_CONFIRMED=true`.
+Final counts: 21 migrated products, 5 public categories, 8 migrated negotiations, 6 submissions, 255 variants, 14 media assets, 3 Markets, 3 active Runner assignments, and 12 published products. Verification returned zero invalid products, zero products without variants, and zero duplicate product public IDs.
 
 ## Remaining Compatibility And Blockers
 
 - Legacy Product Naira fields, public image URLs, statuses, and Vendor references remain until verified migration.
 - Cloudinary signed uploads require valid `CLOUDINARY_API_KEY` and `CLOUDINARY_API_SECRET`.
 - Azure wording requires valid Azure OpenAI endpoint, deployment, API version, model, and key; deterministic fallback works without it.
-- Live migration and verification are blocked by missing MongoDB Database Tools.
+- The local DNS resolver intermittently fails Atlas SRV queries; the successful reset used the same credentials through an in-memory direct replica-set URI. No credentials were written or logged.
 - The dependency advisory and 327 warning-level lint findings require scheduled remediation.
 - Phase 4 must integrate quotes and public catalog into basket/order creation without trusting client prices.
 
 ## Repository State
 
-All work is on `development`. No push, merge, force update, default-branch modification, destructive seed, or live migration was performed.
+All work is on `development`. No push, merge, force update, or default-branch modification was performed. One destructive reset of the configured QA database was explicitly requested and completed on July 31, 2026, followed immediately by Phase 2/3 migration and verification.
 
 - Backend implementation: `9839850` (`feat: add phase three catalog and negotiation foundation`)
 - Admin/Runner implementation: `fdc360d` (`feat: add runner catalog and commercial workspaces`)
 - Shopper alignment: `07fff18` (`refactor: align shopper with public catalog contracts`)
-- Phase 3 architecture/report documents: committed separately after this report was finalized.
+- Phase 3 architecture/report documents: `8852cd5`.
 
 NOT READY FOR PHASE 4

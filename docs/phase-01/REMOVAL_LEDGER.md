@@ -1,5 +1,12 @@
 # Phase 1 Removal Ledger
 
+## Phase 4 continuation
+
+- Active Booth, Vendor, gift, and OPay checkout ownership was replaced by customer, guest-session, and Partner-assisted State commerce.
+- Client payment verification and generic Admin Order creation/status mutation are no longer active registered routes.
+- Historical Booth, Vendor, gift, OPay, fulfilment, and major-unit records remain compatibility data pending retention approval.
+- Physical sourcing, fulfilment, handover collection, returns, and refunds remain deferred to Phase 5.
+
 ## Phase 3 continuation
 
 - Legacy customer negotiation handlers were removed after the Phase 3 negotiation service and routes became the only active consumer path.

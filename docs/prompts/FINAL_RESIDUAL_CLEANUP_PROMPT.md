@@ -1,5 +1,7 @@
 # Final Residual Cleanup Prompt
 
+Phase 4 residual checks must include legacy Booth/Vendor/gift/OPay checkout code, generic Admin Order mutations, major-unit money fields, legacy Order statuses, inactive payment adapters, migration markers, Paystack exception records, and outbox dead letters. Remove compatibility fields only after production retention and Phase 5 reference evidence permit it.
+
 Before removing Phase 3 compatibility fields, verify the Phase 3 migration, all Phase 4 consumers, historical Order reads, and rollback evidence. Specifically inspect legacy Product Naira fields, public image arrays, Vendor references, old negotiation transcript fields, deprecated statuses, and legacy routes. Remove only after repository-wide consumer proof and database verification.
 
 After Phase 2 migration and data verification:

@@ -5,18 +5,42 @@ import { HttpError } from '@utils/http';
 
 const supportedFormats = new Set(['jpg', 'jpeg', 'png', 'webp', 'avif']);
 
+function readiness() {
+  const enabled = process.env.CATALOG_SIGNED_MEDIA_ENABLED !== 'false';
+  const required = ['CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET'] as const;
+  const missingConfiguration = required.filter((name) => !process.env[name]);
+
+  return {
+    provider: 'cloudinary' as const,
+    mode: 'signed' as const,
+    enabled,
+    configured: missingConfiguration.length === 0,
+    available: enabled && missingConfiguration.length === 0,
+    maxBytes: Number(process.env.CATALOG_MEDIA_MAX_BYTES || 10 * 1024 * 1024),
+    supportedFormats: [...supportedFormats],
+  };
+}
+
 function configure() {
+  const state = readiness();
+  if (!state.enabled) {
+    throw new HttpError(503, 'Secure catalog media uploads are currently disabled', undefined, 'MEDIA_PROVIDER_UNAVAILABLE');
+  }
   const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
   const apiKey = process.env.CLOUDINARY_API_KEY;
   const apiSecret = process.env.CLOUDINARY_API_SECRET;
   if (!cloudName || !apiKey || !apiSecret) {
-    throw new HttpError(503, 'Secure catalog media upload is not configured', undefined, 'INTERNAL_ERROR');
+    throw new HttpError(503, 'Secure catalog media uploads are temporarily unavailable', undefined, 'MEDIA_PROVIDER_UNAVAILABLE');
   }
   cloudinary.config({ cloud_name: cloudName, api_key: apiKey, api_secret: apiSecret, secure: true });
   return { cloudName, apiKey, apiSecret };
 }
 
 export class CatalogMediaService {
+  readiness() {
+    return readiness();
+  }
+
   createIntent(input: {
     accountId: string;
     ownerType: 'submission' | 'product';

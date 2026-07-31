@@ -9,6 +9,7 @@
 - Deterministic three-offer Pricing Engine, evolved negotiation sessions, 30-minute immutable quotes, idempotency, expiry, safe Admin monitoring, and Azure OpenAI wording fallback.
 - `CAT`, `SUB`, `PRD`, `VAR`, `NEG`, and `QTE` public-ID domains.
 - Signed Cloudinary upload intent/finalize architecture with ownership and metadata validation.
+- Authenticated signed-media readiness contract and graceful Runner draft state when the provider is unavailable; no unsigned fallback is permitted.
 - Idempotent Phase 3 analyze, dry-run, execute, verify, and rollback tooling.
 - Admin and Shopper consumers aligned to the new contracts.
 
@@ -31,7 +32,7 @@ Automated tests, fixtures, snapshots, coverage, and test frameworks were intenti
 | Backend `npx tsc --noEmit` | Passed |
 | Backend `npm run build` | Passed |
 | Backend `npx eslint "src/**/*.ts"` | Passed with 0 errors and 327 warning-level legacy typing findings |
-| Backend `npm run docs:swagger` | Passed; 167 paths |
+| Backend `npm run docs:swagger` | Passed; 168 paths |
 | Backend `npm run migrate:phase3:analyze` | Passed; read-only |
 | Backend `npm run migrate:phase3:dry-run` | Passed; read-only |
 | Admin `npm run lint` | Passed after replacing the sole raw-image warning |
@@ -48,6 +49,8 @@ Automated tests, fixtures, snapshots, coverage, and test frameworks were intenti
 | Live Admin Phase 3 HTTP smoke | Passed: login, review, Commercial, negotiation monitoring |
 | Live Runner Phase 3 HTTP smoke | Passed: login, dashboard, Markets, submissions |
 | Public catalog privacy inspection | Passed: no base price or negotiation-floor rules exposed |
+| Signed-media readiness HTTP smoke | Passed: authenticated Runner receives provider capability without credentials; current environment reports unavailable |
+| Admin production build after media-readiness UI | Passed; 50 static/dynamic pages generated |
 
 ## Migration Result
 
@@ -58,7 +61,7 @@ Final counts: 21 migrated products, 5 public categories, 8 migrated negotiations
 ## Remaining Compatibility And Blockers
 
 - Legacy Product Naira fields, public image URLs, statuses, and Vendor references remain until verified migration.
-- Cloudinary signed uploads require valid `CLOUDINARY_API_KEY` and `CLOUDINARY_API_SECRET`.
+- Cloudinary signed uploads require valid `CLOUDINARY_API_KEY` and `CLOUDINARY_API_SECRET`. The Runner portal now preserves draft editing and clearly disables only upload actions until these credentials are supplied.
 - Azure wording configuration is present (endpoint, deployment, API version, and key); the model name is optional and falls back to the deployment name.
 - The local DNS resolver intermittently fails Atlas SRV queries; the successful reset used the same credentials through an in-memory direct replica-set URI. No credentials were written or logged.
 - The dependency advisory and 327 warning-level lint findings require scheduled remediation.

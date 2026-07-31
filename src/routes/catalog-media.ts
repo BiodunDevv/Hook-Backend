@@ -10,6 +10,7 @@ export function createCatalogMediaRouter() {
   const router = Router();
   const controller = new CatalogMediaController();
   router.use(requireAuth, requireAccountType(AccountType.RUNNER, AccountType.STAFF));
+  router.get('/readiness', asyncHandler(controller.readiness));
   router.post('/upload-intents', validateBody(uploadIntentSchema), asyncHandler(controller.intent));
   router.post('/finalize', validateBody(uploadFinalizeSchema), asyncHandler(controller.finalize));
   return router;

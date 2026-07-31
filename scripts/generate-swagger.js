@@ -813,7 +813,8 @@ add('post', `${apiPrefix}/runner/product-submissions`, op('Runner Catalog Captur
 add('get', `${apiPrefix}/runner/product-submissions/{id}`, op('Runner Catalog Capture', 'Get one owned submission.', { parameters: [param('id', 'SUB public ID')] }));
 add('patch', `${apiPrefix}/runner/product-submissions/{id}`, op('Runner Catalog Capture', 'Update an owned draft or requested-changes submission with optimistic versioning.', { parameters: [param('id', 'SUB public ID')], requestBody: body('RunnerSubmissionRequest') }));
 add('post', `${apiPrefix}/runner/product-submissions/{id}/submit`, op('Runner Catalog Capture', 'Submit a complete capture to Catalog Review.', { parameters: [param('id', 'SUB public ID')] }));
-add('post', `${apiPrefix}/catalog/media/upload-intents`, op('Catalog Media', 'Create a signed authenticated Cloudinary upload intent.'));
+add('get', `${apiPrefix}/catalog/media/readiness`, op('Catalog Media', 'Check signed catalog media availability without exposing provider credentials.'));
+add('post', `${apiPrefix}/catalog/media/upload-intents`, op('Catalog Media', 'Create a signed authenticated Cloudinary upload intent. Returns MEDIA_PROVIDER_UNAVAILABLE when signed uploads are disabled or not configured.'));
 add('post', `${apiPrefix}/catalog/media/finalize`, op('Catalog Media', 'Verify provider metadata and finalize an owned catalog asset.'));
 
 add('get', `${apiPrefix}/admin/catalog/review/dashboard`, op('Catalog Review', 'Get scoped review metrics.'));

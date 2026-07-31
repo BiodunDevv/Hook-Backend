@@ -5,6 +5,10 @@ import { sendCreated, sendSuccess } from '@utils/http';
 export class CatalogMediaController {
   private readonly media = new CatalogMediaService();
 
+  readiness = async (_req: Request, res: Response) => {
+    sendSuccess(res, this.media.readiness());
+  };
+
   intent = async (req: Request, res: Response) => {
     sendCreated(res, this.media.createIntent({
       accountId: req.user!.sub,

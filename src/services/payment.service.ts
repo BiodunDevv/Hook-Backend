@@ -96,7 +96,7 @@ export class PaymentService {
       email: customer.email,
       callbackUrl:
         process.env.PAYSTACK_CALLBACK_URL ||
-        `${process.env.SHOPPER_APP_URL || "hook://"}payments/return`,
+        `${String(process.env.APP_URL || "http://localhost:4000").replace(/\/$/, "")}/api/v1/payments/paystack/callback`,
       metadata: {
         orderId: order.publicId,
         paymentId: payment.publicId,

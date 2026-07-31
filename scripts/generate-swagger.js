@@ -849,6 +849,7 @@ add('post', `${apiPrefix}/checkout/states/{stateId}/confirm`, op('Customer Comme
 add('post', `${apiPrefix}/payments/initialize`, op('Payments', 'Initialize Paystack Hosted Checkout from an owned ORD public ID.'));
 add('get', `${apiPrefix}/payments/{id}`, op('Payments', 'Poll safe payment and Order status; this never confirms payment.', { parameters: [param('id', 'PAY or ORD public ID')] }));
 add('post', `${apiPrefix}/webhooks/paystack`, op('Payments', 'Raw-body Paystack webhook with HMAC evidence validation.', { public: true }));
+add('get', `${apiPrefix}/payments/paystack/callback`, op('Payments', 'Paystack browser return bridge. Redirects to the Hook app and never confirms payment.', { public: true }));
 add('get', `${apiPrefix}/partner/customers/lookup`, op('Partner Commerce', 'Exact customer lookup in the authenticated Partner scope.'));
 add('post', `${apiPrefix}/partner/customers`, op('Partner Commerce', 'Create an attested assisted-ordering customer without verifying email.'));
 add('get', `${apiPrefix}/partner/commerce/config`, op('Partner Commerce', 'Get active policy versions required for assisted customer attestation.'));

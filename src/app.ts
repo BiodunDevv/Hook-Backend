@@ -52,6 +52,19 @@ export function createApp() {
       sendSuccess(res, await new PaymentService().webhook(req.body as Buffer, signature, req.requestId));
     } catch (error) { next(error); }
   });
+  app.get(`${apiPrefix}/payments/paystack/callback`, (req, res) => {
+    const reference = String(req.query.reference || req.query.trxref || '');
+    const safeReference = /^[A-Za-z0-9._=-]{1,120}$/.test(reference)
+      ? reference
+      : '';
+    const returnUrl = new URL(
+      process.env.PAYSTACK_APP_RETURN_URL || 'hook://payments/return',
+    );
+    if (safeReference) returnUrl.searchParams.set('reference', safeReference);
+    returnUrl.searchParams.set('source', 'paystack');
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    res.redirect(302, returnUrl.toString());
+  });
   app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '1mb' }));
   app.use(express.urlencoded({ extended: true, limit: process.env.FORM_BODY_LIMIT || '1mb' }));
   app.use(sanitizeRequest);

@@ -30,10 +30,11 @@ Automated tests, fixtures-as-tests, snapshots, coverage, and test frameworks wer
 - Shopper `npm run lint`: passed.
 - Shopper `npx expo-doctor`: passed all 18 checks.
 - `git diff --check`: passed in all three repositories.
+- Paystack sandbox checkout: passed locally with a real Hosted Checkout authorization, successful test payment, provider status re-query, signed `charge.success` processing, invalid-signature rejection, replay deduplication, customer status polling, and exactly one `ORDER_APPROVED_FOR_FULFILMENT` outbox event.
 
 ## Outstanding Release Gates
 
-- Paystack sandbox initialization and an externally delivered signed webhook must be manually verified with the configured merchant account.
+- The configured Paystack dashboard must deliver a signed webhook to the deployed Render endpoint after commits `0d0799c` and `88608ce` (or successors) are deployed; the equivalent signed sandbox flow has passed locally.
 - Production deployment with retained historical data still requires the documented migration path; fresh development and QA environments use `npm run seed` exclusively.
 - Phase 5 must implement fulfilment consumers, physical sourcing, handover collection, returns, and refunds.
 

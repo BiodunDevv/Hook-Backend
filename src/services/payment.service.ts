@@ -128,7 +128,7 @@ export class PaymentService {
         userId: customerId,
       }).lean({ virtuals: true });
       if (!order) throw new HttpError(404, "Payment not found");
-      payment = await Payment.findOne({ orderId: order.id });
+      payment = await Payment.findOne({ orderId: order._id.toString() });
     }
     if (!payment?.orderId) throw new HttpError(404, "Payment not found");
     const order = await Order.findOne({

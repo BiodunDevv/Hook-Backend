@@ -1,67 +1,12 @@
 import { createHash } from 'crypto';
 import { Request, Response } from 'express';
-import { FulfilmentService } from '@services/fulfilment.service';
 import { PaymentService } from '@services/payment.service';
 import { HttpError, sendSuccess } from '@utils/http';
 import { adminRepos, getPagination, paginated, routeParam } from './admin.helpers';
 import { auditAdminAction } from '@lib/audit';
-import { BoothAccessService } from '@services/booth-access.service';
 
 export class AdminCommerceController {
-  private boothAccess = new BoothAccessService();
-  private fulfilmentService = new FulfilmentService();
-  private paymentService = new PaymentService(adminRepos.payments(), adminRepos.orders(), adminRepos.escrowLedger(), adminRepos.fulfilments());
-
-  decideFulfilment = async (req: Request, res: Response) => {
-    const decision = routeParam(req.params.decision);
-    if (!['confirmed', 'rejected'].includes(decision)) throw new HttpError(400, 'Invalid fulfilment decision');
-    const result = await this.fulfilmentService.decide({
-      orderId: routeParam(req.params.orderId), vendorId: routeParam(req.params.vendorId),
-      decision: decision as 'confirmed' | 'rejected', actorId: req.user!.sub,
-      reason: req.body.reason, idempotencyKey: req.body.idempotencyKey,
-    });
-    await auditAdminAction(req, `fulfilment.${decision}`, 'vendor_fulfilment', result!.id, { reason: req.body.reason });
-    sendSuccess(res, result);
-  };
-
-  rotateBoothQr = async (req: Request, res: Response) => {
-    const booth = await adminRepos.booths().findOne({ where: { id: routeParam(req.params.id) } });
-    if (!booth) throw new HttpError(404, 'Booth not found');
-    const credential = this.boothAccess.generateQrCredential();
-    booth.qrPublicId = credential.publicId;
-    booth.qrTokenHash = credential.tokenDigest;
-    booth.qrVersion = Number(booth.qrVersion || 0) + 1;
-    booth.qrRotatedAt = new Date();
-    booth.lastCredentialRotationActorId = req.user!.sub;
-    await adminRepos.booths().save(booth);
-    await auditAdminAction(req, 'booth.qr.rotate', 'booth', booth.id, {});
-    sendSuccess(res, { publicId: booth.qrPublicId, token: credential.token, qrVersion: booth.qrVersion, scanPath: `/api/v1/booths/scan/${booth.qrPublicId}?token=${credential.token}` });
-  };
-
-  rotateBoothCode = async (req: Request, res: Response) => {
-    const booth = await adminRepos.booths().findOne({ where: { id: routeParam(req.params.id) } });
-    if (!booth) throw new HttpError(404, 'Booth not found');
-    const code = await this.boothAccess.generateUniqueCode();
-    booth.accessCodeDigest = this.boothAccess.digestCode(code);
-    booth.accessCodeVersion = Number(booth.accessCodeVersion || 0) + 1;
-    booth.accessCodeRotatedAt = new Date();
-    booth.lastCredentialRotationActorId = req.user!.sub;
-    await adminRepos.booths().save(booth);
-    await auditAdminAction(req, 'booth.code.rotate', 'booth', booth.id, {});
-    sendSuccess(res, { code, accessCodeVersion: booth.accessCodeVersion, rotatedAt: booth.accessCodeRotatedAt });
-  };
-
-  setBoothInventory = async (req: Request, res: Response) => {
-    const boothId = routeParam(req.params.id);
-    const booth = await adminRepos.booths().findOne({ where: { id: boothId } });
-    if (!booth) throw new HttpError(404, 'Booth not found');
-    const products = await adminRepos.products().find({ where: { id: { $in: req.body.productIds } } });
-    if (products.length !== req.body.productIds.length) throw new HttpError(400, 'One or more products do not exist');
-    await adminRepos.boothInventory().delete({ boothId });
-    for (const product of products) await adminRepos.boothInventory().save(adminRepos.boothInventory().create({ boothId, productId: product.id, vendorId: product.vendorId, isActive: true }));
-    await auditAdminAction(req, 'booth.inventory.update', 'booth', boothId, { productCount: products.length });
-    sendSuccess(res, await adminRepos.boothInventory().find({ where: { boothId }, relations: { product: true, vendor: true } }));
-  };
+  private paymentService = new PaymentService(adminRepos.payments(), adminRepos.orders(), adminRepos.escrowLedger());
 
   deletionRequests = async (req: Request, res: Response) => {
     const { page, limit, skip } = getPagination(req.query);

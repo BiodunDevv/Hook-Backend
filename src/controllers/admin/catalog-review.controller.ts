@@ -1,0 +1,76 @@
+import { Request, Response } from 'express';
+import { ScopeType } from '@lib/constants';
+import { routeParam } from '@lib/api-utils';
+import { CatalogReviewService } from '@services/catalog.service';
+import { recordAudit } from '@services/platform-audit.service';
+import { sendSuccess } from '@utils/http';
+import { presentSubmission } from '@services/catalog-presentation.service';
+
+function stateScope(req: Request) {
+  if (req.platformContext?.stateId) return [req.platformContext.stateId];
+  return req.user?.scopeType === ScopeType.GLOBAL ? undefined : req.user?.assignedStateIds;
+}
+
+export class AdminCatalogReviewController {
+  private readonly review = new CatalogReviewService();
+
+  dashboard = async (req: Request, res: Response) => sendSuccess(res, await this.review.dashboard(stateScope(req)));
+  list = async (req: Request, res: Response) => {
+    const result = await this.review.list(req.query, stateScope(req));
+    sendSuccess(res, { ...result, data: await Promise.all(result.data.map(presentSubmission)) });
+  };
+  detail = async (req: Request, res: Response) => sendSuccess(
+    res,
+    await presentSubmission(await this.review.detail(routeParam(req.params.id), stateScope(req))),
+  );
+
+  start = async (req: Request, res: Response) => {
+    const updated = await this.review.start(
+      routeParam(req.params.id),
+      req.user!.sub,
+      req.user!.publicId,
+      req.body.version,
+      stateScope(req),
+    );
+    await recordAudit(req, {
+      action: 'catalog.submission.review_started',
+      entityType: 'product_submission',
+      entityId: updated.id,
+      entityPublicId: updated.publicId,
+      stateId: updated.sourceStateId,
+      after: { status: updated.status, reviewedBy: updated.reviewedBy },
+    });
+    sendSuccess(res, await presentSubmission(updated));
+  };
+
+  requestChanges = async (req: Request, res: Response) => this.decide(req, res, 'changes_requested');
+  approve = async (req: Request, res: Response) => this.decide(req, res, 'approved');
+  reject = async (req: Request, res: Response) => this.decide(req, res, 'rejected');
+
+  private decide = async (
+    req: Request,
+    res: Response,
+    action: 'changes_requested' | 'approved' | 'rejected',
+  ) => {
+    const before = await this.review.detail(routeParam(req.params.id), stateScope(req));
+    const updated = await this.review.decide(
+      routeParam(req.params.id),
+      req.user!.sub,
+      req.user!.publicId,
+      action,
+      req.body,
+      stateScope(req),
+    );
+    await recordAudit(req, {
+      action: `catalog.submission.${action}`,
+      entityType: 'product_submission',
+      entityId: updated.id,
+      entityPublicId: updated.publicId,
+      stateId: updated.sourceStateId,
+      before: { status: before.status, version: before.version },
+      after: { status: updated.status, version: updated.version },
+      reason: req.body.reason,
+    });
+    sendSuccess(res, await presentSubmission(updated));
+  };
+}

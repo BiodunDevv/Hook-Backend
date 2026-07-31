@@ -1,4 +1,4 @@
-import { Model } from 'mongoose';
+import { isValidObjectId, Model } from 'mongoose';
 
 type QueryOptions<T> = {
   where?: any | Array<any>;
@@ -11,12 +11,20 @@ type QueryOptions<T> = {
 
 type PopulateMap = Record<string, () => MongoRepository<any>>;
 
-function normalizeFilter<T>(where?: any | Array<any>) {
+function identifierField(model: Model<any>, identifier: unknown) {
+  if (typeof identifier !== 'string' || isValidObjectId(identifier)) return '_id';
+  for (const field of ['publicId', 'hookId', 'orderCode']) {
+    if (model.schema.path(field)) return field;
+  }
+  return '_id';
+}
+
+function normalizeFilter<T>(where: any | Array<any> | undefined, model: Model<T>) {
   if (!where) return {};
   const normalizeOne = (input: any) => {
     const filter: Record<string, unknown> = { ...input };
     if ('id' in filter) {
-      filter._id = filter.id;
+      filter[identifierField(model, filter.id)] = filter.id;
       delete filter.id;
     }
     for (const [key, value] of Object.entries(filter)) {
@@ -95,7 +103,7 @@ export class MongoRepository<T extends { id?: string }> {
   }
 
   async findOne(options: QueryOptions<T>) {
-    let query = this.model.findOne(normalizeFilter(options?.where));
+    let query = this.model.findOne(normalizeFilter(options?.where, this.model));
     if (options?.select) query = query.select(options.select as any);
     if (options?.order) query = query.sort(sortFrom(options.order));
     const doc = await query.lean({ virtuals: true });
@@ -103,7 +111,7 @@ export class MongoRepository<T extends { id?: string }> {
   }
 
   async find(options: QueryOptions<T> = {}) {
-    let query = this.model.find(normalizeFilter(options.where));
+    let query = this.model.find(normalizeFilter(options.where, this.model));
     if (options.select) query = query.select(options.select as any);
     if (options.order) query = query.sort(sortFrom(options.order));
     if (options.skip) query = query.skip(options.skip);
@@ -113,7 +121,7 @@ export class MongoRepository<T extends { id?: string }> {
   }
 
   async findAndCount(options: QueryOptions<T> = {}) {
-    const filter = normalizeFilter(options.where);
+    const filter = normalizeFilter(options.where, this.model);
     let query = this.model.find(filter);
     if (options.order) query = query.sort(sortFrom(options.order));
     if (options.skip) query = query.skip(options.skip);
@@ -126,20 +134,22 @@ export class MongoRepository<T extends { id?: string }> {
   }
 
   async count(options: QueryOptions<T> = {}) {
-    return this.model.countDocuments(normalizeFilter(options.where));
+    return this.model.countDocuments(normalizeFilter(options.where, this.model));
   }
 
   async update(criteria: string | any, payload: any) {
-    const filter = typeof criteria === 'string' ? { _id: criteria } : normalizeFilter(criteria);
+    const filter = typeof criteria === 'string'
+      ? { [identifierField(this.model, criteria)]: criteria }
+      : normalizeFilter(criteria, this.model);
     return this.model.updateMany(filter, { $set: payload });
   }
 
   async delete(criteria: any) {
-    return this.model.deleteMany(normalizeFilter(criteria));
+    return this.model.deleteMany(normalizeFilter(criteria, this.model));
   }
 
   async deleteMany(criteria: any = {}) {
-    return this.model.deleteMany(normalizeFilter(criteria));
+    return this.model.deleteMany(normalizeFilter(criteria, this.model));
   }
 
   async aggregate<R = any>(pipeline: object[]) {

@@ -7,8 +7,10 @@ import { adminRepos, getPagination, paginated, routeParam } from './admin.helper
 const STAFF_ROLES = [UserRole.SUPPORT, UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.FIELD_AGENT, UserRole.EV_DRIVER];
 
 function safeUser(user: any) {
-  const { password, refreshToken, ...safe } = user;
-  return safe;
+  const safe = { ...user };
+  delete safe.password;
+  delete safe.refreshToken;
+  return { ...safe, id: safe.publicId || safe.id };
 }
 
 export class AdminUsersController {

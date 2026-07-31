@@ -5,21 +5,14 @@ import { actor, adminRepos, getPagination, paginated, routeParam } from './admin
 import { PaymentService } from '@services/payment.service';
 
 export class AdminFinancialsController {
-  private paymentsService = new PaymentService(adminRepos.payments(), adminRepos.orders(), adminRepos.escrowLedger(), adminRepos.fulfilments());
+  private paymentsService = new PaymentService(adminRepos.payments(), adminRepos.orders(), adminRepos.escrowLedger());
   dashboard = async (req: Request, res: Response) => {
-    const boothId = typeof req.query.boothId === 'string' ? req.query.boothId : undefined;
-    const boothOrders = await adminRepos.orders().find({ where: boothId ? { boothId } : {} });
-    const boothOrderIds = new Set(boothOrders.map((order) => order.id));
-    let [paymentRows, settlementRows] = await Promise.all([
+    const orders = await adminRepos.orders().find({});
+    const [paymentRows, settlementRows] = await Promise.all([
       adminRepos.payments().find({ order: { createdAt: 'DESC' } }),
-      adminRepos.settlements().find({ order: { createdAt: 'DESC' }, relations: { vendor: true } }),
+      adminRepos.settlements().find({ order: { createdAt: 'DESC' } }),
     ]);
-    let ledger = await adminRepos.escrowLedger().find({ order: { createdAt: 'DESC' } });
-    if (boothId) {
-      paymentRows = paymentRows.filter((payment) => Boolean(payment.orderId) && boothOrderIds.has(payment.orderId!));
-      settlementRows = settlementRows.filter((settlement) => Boolean(settlement.orderId) && boothOrderIds.has(settlement.orderId!));
-      ledger = ledger.filter((entry) => Boolean(entry.orderId) && boothOrderIds.has(entry.orderId!));
-    }
+    const ledger = await adminRepos.escrowLedger().find({ order: { createdAt: 'DESC' } });
     const successful = paymentRows.filter((payment) => payment.status === PaymentStatus.SUCCESSFUL);
     const pendingSettlements = settlementRows.filter((settlement) => settlement.status === SettlementStatus.PENDING_ESCROW);
     const period = ['24h', '7d', '30d', 'ytd'].includes(String(req.query.period).toLowerCase()) ? String(req.query.period).toLowerCase() : '7d';
@@ -49,8 +42,7 @@ export class AdminFinancialsController {
       refundQueue: ledger.filter((row) => row.type === EscrowEventType.REFUND_PENDING).reduce((sum, row) => sum + row.amount, 0),
       availablePayouts: ledger.filter((row) => row.type === EscrowEventType.ELIGIBLE_FOR_PAYOUT).reduce((sum, row) => sum + row.amount, 0),
       gatewayFees: successful.reduce((sum, payment) => sum + payment.gatewayFee, 0),
-      deliverySubsidy: boothOrders.reduce((sum, order) => sum + Number(order.deliverySubsidy || 0), 0),
-      boothId: boothId || null,
+      deliverySubsidy: orders.reduce((sum, order) => sum + Number(order.deliverySubsidy || 0), 0),
       period,
       trend: Array.from(trendMap.values()),
       recentPayments: paymentRows.slice(0, 20),
@@ -63,7 +55,6 @@ export class AdminFinancialsController {
     const where = typeof req.query.status === 'string' ? { status: req.query.status as SettlementStatus } : {};
     const [data, total] = await adminRepos.settlements().findAndCount({
       where,
-      relations: { vendor: true },
       order: { createdAt: 'DESC' },
       skip,
       take: limit,
@@ -74,24 +65,9 @@ export class AdminFinancialsController {
   settlementDetail = async (req: Request, res: Response) => {
     const settlement = await adminRepos.settlements().findOne({
       where: { id: routeParam(req.params.id) },
-      relations: { vendor: true },
     });
     if (!settlement) throw new HttpError(404, 'Settlement not found');
     sendSuccess(res, settlement);
-  };
-
-  trigger = async (req: Request, res: Response) => {
-    const vendorId = routeParam(req.params.vendorId);
-    await adminRepos.auditLogs().save(adminRepos.auditLogs().create({
-      action: 'manual_settlement_trigger',
-      resourceType: 'vendor',
-      resourceId: vendorId,
-      ...actor(req),
-      metadata: JSON.stringify({ reason: req.body.reason, idempotencyKey: req.body.idempotencyKey }),
-      details: JSON.stringify({ vendorId }),
-      status: 'success',
-    }));
-    sendSuccess(res, { vendorId, status: 'queued' });
   };
 
   audit = async (req: Request, res: Response) => {

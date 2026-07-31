@@ -1,4 +1,4 @@
-import { UserRole } from '@lib/constants';
+import { AccountStatus, AccountType, ScopeType, UserRole } from '@lib/constants';
 import { BaseEntity, createModel, createSchema } from '@models/base.model';
 
 export interface User extends BaseEntity {
@@ -10,6 +10,13 @@ export interface User extends BaseEntity {
   firstName: string;
   lastName: string;
   role: UserRole;
+  publicId?: string;
+  accountType?: AccountType;
+  accountStatus?: AccountStatus;
+  roleIds?: string[];
+  scopeType?: ScopeType;
+  assignedStateIds?: string[];
+  assignedHubIds?: string[];
   isEmailVerified: boolean;
   isPhoneVerified: boolean;
   avatarUrl?: string;
@@ -22,8 +29,14 @@ export interface User extends BaseEntity {
   isActive: boolean;
   lastLoginAt?: Date;
   refreshToken?: string;
-  accountStatus?: 'active' | 'pending_password' | 'deletion_requested' | 'anonymized';
+  failedLoginAttempts?: number;
+  lockedUntil?: Date;
+  passwordChangedAt?: Date;
+  migratedFrom?: { model: string; sourceId: string; migratedAt: Date };
   originatingGuestId?: string;
+  podEligible?: boolean;
+  podDisabledReason?: string;
+  podEligibilityUpdatedAt?: Date;
 }
 
 const UserSchema = createSchema<User>({
@@ -35,6 +48,13 @@ const UserSchema = createSchema<User>({
   firstName: { type: String, default: '' },
   lastName: { type: String, default: '' },
   role: { type: String, enum: Object.values(UserRole), default: UserRole.SHOPPER, index: true },
+  publicId: { type: String, unique: true, sparse: true, index: true },
+  accountType: { type: String, enum: Object.values(AccountType), index: true },
+  accountStatus: { type: String, enum: Object.values(AccountStatus), default: AccountStatus.ACTIVE, index: true },
+  roleIds: { type: [String], default: [], index: true },
+  scopeType: { type: String, enum: Object.values(ScopeType), default: ScopeType.SELF, index: true },
+  assignedStateIds: { type: [String], default: [], index: true },
+  assignedHubIds: { type: [String], default: [], index: true },
   isEmailVerified: { type: Boolean, default: false },
   isPhoneVerified: { type: Boolean, default: false },
   avatarUrl: { type: String },
@@ -47,14 +67,20 @@ const UserSchema = createSchema<User>({
   isActive: { type: Boolean, default: true, index: true },
   lastLoginAt: { type: Date },
   refreshToken: { type: String, index: true },
-  accountStatus: { type: String, enum: ['active', 'pending_password', 'deletion_requested', 'anonymized'], default: 'active', index: true },
+  failedLoginAttempts: { type: Number, default: 0 },
+  lockedUntil: { type: Date },
+  passwordChangedAt: { type: Date },
+  migratedFrom: { type: Object },
   originatingGuestId: { type: String, sparse: true, index: true },
+  podEligible: { type: Boolean, default: true, index: true },
+  podDisabledReason: { type: String, maxlength: 500 },
+  podEligibilityUpdatedAt: { type: Date },
   deletedAt: { type: Date },
 });
 
-UserSchema.index({ email: 1 }, { unique: true });
-UserSchema.index({ googleId: 1 }, { unique: true, sparse: true });
 UserSchema.index({ role: 1, isActive: 1 });
 UserSchema.index({ role: 1, operationalStateCode: 1 });
+UserSchema.index({ accountType: 1, accountStatus: 1 });
+UserSchema.index({ roleIds: 1, assignedStateIds: 1, assignedHubIds: 1 });
 
 export const User = createModel<User>('User', UserSchema);

@@ -21,11 +21,8 @@ import { DEFAULT_OPERATIONAL_STATE_CODE, NIGERIAN_STATES } from '@lib/nigeria-st
 const ALL_PERMISSIONS = [
   'orders.view', 'orders.edit', 'orders.create',
   'products.view', 'products.review', 'products.edit',
-  'vendors.view', 'vendors.approve', 'vendors.edit',
   'customers.view', 'customers.edit',
-  'drivers.view', 'drivers.edit',
-  'field_agents.view',
-  'booths.view', 'booths.edit',
+  'runners.view', 'runners.edit',
   'financials.view',
   'financials.refund', 'financials.reconcile',
   'refunds.view', 'refunds.manage',
@@ -353,6 +350,9 @@ function slugify(value: string) {
 }
 
 async function resetSeedData() {
+  const databaseName = mongoose.connection.db?.databaseName || '';
+  if (!databaseName) throw new Error('Cannot seed without a resolved MongoDB database name');
+  console.warn(`FULL SEED RESET: dropping MongoDB database "${databaseName}"`);
   await mongoose.connection.dropDatabase();
   console.log('Database cleared for fresh seed');
 }
@@ -363,16 +363,7 @@ async function seed() {
   const lastName = process.env.SEED_ADMIN_LAST_NAME || 'Admin';
 
   // All seeded accounts use the same password for easy local/QA testing
-  const password = '123456';
-  if (
-    process.env.NODE_ENV === 'production' &&
-    email === 'admin@gmail.com' &&
-    password === '123456' &&
-    process.env.ALLOW_WEAK_PRODUCTION_SEED !== 'true'
-  ) {
-    throw new Error('Refusing to seed default weak admin credentials in production. Set ALLOW_WEAK_PRODUCTION_SEED=true only for controlled QA.');
-  }
-
+  const password = process.env.SEED_ADMIN_PASSWORD || '123456';
   const [
     { hashPassword },
     { AppDataSource, initializeDatabase },
@@ -394,7 +385,6 @@ async function seed() {
     { BoothInventory },
     { BoothAttendantAssignment },
     { RefundRequest },
-    { BoothAccessService },
     { AccountDeletionRequest },
     { CheckoutEvent },
   ] = await Promise.all([
@@ -418,7 +408,6 @@ async function seed() {
     import('@models/booths/booth-inventory.model'),
     import('@models/booths/booth-attendant-assignment.model'),
     import('@models/orders/refund-request.model'),
-    import('@services/booth-access.service'),
     import('@models/support/account-deletion-request.model'),
     import('@models/analytics/checkout-event.model'),
   ]);
@@ -444,7 +433,6 @@ async function seed() {
   const checkoutEventRepo = AppDataSource.getRepository(CheckoutEvent);
   const boothAssignmentRepo = AppDataSource.getRepository(BoothAttendantAssignment);
   const refundRequestRepo = AppDataSource.getRepository(RefundRequest);
-  const boothAccess = new BoothAccessService();
 
   await resetSeedData();
 
@@ -786,8 +774,8 @@ async function seed() {
   const orderStatuses = [
     OrderStatus.PENDING,
     OrderStatus.CONFIRMED,
-    OrderStatus.PROCESSING,
-    OrderStatus.IN_TRANSIT,
+    OrderStatus.CONFIRMED,
+    OrderStatus.SHIPPED,
     OrderStatus.DELIVERED,
     OrderStatus.DELIVERED,
   ];
@@ -905,7 +893,7 @@ async function seed() {
       createdAt,
       orderId: order.id,
       driverId: driver.id,
-      status: status === OrderStatus.DELIVERED ? LogisticsStatus.DELIVERED : status === OrderStatus.IN_TRANSIT ? LogisticsStatus.IN_TRANSIT : LogisticsStatus.ASSIGNED,
+      status: status === OrderStatus.DELIVERED ? LogisticsStatus.DELIVERED : status === OrderStatus.SHIPPED ? LogisticsStatus.IN_TRANSIT : LogisticsStatus.ASSIGNED,
       pickupLocation: {
         name: savedVendors[index % savedVendors.length].businessName,
         address: savedVendors[index % savedVendors.length].businessAddress,
@@ -975,11 +963,11 @@ async function seed() {
   for (let boothIndex = 0; boothIndex < savedBooths.length; boothIndex += 1) {
     const booth = savedBooths[boothIndex];
     const code = String(410001 + boothIndex);
-    booth.accessCodeDigest = boothAccess.digestCode(code);
+    booth.accessCodeDigest = createHash('sha256').update(`legacy:${code}`).digest('hex');
     booth.accessCodeVersion = 1;
     booth.accessCodeRotatedAt = now;
     booth.qrPublicId = `hook-booth-${boothIndex + 1}`;
-    booth.qrTokenHash = boothAccess.digestQrToken(`seed-booth-token-${boothIndex + 1}`);
+    booth.qrTokenHash = createHash('sha256').update(`seed-booth-token-${boothIndex + 1}`).digest('hex');
     booth.qrVersion = 1;
     booth.qrRotatedAt = now;
     await boothRepo.save(booth);

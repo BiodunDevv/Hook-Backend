@@ -9,6 +9,7 @@ export interface Notification extends BaseEntity {
   data?: Record<string, unknown>;
   isRead: boolean;
   readAt?: Date;
+  eventKey?: string;
 }
 
 const NotificationSchema = createSchema<Notification>({
@@ -20,6 +21,7 @@ const NotificationSchema = createSchema<Notification>({
   data: { type: Object },
   isRead: { type: Boolean, default: false, index: true },
   readAt: { type: Date },
+  eventKey: { type: String, unique: true, sparse: true, index: true },
   deletedAt: { type: Date },
 });
 

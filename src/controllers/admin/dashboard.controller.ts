@@ -4,7 +4,6 @@ import {
   NegotiationStatus,
   OrderStatus,
   ProductStatus,
-  UserRole,
 } from '@lib/constants';
 import { mongoBetween, mongoIn } from '@lib/mongo-repository';
 import { sendSuccess } from '@utils/http';
@@ -13,10 +12,8 @@ import { adminRepos } from './admin.helpers';
 const activeOrderStatuses = [
   OrderStatus.PENDING,
   OrderStatus.CONFIRMED,
-  OrderStatus.PROCESSING,
-  OrderStatus.PACKED,
-  OrderStatus.PICKED_UP,
-  OrderStatus.IN_TRANSIT,
+  OrderStatus.CONFIRMED,
+  OrderStatus.SHIPPED,
 ];
 
 async function sum(repo: ReturnType<typeof adminRepos.orders>, match: Record<string, unknown>, field: string) {
@@ -39,22 +36,19 @@ export class AdminDashboardController {
     const previousMonthStart = new Date(currentMonthStart);
     previousMonthStart.setMonth(previousMonthStart.getMonth() - 1);
 
-    const users = adminRepos.users();
-    const vendors = adminRepos.vendors();
     const products = adminRepos.products();
     const orders = adminRepos.orders();
     const logistics = adminRepos.logistics();
+    const runners = adminRepos.fieldAgents();
     const negotiations = adminRepos.negotiations();
 
     const [
       activeOrders,
       yesterdayActiveOrders,
-      activeDeliveries,
-      totalDrivers,
-      activeDrivers,
       totalNegotiations,
       acceptedNegotiations,
-      activeVendors,
+      activeRunners,
+      publishedProducts,
       revenue,
       grossMerchandise,
       previousMonthGmv,
@@ -68,12 +62,10 @@ export class AdminDashboardController {
     ] = await Promise.all([
       orders.count({ where: { status: mongoIn(activeOrderStatuses) } }),
       orders.count({ where: { createdAt: mongoBetween(yesterdayStart, todayStart), status: mongoIn(activeOrderStatuses) } }),
-      logistics.count({ where: { status: LogisticsStatus.IN_TRANSIT } }),
-      users.count({ where: { role: UserRole.EV_DRIVER } }),
-      users.count({ where: { role: UserRole.EV_DRIVER, isActive: true } }),
       negotiations.count(),
       negotiations.count({ where: { status: NegotiationStatus.ACCEPTED } }),
-      vendors.count({ where: { isApproved: true, isActive: true } }),
+      runners.count({ where: { isActive: true } }),
+      products.count({ where: { status: ProductStatus.APPROVED } }),
       sum(orders, { status: OrderStatus.DELIVERED }, 'total'),
       sum(orders, {}, 'total'),
       sum(orders, { createdAt: { $gte: previousMonthStart, $lt: currentMonthStart } }, 'total'),
@@ -132,8 +124,6 @@ export class AdminDashboardController {
     const growth = (current: number, previous: number) => (
       previous ? Number((((current - previous) / previous) * 100).toFixed(1)) : current ? 100 : 0
     );
-    const utilization = totalDrivers ? Number(((activeDeliveries / totalDrivers) * 100).toFixed(0)) : 0;
-
     sendSuccess(res, {
       grossMerchandise: { value: grossMerchandise, change: growth(currentMonthGmv, previousMonthGmv), caption: 'vs last month' },
       totalRevenue: { value: revenue, change: growth(currentMonthRevenue, previousMonthRevenue), caption: 'vs last month' },
@@ -153,8 +143,8 @@ export class AdminDashboardController {
         change: 0,
         caption: `from ${Number(productRatings?.reviews || 0).toLocaleString('en')} reviews`,
       },
-      activeVendors: { value: activeVendors, change: 0, caption: 'across 8 cities' },
-      activeDrivers: { value: activeDrivers, change: -1.2, caption: `${utilization}% utilization` },
+      activeRunners: { value: activeRunners, change: 0, caption: 'market-side operations' },
+      publishedProducts: { value: publishedProducts, change: 0, caption: 'commercially approved' },
     });
   };
 

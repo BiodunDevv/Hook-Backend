@@ -1,6 +1,6 @@
 import type { MongoRepository as Repository } from '@lib/mongo-repository';
 import { AppDataSource } from '@config/data-source';
-import { DEFAULT_DELIVERY_FEE, DELIVERY_SLA_HOURS, OrderStatus, OrderType, PaymentMode, PaymentStatus, ProductStatus, VENDOR_COMMISSION_PERCENTAGE, VENDOR_CONFIRMATION_HOURS } from '@lib/constants';
+import { AccountStatus, AccountType, DEFAULT_DELIVERY_FEE, DELIVERY_SLA_HOURS, OrderStatus, OrderType, PaymentMode, PaymentStatus, ProductStatus, ScopeType } from '@lib/constants';
 import { EmailService } from '@emails/email.service';
 import { Cart } from '@models/cart/cart.model';
 import { CartItem } from '@models/cart/cart-item.model';
@@ -8,23 +8,18 @@ import { Logistics } from '@models/logistics/logistics.model';
 import { OrderItem } from '@models/orders/order-item.model';
 import { Order } from '@models/orders/order.model';
 import { Product } from '@models/products/product.model';
-import { Settlement } from '@models/settlements/settlement.model';
-import { VendorFulfilment } from '@models/orders/vendor-fulfilment.model';
+import { Payment } from '@models/payments/payment.model';
 import { User } from '@models/users/user.model';
-import { Vendor } from '@models/vendors/vendor.model';
 import { CustomerOwner } from './cart.service';
 import { HttpError } from '@utils/http';
 import { Otp } from '@models/auth/otp.model';
 import { randomInt } from 'crypto';
-import { BoothAccessService } from './booth-access.service';
-import { Booth } from '@models/booths/booth.model';
-import { BoothInventory } from '@models/booths/booth-inventory.model';
+import { nextPublicId } from './public-id.service';
 
-type CheckoutBody = Pick<Order, 'deliveryAddress' | 'deliveryNotes' | 'scheduledDeliveryAt' | 'guestEmail' | 'guestName' | 'paymentMode' | 'orderType' | 'giftRecipient'> & { boothSessionToken?: string };
+type CheckoutBody = Pick<Order, 'deliveryAddress' | 'deliveryNotes' | 'scheduledDeliveryAt' | 'guestEmail' | 'guestName' | 'paymentMode' | 'orderType' | 'giftRecipient'>;
 
 export class OrderService {
   private readonly email = new EmailService();
-  private readonly boothAccess = new BoothAccessService();
 
   constructor(
     private readonly carts: Repository<Cart>,
@@ -33,8 +28,6 @@ export class OrderService {
     private readonly orderItems: Repository<OrderItem>,
     private readonly products: Repository<Product>,
     private readonly logistics: Repository<Logistics>,
-    private readonly settlements: Repository<Settlement>,
-    private readonly fulfilments: Repository<VendorFulfilment>,
   ) {}
 
   async checkout(owner: CustomerOwner, body: CheckoutBody) {
@@ -44,7 +37,7 @@ export class OrderService {
     }
     const cart = await this.carts.findOne({
       where: { ...where, isCheckedOut: false },
-      relations: { items: { product: { vendor: true } } },
+      relations: { items: { product: true } },
     });
     if (cart) cart.items = cart.items || await this.cartItems.find({ where: { cartId: cart.id }, relations: { product: true } });
     const cartItems = cart?.items || [];
@@ -56,24 +49,11 @@ export class OrderService {
       throw new HttpError(400, 'Gift orders require recipient delivery details and Pay Now');
     }
 
-    let booth: any;
-    let attendant: any;
-    if (cart.boothId) {
-      if (!body.boothSessionToken) throw new HttpError(401, 'A valid booth session is required at checkout');
-      const session = this.boothAccess.verifySession(body.boothSessionToken);
-      booth = await this.boothAccess.assertCurrent(session);
-      if (booth.id !== cart.boothId || session.version !== cart.boothSessionVersion) throw new HttpError(409, 'Your booth session no longer matches this cart');
-      const assignedCount = await BoothInventory.countDocuments({ boothId: booth.id, productId: { $in: cartItems.map((item) => item.productId) }, isActive: true });
-      if (assignedCount !== new Set(cartItems.map((item) => item.productId)).size) throw new HttpError(409, 'One or more products are no longer available from this booth');
-      attendant = booth.attendantUserId ? await User.findById(booth.attendantUserId).lean({ virtuals: true }) : undefined;
-    }
-
-    const vendorIds = [...new Set(cartItems.map((item) => item.product.vendorId))];
+    const legacySourceIds = [...new Set(cartItems.map((item) => item.product.vendorId).filter(Boolean))];
     for (const item of cartItems) {
       const available = Number(item.product.quantity || 0) - Number(item.product.reservedQuantity || 0);
       if (available < item.quantity) throw new HttpError(409, `${item.product.title} no longer has enough available stock`);
     }
-    const confirmationDeadline = new Date(Date.now() + Number(process.env.VENDOR_CONFIRMATION_HOURS || VENDOR_CONFIRMATION_HOURS) * 60 * 60 * 1000);
     const provisionalUser = !owner.userId && body.guestEmail
       ? await this.ensureGuestAccount(body.guestEmail, body.guestName || '', owner.guestId)
       : undefined;
@@ -88,17 +68,13 @@ export class OrderService {
       deliverySubsidy: Number(process.env.DELIVERY_VENDOR_SUBSIDY || 0),
       discount: 0,
       total: cart.subtotal + Number(process.env.DEFAULT_DELIVERY_FEE || DEFAULT_DELIVERY_FEE),
-      vendorCount: vendorIds.length,
+      vendorCount: legacySourceIds.length,
       status: body.paymentMode === PaymentMode.PAY_NOW ? OrderStatus.AWAITING_PAYMENT : OrderStatus.PENDING,
       paymentStatus: PaymentStatus.UNPAID,
       paymentMode: body.paymentMode || PaymentMode.PAY_NOW,
       orderType: body.orderType || OrderType.STANDARD,
       giftRecipient: body.giftRecipient,
       deliveryAddress: body.orderType === OrderType.GIFT && body.giftRecipient ? body.giftRecipient.address : body.deliveryAddress,
-      boothId: booth?.id,
-      boothSnapshot: booth ? { name: booth.name, accessCodeMasked: `***${String(booth.accessCodeVersion).padStart(3, '0')}`, source: cart.boothSource || 'code' } : undefined,
-      attendantSnapshot: attendant ? { userId: attendant.id, name: `${attendant.firstName || ''} ${attendant.lastName || ''}`.trim(), email: attendant.email, phone: attendant.phone || '' } : undefined,
-      vendorConfirmationDeadline: confirmationDeadline,
       partialFulfilment: false,
       deliveryNotes: body.deliveryNotes,
       scheduledDeliveryAt: body.scheduledDeliveryAt,
@@ -130,7 +106,7 @@ export class OrderService {
           unitPrice: item.unitPrice,
           totalPrice: item.totalPrice,
           selectedVariants: item.selectedVariants,
-          commissionAmount: item.totalPrice * (VENDOR_COMMISSION_PERCENTAGE / 100),
+          commissionAmount: 0,
         })));
       }
     } catch (error) {
@@ -139,21 +115,6 @@ export class OrderService {
       await this.orders.delete(order.id);
       throw error;
     }
-    await Promise.all(vendorIds.map(async (vendorId) => {
-      const vendorItems = createdItems.filter((item: any) => item.vendorId === vendorId);
-      const itemTotal = vendorItems.reduce((sum: number, item: any) => sum + item.totalPrice, 0);
-      await this.fulfilments.save(this.fulfilments.create({
-        orderId: order.id,
-        vendorId,
-        orderItemIds: vendorItems.map((item: any) => item.id),
-        status: 'awaiting_confirmation' as any,
-        itemTotal,
-        commissionAmount: itemTotal * (VENDOR_COMMISSION_PERCENTAGE / 100),
-        refundAmount: 0,
-        confirmationDeadline,
-        idempotencyKeys: [],
-      }));
-    }));
     await this.logistics.save(this.logistics.create({
       orderId: order.id,
       deliveryLocation: {
@@ -179,25 +140,6 @@ export class OrderService {
         itemCount,
       });
     }
-    const vendorRepo = AppDataSource.getRepository(Vendor);
-    const userRepo = AppDataSource.getRepository(User);
-    if (body.paymentMode === PaymentMode.PAY_ON_DELIVERY) await Promise.all(vendorIds.map(async (vendorId) => {
-      const vendor = await vendorRepo.findOne({ where: { id: vendorId } });
-      const owner = vendor?.ownerId ? await userRepo.findOne({ where: { id: vendor.ownerId } }) : undefined;
-      if (!vendor || !owner?.email) return;
-      const vendorItems = cartItems.filter((item) => item.product.vendorId === vendorId);
-      const vendorTotal = vendorItems.reduce((sum, item) => sum + Number(item.totalPrice || 0), 0);
-      const vendorItemCount = vendorItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
-      await this.email.sendVendorNewOrder({
-        to: owner.email,
-        name: `${owner.firstName || ''} ${owner.lastName || ''}`.trim(),
-        vendorName: vendor.businessName,
-        customerName: customerName || 'Customer',
-        orderCode: order.orderCode,
-        amount: vendorTotal,
-        itemCount: vendorItemCount,
-      });
-    }));
     const hookOpsEmail = process.env.HOOK_OPS_EMAIL || process.env.BREVO_FROM_EMAIL;
     if (hookOpsEmail && body.paymentMode === PaymentMode.PAY_ON_DELIVERY) {
       await this.email.sendHookNewOrder({
@@ -217,20 +159,23 @@ export class OrderService {
   }
 
   async listCustomerOrders(owner: CustomerOwner) {
-    return this.orders.find({
-      where: this.ownerWhere(owner),
-      relations: { items: true, payment: true, logistics: true },
-      order: { createdAt: 'DESC' },
-    });
+    const orders = await Order.find(this.ownerWhere(owner)).sort({ createdAt: -1 }).lean({ virtuals: true });
+    return Promise.all(orders.map(async (order) => ({
+      ...order,
+      items: await OrderItem.find({ orderId: order.id }).lean({ virtuals: true }),
+      payment: await Payment.findOne({ orderId: order.id }).lean({ virtuals: true }),
+    }))) as any;
   }
 
   async getCustomerOrder(owner: CustomerOwner, id: string) {
-    const order = await this.orders.findOne({
-      where: { id, ...this.ownerWhere(owner) },
-      relations: { items: true, payment: true, logistics: true },
-    });
+    const identifier = id.match(/^[a-f\d]{24}$/i) ? { $or: [{ _id: id }, { publicId: id }, { orderCode: id }] } : { $or: [{ publicId: id }, { orderCode: id }] };
+    const order = await Order.findOne({ ...identifier, ...this.ownerWhere(owner) }).lean({ virtuals: true });
     if (!order) throw new HttpError(404, 'Order not found');
-    return order;
+    return {
+      ...order,
+      items: await OrderItem.find({ orderId: order.id }).lean({ virtuals: true }),
+      payment: await Payment.findOne({ orderId: order.id }).lean({ virtuals: true }),
+    } as any;
   }
 
   async cancelCustomerOrder(owner: CustomerOwner, id: string, reason?: string) {
@@ -257,9 +202,12 @@ export class OrderService {
     if (existing) return existing;
     const [firstName, ...last] = name.trim().split(/\s+/);
     const user = await users.save(users.create({
+      publicId: await nextPublicId('customer'),
+      accountType: AccountType.CUSTOMER,
+      scopeType: ScopeType.SELF,
       email: normalized, firstName: firstName || '', lastName: last.join(' '),
       role: 'shopper' as any, isActive: true, isEmailVerified: false, isPhoneVerified: false,
-      accountStatus: 'pending_password', originatingGuestId: guestId,
+      accountStatus: AccountStatus.PENDING_PASSWORD, originatingGuestId: guestId,
     }));
     const otps = AppDataSource.getRepository(Otp);
     await Otp.updateMany({ email: normalized, type: 'password_reset', isUsed: false }, { $set: { isUsed: true } });

@@ -2,7 +2,8 @@ import dotenv from 'dotenv';
 import { createApp } from './app';
 import { assertSafeEnvironment } from './config/env';
 import { initializeDatabase } from './config/data-source';
-import { startCommerceJobs } from './services/commerce-jobs.service';
+import { ensurePlatformAccessCatalog } from './services/platform-bootstrap.service';
+import { expireNegotiationsAndQuotes } from './services/negotiation.service';
 
 dotenv.config({ quiet: true });
 
@@ -44,11 +45,17 @@ function printReady(port: number, apiPrefix: string) {
 async function bootstrap() {
   assertSafeEnvironment();
   await initializeDatabase();
+  await ensurePlatformAccessCatalog();
+  const expiryTimer = setInterval(() => {
+    void expireNegotiationsAndQuotes().catch((error) => {
+      console.error('[catalog-expiry] Failed to expire negotiation records', error);
+    });
+  }, 60_000);
+  expiryTimer.unref();
 
   const app = createApp();
   const port = Number(process.env.PORT || 4000);
   const apiPrefix = process.env.API_PREFIX || 'api/v1';
-  startCommerceJobs();
 
   app.listen(port, () => {
     printReady(port, apiPrefix);

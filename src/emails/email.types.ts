@@ -18,6 +18,14 @@ export interface WelcomeEmailPayload {
   name?: string;
 }
 
+export interface AccountInvitationEmailPayload {
+  email: string;
+  name: string;
+  accountType: string;
+  activationUrl: string;
+  expiresInHours: number;
+}
+
 export interface OrderEmailPayload {
   to: string;
   name?: string;

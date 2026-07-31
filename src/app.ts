@@ -11,12 +11,14 @@ import { createAdminRouter } from './routes/admin';
 import { createAuthRouter } from './routes/auth';
 import { createCustomerRouter } from './routes/customer';
 import { createDeviceRouter } from './routes/devices';
-import { createLogisticsRouter } from './routes/logistics';
 import { createPublicRouter } from './routes/public';
 import { createUploadRouter } from './routes/upload';
-import { createVendorRouter } from './routes/vendor';
 import { createWebhookRouter } from './routes/webhooks';
-import { errorHandler, sendSuccess } from './utils/http';
+import { createGuestSessionRouter } from './routes/guest-sessions';
+import { createPartnerRouter, createRunnerRouter } from './routes/platform-self';
+import { createPublicGeographyRouter } from './routes/public-geography';
+import { createCatalogMediaRouter } from './routes/catalog-media';
+import { errorHandler, requestContext, sendError, sendSuccess } from './utils/http';
 
 export function createApp() {
   const app = express();
@@ -27,6 +29,7 @@ export function createApp() {
 
   app.disable('x-powered-by');
   app.set('trust proxy', 1);
+  app.use(requestContext);
   app.use(helmet({
     crossOriginResourcePolicy: { policy: 'cross-origin' },
   }));
@@ -39,6 +42,29 @@ export function createApp() {
     },
     credentials: true,
   }));
+  // Paystack signs the exact request bytes. This route must run before the
+  // global JSON parser so signature verification cannot be affected by
+  // parsing or serialization differences.
+  app.post(`${apiPrefix}/webhooks/paystack`, express.raw({ type: 'application/json', limit: '256kb' }), async (req, res, next) => {
+    try {
+      const { PaymentService } = await import('@services/payment.service');
+      const signature = String(req.header('x-paystack-signature') || '');
+      sendSuccess(res, await new PaymentService().webhook(req.body as Buffer, signature, req.requestId));
+    } catch (error) { next(error); }
+  });
+  app.get(`${apiPrefix}/payments/paystack/callback`, (req, res) => {
+    const reference = String(req.query.reference || req.query.trxref || '');
+    const safeReference = /^[A-Za-z0-9._=-]{1,120}$/.test(reference)
+      ? reference
+      : '';
+    const returnUrl = new URL(
+      process.env.PAYSTACK_APP_RETURN_URL || 'hook://payments/return',
+    );
+    if (safeReference) returnUrl.searchParams.set('reference', safeReference);
+    returnUrl.searchParams.set('source', 'paystack');
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    res.redirect(302, returnUrl.toString());
+  });
   app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '1mb' }));
   app.use(express.urlencoded({ extended: true, limit: process.env.FORM_BODY_LIMIT || '1mb' }));
   app.use(sanitizeRequest);
@@ -52,7 +78,7 @@ export function createApp() {
 
   app.get('/docs-json', (_req, res) => {
     if (!docsEnabled) {
-      res.status(404).json({ success: false, message: 'Route not found', timestamp: new Date().toISOString() });
+      sendError(res, 404, 'NOT_FOUND', 'Route not found');
       return;
     }
     res.setHeader('Cache-Control', 'no-store, max-age=0');
@@ -61,7 +87,7 @@ export function createApp() {
 
   app.get(['/swagger-spec.json', '/docs/swagger-spec.json'], (_req, res) => {
     if (!docsEnabled) {
-      res.status(404).json({ success: false, message: 'Route not found', timestamp: new Date().toISOString() });
+      sendError(res, 404, 'NOT_FOUND', 'Route not found');
       return;
     }
     res.setHeader('Cache-Control', 'no-store, max-age=0');
@@ -70,7 +96,7 @@ export function createApp() {
 
   app.use('/docs', (_req: Request, res: Response, next: NextFunction) => {
     if (!docsEnabled) {
-      res.status(404).json({ success: false, message: 'Route not found', timestamp: new Date().toISOString() });
+      sendError(res, 404, 'NOT_FOUND', 'Route not found');
       return;
     }
     res.setHeader(
@@ -98,10 +124,13 @@ export function createApp() {
   }));
 
   app.use(`${apiPrefix}/auth`, authLimiter, createAuthRouter());
+  app.use(`${apiPrefix}/guest-sessions`, authLimiter, createGuestSessionRouter());
   app.use(`${apiPrefix}/devices`, createDeviceRouter());
   app.use(`${apiPrefix}/admin`, createAdminRouter());
-  app.use(`${apiPrefix}/vendors/me`, createVendorRouter());
-  app.use(`${apiPrefix}/logistics`, createLogisticsRouter());
+  app.use(`${apiPrefix}/runner`, createRunnerRouter());
+  app.use(`${apiPrefix}/partner`, createPartnerRouter());
+  app.use(`${apiPrefix}/catalog/media`, uploadLimiter, createCatalogMediaRouter());
+  app.use(`${apiPrefix}/public`, createPublicGeographyRouter());
   app.use(`${apiPrefix}/upload`, uploadLimiter, createUploadRouter());
   app.use(`${apiPrefix}/webhooks`, createWebhookRouter());
   app.use(apiPrefix, createPublicRouter());
@@ -114,8 +143,8 @@ export function createApp() {
   app.use((_req, res) => {
     res.status(404).json({
       success: false,
-      message: 'Route not found',
-      timestamp: new Date().toISOString(),
+      error: { code: 'NOT_FOUND', message: 'Route not found' },
+      meta: { requestId: _req.requestId, timestamp: new Date().toISOString() },
     });
   });
 

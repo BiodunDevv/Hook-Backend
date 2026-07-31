@@ -1,173 +1,371 @@
-import type { MongoRepository as Repository } from '@lib/mongo-repository';
-import { Cart } from '@models/cart/cart.model';
-import { CartItem } from '@models/cart/cart-item.model';
-import { Product } from '@models/products/product.model';
-import { HttpError } from '@utils/http';
-import { DEFAULT_DELIVERY_FEE } from '@lib/constants';
-import { BoothAccessService } from './booth-access.service';
-import { BoothInventory } from '@models/booths/booth-inventory.model';
-import { Booth } from '@models/booths/booth.model';
-import { normalizeProductColor, normalizeProductColors } from '@lib/product-color';
+import {
+  NegotiatedQuoteStatus,
+  ProductAvailabilityStatus,
+  ProductStatus,
+} from "@lib/constants";
+import type { MongoRepository as Repository } from "@lib/mongo-repository";
+import { Cart } from "@models/cart/cart.model";
+import { CartItem } from "@models/cart/cart-item.model";
+import { NegotiatedQuote, ProductVariant } from "@models/catalog/catalog.model";
+import { Product } from "@models/products/product.model";
+import { nextPublicId } from "@services/public-id.service";
+import { HttpError } from "@utils/http";
+import { Types } from "mongoose";
 
-export type CustomerOwner = { userId?: string; guestId?: string };
+function identifierFilter(identifier: string) {
+  return Types.ObjectId.isValid(identifier)
+    ? { $or: [{ _id: identifier }, { publicId: identifier }] }
+    : { publicId: identifier };
+}
+
+export type CustomerOwner = {
+  userId?: string;
+  guestSessionId?: string;
+  partnerId?: string;
+  assistedCustomerId?: string;
+  /** Historical checkout compatibility only. */
+  guestId?: string;
+};
 
 export class CartService {
-  private readonly boothAccess = new BoothAccessService();
   constructor(
-    private readonly carts: Repository<Cart>,
-    private readonly items: Repository<CartItem>,
-    private readonly products: Repository<Product>,
+    _carts?: Repository<Cart>,
+    _items?: Repository<CartItem>,
+    _products?: Repository<Product>,
   ) {}
 
-  async getCart(owner: CustomerOwner, boothSessionToken?: string) {
-    const where = this.ownerWhere(owner);
-    let cart: any = await this.carts.findOne({
-      where: { ...where, isCheckedOut: false },
-      relations: { items: { product: true } },
+  async getCart(owner: CustomerOwner) {
+    const ownerFilter = this.ownerWhere(owner);
+    let cart = await Cart.findOne({
+      ...ownerFilter,
+      status: "active",
+      isCheckedOut: false,
     });
     if (!cart) {
-      cart = await this.carts.save(this.carts.create({ ...where, subtotal: 0, deliveryFee: 0, total: 0 }));
-      cart.items = [];
+      cart = await Cart.create({
+        publicId: await nextPublicId("cart"),
+        ...ownerFilter,
+        ownerType: owner.partnerId
+          ? "partner_assisted"
+          : owner.userId
+            ? "customer"
+            : "guest",
+        subtotal: 0,
+        deliveryFee: 0,
+        total: 0,
+        version: 1,
+        status: "active",
+        isCheckedOut: false,
+      });
     }
-    cart.items = cart.items || await this.items.find({ where: { cartId: cart.id }, relations: { product: true } });
-    return this.enrichCart(cart, boothSessionToken);
+    return this.recalculate(cart.id);
   }
 
-  async addItem(owner: CustomerOwner, productId: string, quantity: number, selectedVariants?: CartItem['selectedVariants'], boothSessionToken?: string) {
-    const product = await this.products.findOne({ where: { id: productId } });
-    if (!product) throw new HttpError(404, 'Product not found');
-    const availableQuantity = Math.max(0, product.quantity - Number(product.reservedQuantity || 0));
-    if (availableQuantity < quantity) throw new HttpError(400, 'Insufficient stock for this product');
-    this.validateVariants(product, selectedVariants);
+  async addItem(
+    owner: CustomerOwner,
+    productIdentifier: string,
+    quantity: number,
+    selectedVariants?: { color?: string; size?: string },
+    variantId?: string,
+    quoteId?: string,
+  ) {
+    const product = await Product.findOne({
+      ...identifierFilter(productIdentifier),
+      status: ProductStatus.PUBLISHED,
+      availabilityStatus: {
+        $in: [
+          ProductAvailabilityStatus.AVAILABLE,
+          ProductAvailabilityStatus.LIMITED,
+        ],
+      },
+      deletedAt: null,
+    }).lean({ virtuals: true });
+    if (!product)
+      throw new HttpError(
+        404,
+        "Product is not available",
+        undefined,
+        "PRODUCT_NOT_AVAILABLE",
+      );
+    const productId = product._id.toString();
+    if (
+      !product.marketId ||
+      !product.sourceStateId ||
+      !product.sellingPriceMinor
+    ) {
+      throw new HttpError(
+        409,
+        "Product commerce data is incomplete",
+        undefined,
+        "PRODUCT_NOT_AVAILABLE",
+      );
+    }
+    if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > 99) {
+      throw new HttpError(
+        400,
+        "Quantity must be between 1 and 99",
+        undefined,
+        "VALIDATION_ERROR",
+      );
+    }
+    const variant = variantId
+      ? await ProductVariant.findOne({
+          ...identifierFilter(variantId),
+          productId,
+          active: true,
+        }).lean({ virtuals: true })
+      : null;
+    if (variantId && !variant)
+      throw new HttpError(
+        409,
+        "Selected product option is unavailable",
+        undefined,
+        "PRODUCT_VARIANT_UNAVAILABLE",
+      );
+
+    let quote = null;
+    if (quoteId) {
+      quote = await NegotiatedQuote.findOne({
+        ...identifierFilter(quoteId),
+        productId,
+        customerId: owner.userId,
+        status: NegotiatedQuoteStatus.ACTIVE,
+        expiresAt: { $gt: new Date() },
+        quantity,
+        ...(variant ? { variantId: variant.id } : {}),
+      }).lean({ virtuals: true });
+      if (!quote)
+        throw new HttpError(
+          409,
+          "Negotiated quote is invalid or expired",
+          undefined,
+          "NEGOTIATION_QUOTE_EXPIRED",
+        );
+    }
 
     const cart = await this.getCart(owner);
-    if (boothSessionToken) {
-      const session = this.boothAccess.verifySession(boothSessionToken);
-      await this.boothAccess.assertCurrent(session);
-      if (cart.boothId && cart.boothId !== session.boothId && (cart.items || []).length) {
-        throw new HttpError(409, 'Your cart belongs to another booth. Clear it before switching booths.');
-      }
-      const assigned = await BoothInventory.exists({ boothId: session.boothId, productId, isActive: true });
-      if (!assigned) throw new HttpError(409, 'This product is not available from the selected booth');
-      cart.boothId = session.boothId;
-      cart.boothSessionVersion = session.version;
-      cart.boothSource = session.source;
-      await this.carts.save(cart);
-    } else if (cart.boothId) {
-      throw new HttpError(401, 'A valid booth session is required for this cart');
-    }
-    const variantKey = this.variantKey(selectedVariants);
-    const existing = (cart.items || []).find((item: any) => item.productId === productId && (item.variantKey || 'default') === variantKey);
-    const unitPrice = product.discountedPrice || product.sellingPrice;
-
+    const cartId = String(cart._id || cart.id);
+    const variantKey = variant?._id.toString() || this.variantKey(selectedVariants);
+    const unitPriceMinor = Number(
+      quote?.agreedPriceMinor ??
+        product.sellingPriceMinor - Number(product.discountMinor || 0),
+    );
+    const existing = await CartItem.findOne({
+      cartId,
+      productId,
+      variantKey,
+    });
     if (existing) {
-      if (availableQuantity < existing.quantity + quantity) throw new HttpError(400, 'Insufficient stock for the requested quantity');
-      existing.quantity += quantity;
-      existing.totalPrice = existing.quantity * existing.unitPrice;
-      existing.selectedVariants = selectedVariants ?? existing.selectedVariants;
-      await this.items.save(existing);
+      const nextQuantity = existing.quantity + quantity;
+      if (nextQuantity > 99)
+        throw new HttpError(
+          400,
+          "Quantity cannot exceed 99",
+          undefined,
+          "VALIDATION_ERROR",
+        );
+      if (existing.quoteId && nextQuantity !== quote?.quantity) {
+        existing.quoteId = undefined;
+        existing.quoteVersion = undefined;
+        existing.unitPriceMinor = Number(
+          product.sellingPriceMinor - Number(product.discountMinor || 0),
+        );
+      }
+      existing.quantity = nextQuantity;
+      existing.totalPriceMinor =
+        nextQuantity * Number(existing.unitPriceMinor || unitPriceMinor);
+      existing.unitPrice =
+        Number(existing.unitPriceMinor || unitPriceMinor) / 100;
+      existing.totalPrice = Number(existing.totalPriceMinor) / 100;
+      await existing.save();
     } else {
-      await this.items.save(this.items.create({
-        cartId: cart.id,
+      await CartItem.create({
+        publicId: await nextPublicId("cartItem"),
+        cartId,
         productId,
+        variantId: variant?._id.toString(),
+        marketId: product.marketId,
+        stateId: product.sourceStateId,
+        quoteId: quote?._id.toString(),
         quantity,
-        unitPrice,
-        totalPrice: unitPrice * quantity,
-        selectedVariants,
+        unitPriceMinor,
+        totalPriceMinor: unitPriceMinor * quantity,
+        currency: product.currency || "NGN",
+        unitPrice: unitPriceMinor / 100,
+        totalPrice: (unitPriceMinor * quantity) / 100,
+        productVersion: product.catalogVersion || 1,
+        quoteVersion: quote?.version || undefined,
+        selectedVariants: variant
+          ? { color: variant.colour, size: variant.size }
+          : selectedVariants,
         variantKey,
-      }));
+      });
     }
-
-    return this.recalculate(cart.id);
+    await Cart.findByIdAndUpdate(cartId, { $inc: { version: 1 } });
+    return this.recalculate(cartId);
   }
 
   async updateItem(owner: CustomerOwner, itemId: string, quantity: number) {
     const cart = await this.getCart(owner);
-    const item = await this.items.findOne({ where: { id: itemId, cartId: cart.id } });
-    if (!item) throw new HttpError(404, 'Cart item not found');
-    const product = await this.products.findOne({ where: { id: item.productId } });
-    if (!product) throw new HttpError(409, 'This product is no longer available');
-    const availableQuantity = Math.max(0, product.quantity - Number(product.reservedQuantity || 0));
-    if (quantity > availableQuantity) throw new HttpError(400, `Only ${availableQuantity} item${availableQuantity === 1 ? '' : 's'} available`);
-    if (cart.boothId && !(await BoothInventory.exists({ boothId: cart.boothId, productId: item.productId, isActive: true }))) {
-      throw new HttpError(409, 'This product is no longer available from the selected booth');
+    const cartId = String(cart._id || cart.id);
+    if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > 99)
+      throw new HttpError(400, "Quantity must be between 1 and 99");
+    const item = await CartItem.findOne({
+      ...identifierFilter(itemId),
+      cartId,
+    });
+    if (!item) throw new HttpError(404, "Cart item not found");
+    const product = await Product.findById(item.productId).lean();
+    if (!product || product.status !== ProductStatus.PUBLISHED)
+      throw new HttpError(
+        409,
+        "Product is no longer available",
+        undefined,
+        "PRODUCT_NOT_AVAILABLE",
+      );
+    if (item.quoteId && item.quantity !== quantity) {
+      item.quoteId = undefined;
+      item.quoteVersion = undefined;
+      item.unitPriceMinor =
+        Number(product.sellingPriceMinor || 0) -
+        Number(product.discountMinor || 0);
     }
     item.quantity = quantity;
-    item.totalPrice = quantity * item.unitPrice;
-    await this.items.save(item);
-    return this.recalculate(cart.id);
+    item.totalPriceMinor = quantity * Number(item.unitPriceMinor || 0);
+    item.unitPrice = Number(item.unitPriceMinor || 0) / 100;
+    item.totalPrice = Number(item.totalPriceMinor || 0) / 100;
+    await item.save();
+    await Cart.findByIdAndUpdate(cartId, { $inc: { version: 1 } });
+    return this.recalculate(cartId);
   }
 
   async removeItem(owner: CustomerOwner, itemId: string) {
     const cart = await this.getCart(owner);
-    await this.items.delete({ id: itemId, cartId: cart.id });
-    return this.recalculate(cart.id);
+    const cartId = String(cart._id || cart.id);
+    const removed = await CartItem.findOneAndDelete({
+      ...identifierFilter(itemId),
+      cartId,
+    });
+    if (!removed) throw new HttpError(404, "Cart item not found");
+    await Cart.findByIdAndUpdate(cartId, { $inc: { version: 1 } });
+    return this.recalculate(cartId);
   }
 
-  async clear(owner: CustomerOwner) {
+  async clear(owner: CustomerOwner, stateId?: string) {
     const cart = await this.getCart(owner);
-    await this.items.delete({ cartId: cart.id });
-    cart.boothId = undefined;
-    cart.boothSessionVersion = undefined;
-    cart.boothSource = undefined;
-    await this.carts.save(cart);
-    return this.recalculate(cart.id);
+    const cartId = String(cart._id || cart.id);
+    await CartItem.deleteMany({
+      cartId,
+      ...(stateId ? { stateId } : {}),
+    });
+    await Cart.findByIdAndUpdate(cartId, { $inc: { version: 1 } });
+    return this.recalculate(cartId);
   }
 
   async recalculate(cartId: string) {
-    const cart = await this.carts.findOne({
-      where: { id: cartId },
-      relations: { items: { product: true } },
+    const cart = await Cart.findById(cartId).lean({ virtuals: true });
+    if (!cart) throw new HttpError(404, "Cart not found");
+    const items = await CartItem.find({ cartId })
+      .sort({ createdAt: 1 })
+      .lean({ virtuals: true });
+    const productIds = [...new Set(items.map((item) => item.productId))];
+    const products = await Product.find({ _id: { $in: productIds } }).lean({
+      virtuals: true,
     });
-    if (!cart) throw new HttpError(404, 'Cart not found');
-    cart.items = cart.items || [];
-    cart.subtotal = cart.items.reduce((sum, item) => sum + item.totalPrice, 0);
-    cart.deliveryFee = cart.items.length ? Number(process.env.DEFAULT_DELIVERY_FEE || DEFAULT_DELIVERY_FEE) : 0;
-    cart.total = cart.subtotal + cart.deliveryFee;
-    await this.carts.save(cart);
-    return this.enrichCart(cart);
-  }
-
-  private variantKey(selected?: CartItem['selectedVariants']) {
-    const color = String(selected?.color || '').trim().toLowerCase();
-    const size = String(selected?.size || '').trim().toLowerCase();
-    return color || size ? `${color || '-'}::${size || '-'}` : 'default';
-  }
-
-  private validateVariants(product: Product, selected?: CartItem['selectedVariants']) {
-    if (product.colors?.length && !selected?.color) throw new HttpError(400, 'Choose a product color');
-    if (product.sizes?.length && !selected?.size) throw new HttpError(400, 'Choose a product size');
-    if (selected?.color && product.colors?.length && !normalizeProductColors(product.colors).includes(normalizeProductColor(selected.color) || '')) throw new HttpError(400, 'Selected color is unavailable');
-    if (selected?.size && product.sizes?.length && !product.sizes.map((value) => value.toLowerCase()).includes(selected.size.toLowerCase())) throw new HttpError(400, 'Selected size is unavailable');
-  }
-
-  private async enrichCart(cart: any, boothSessionToken?: string) {
-    const items = (cart.items || []).map((item: any) => {
-      const product = item.product;
-      const availableQuantity = product ? Math.max(0, Number(product.quantity || 0) - Number(product.reservedQuantity || 0)) : 0;
-      return { ...item, variantKey: item.variantKey || 'default', availableQuantity, isAvailable: Boolean(product && availableQuantity >= item.quantity) };
+    const productMap = new Map(
+      products.map((product) => [product._id.toString(), product]),
+    );
+    const enriched = items.map((item) => {
+      const product = productMap.get(item.productId);
+      const blockingReasons: string[] = [];
+      if (!product || product.status !== ProductStatus.PUBLISHED)
+        blockingReasons.push("PRODUCT_NOT_AVAILABLE");
+      if (product && product.catalogVersion !== item.productVersion)
+        blockingReasons.push("PRODUCT_CHANGED");
+      return {
+        ...item,
+        product: product ? this.publicProduct(product) : undefined,
+        blockingReasons,
+        checkoutEligible: blockingReasons.length === 0,
+      };
     });
-    let booth: any;
-    let boothSessionValid = false;
-    if (cart.boothId) {
-      const row = await Booth.findById(cart.boothId).lean({ virtuals: true });
-      if (row) booth = { id: String(row._id), name: row.name, previewImageUrl: row.previewImageUrl, location: row.location, isActive: row.isActive };
-      if (boothSessionToken) {
-        try {
-          const session = this.boothAccess.verifySession(boothSessionToken);
-          await this.boothAccess.assertCurrent(session);
-          boothSessionValid = session.boothId === cart.boothId;
-        } catch {
-          boothSessionValid = false;
-        }
-      }
-    }
-    return { ...cart, items, booth, boothSessionValid, unavailableItemCount: items.filter((item: any) => !item.isAvailable).length };
+    const groups = [
+      ...new Set(enriched.map((item) => item.stateId).filter(Boolean)),
+    ].map((stateId) => {
+      const groupItems = enriched.filter((item) => item.stateId === stateId);
+      const subtotalMinor = groupItems.reduce(
+        (sum, item) => sum + Number(item.totalPriceMinor || 0),
+        0,
+      );
+      const blockingReasons = [
+        ...new Set(groupItems.flatMap((item) => item.blockingReasons)),
+      ];
+      return {
+        stateId,
+        items: groupItems,
+        subtotalMinor,
+        currency: "NGN",
+        checkoutEligible: blockingReasons.length === 0,
+        blockingReasons,
+      };
+    });
+    const subtotalMinor = enriched.reduce(
+      (sum, item) => sum + Number(item.totalPriceMinor || 0),
+      0,
+    );
+    await Cart.findByIdAndUpdate(cartId, {
+      subtotal: subtotalMinor / 100,
+      deliveryFee: 0,
+      total: subtotalMinor / 100,
+    });
+    return {
+      ...cart,
+      items: enriched,
+      stateGroups: groups,
+      subtotalMinor,
+      currency: "NGN",
+      itemCount: enriched.reduce((sum, item) => sum + item.quantity, 0),
+    };
+  }
+
+  private publicProduct(product: any) {
+    return {
+      id: product.publicId || product.id,
+      publicId: product.publicId,
+      title: product.title,
+      slug: product.slug,
+      images: product.images || [],
+      sellingPriceMinor: product.sellingPriceMinor,
+      discountMinor: product.discountMinor || 0,
+      currency: product.currency || "NGN",
+      status: product.status,
+      catalogVersion: product.catalogVersion,
+    };
+  }
+
+  private variantKey(selected?: { color?: string; size?: string }) {
+    const color = String(selected?.color || "")
+      .trim()
+      .toLowerCase();
+    const size = String(selected?.size || "")
+      .trim()
+      .toLowerCase();
+    return color || size ? `${color || "-"}::${size || "-"}` : "default";
   }
 
   private ownerWhere(owner: CustomerOwner) {
-    if (owner.userId) return { userId: owner.userId };
-    if (owner.guestId) return { guestId: owner.guestId };
-    throw new HttpError(401, 'Authentication or guest session required');
+    if (owner.partnerId && owner.assistedCustomerId)
+      return {
+        partnerId: owner.partnerId,
+        assistedCustomerId: owner.assistedCustomerId,
+      };
+    if (owner.userId) return { customerId: owner.userId };
+    if (owner.guestSessionId) return { guestSessionId: owner.guestSessionId };
+    throw new HttpError(
+      401,
+      "Customer or guest session required",
+      undefined,
+      "AUTHENTICATION_REQUIRED",
+    );
   }
 }

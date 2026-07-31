@@ -1,4 +1,4 @@
-import { UserRole } from '@lib/constants';
+import { AccountType, ScopeType, UserRole } from '@lib/constants';
 
 declare global {
   namespace Express {
@@ -6,12 +6,25 @@ declare global {
       sub: string;
       email: string;
       role: UserRole;
+      accountType?: AccountType;
+      publicId?: string;
+      roleKeys?: string[];
+      scopeType?: ScopeType;
+      assignedStateIds?: string[];
+      assignedHubIds?: string[];
+      sid?: string;
       permissions: string[];
     }
 
     interface Request {
       user?: User;
       guestId?: string;
+      guestSessionId?: string;
+      requestId?: string;
+      platformContext?: {
+        stateId?: string;
+        hubId?: string;
+      };
     }
   }
 }

@@ -17,13 +17,20 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:e2e": "jest --config ./test/jest-e2e.json",
-    "seed": "TS_NODE_FILES=true ts-node -r tsconfig-paths/register src/database/seeds/runner.ts",
-    "seed:dev": "NODE_ENV=development TS_NODE_FILES=true ts-node -r tsconfig-paths/register src/database/seeds/runner.ts",
-    "migrate:cart-variants": "TS_NODE_FILES=true ts-node -r tsconfig-paths/register src/database/migrations/cart-variant-index.ts",
-    "migrate:product-colors": "TS_NODE_FILES=true ts-node -r tsconfig-paths/register src/database/migrations/product-colors.ts"
+    "test:phase2:integration": "TS_NODE_FILES=true ts-node -r tsconfig-paths/register src/database/validation/phase-02-integration.ts",
+    "test:phase2:http": "TS_NODE_FILES=true TS_NODE_TRANSPILE_ONLY=true ts-node -r tsconfig-paths/register src/database/validation/phase-02-http-e2e.ts",
+    "seed": "npm run seed:base && npm run seed:platform && npm run seed:catalog-foundation && npm run seed:phase3 && npm run seed:commerce-foundation && npm run seed:phase4",
+    "seed:base": "TS_NODE_FILES=true TS_NODE_TRANSPILE_ONLY=true ts-node -r tsconfig-paths/register src/database/seeds/runner.ts",
+    "seed:platform": "TS_NODE_FILES=true TS_NODE_TRANSPILE_ONLY=true ts-node -r tsconfig-paths/register src/database/seeds/platform-foundation.ts",
+    "seed:catalog-foundation": "TS_NODE_FILES=true TS_NODE_TRANSPILE_ONLY=true ts-node -r tsconfig-paths/register src/database/seeds/catalog-foundation.ts",
+    "seed:phase3": "TS_NODE_FILES=true TS_NODE_TRANSPILE_ONLY=true ts-node -r tsconfig-paths/register src/database/seeds/phase-03-fixtures.ts",
+    "seed:commerce-foundation": "TS_NODE_FILES=true TS_NODE_TRANSPILE_ONLY=true ts-node -r tsconfig-paths/register src/database/seeds/commerce-foundation.ts",
+    "seed:phase4": "TS_NODE_FILES=true TS_NODE_TRANSPILE_ONLY=true ts-node -r tsconfig-paths/register src/database/seeds/phase-04-fixtures.ts",
+    "seed:dev": "NODE_ENV=development npm run seed"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
+    "cloudinary": "^2.10.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
@@ -33,6 +40,7 @@
     "mongoose": "^9.7.3",
     "morgan": "^1.11.0",
     "multer": "^2.2.0",
+    "openai": "^6.49.0",
     "swagger-ui-dist": "^5.32.8",
     "swagger-ui-express": "^5.0.1",
     "tsconfig-paths": "^4.2.0",
@@ -41,6 +49,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/jest": "^30.0.0",

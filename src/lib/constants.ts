@@ -3,6 +3,8 @@
 // ============================================================
 export enum UserRole {
   SHOPPER = 'shopper',
+  // Persisted compatibility values. Active product code uses Runner and
+  // external Logistics Provider terminology.
   VENDOR = 'vendor',
   FIELD_AGENT = 'field_agent',
   EV_DRIVER = 'ev_driver',
@@ -11,24 +13,96 @@ export enum UserRole {
   SUPER_ADMIN = 'super_admin',
 }
 
+export enum AccountType {
+  CUSTOMER = 'customer',
+  STAFF = 'staff',
+  RUNNER = 'runner',
+  PARTNER = 'partner',
+}
+
+export enum AccountStatus {
+  INVITED = 'invited',
+  ACTIVE = 'active',
+  SUSPENDED = 'suspended',
+  DISABLED = 'disabled',
+  PENDING_PASSWORD = 'pending_password',
+  DELETION_REQUESTED = 'deletion_requested',
+  ANONYMIZED = 'anonymized',
+}
+
+export enum ScopeType {
+  GLOBAL = 'global',
+  MULTI_STATE = 'multi_state',
+  SINGLE_STATE = 'single_state',
+  HUB = 'hub',
+  SELF = 'self',
+}
+
+export const PLATFORM_ROLE_KEYS = [
+  'SUPER_ADMIN',
+  'OPERATIONS_LEAD',
+  'STATE_OPERATIONS_MANAGER',
+  'COMMERCIAL_MANAGER',
+  'COMMERCIAL_OFFICER',
+  'CATALOG_REVIEWER',
+  'DISPATCH_HUB_MANAGER',
+  'DISPATCH_HUB_OFFICER',
+  'LOGISTICS_OFFICER',
+  'CUSTOMER_SUPPORT_OFFICER',
+  'FINANCE_OFFICER',
+  'MANAGEMENT_VIEWER',
+] as const;
+
+export type PlatformRoleKey = (typeof PLATFORM_ROLE_KEYS)[number];
+
 // ============================================================
 // Order lifecycle
 // ============================================================
 export enum OrderStatus {
+  VERIFICATION_PENDING = 'verification_pending',
+  OPERATIONS_REVIEW = 'operations_review',
+  APPROVED_FOR_FULFILMENT = 'approved_for_fulfilment',
   AWAITING_PAYMENT = 'awaiting_payment',
   PENDING = 'pending',
   CONFIRMED = 'confirmed',
   SHIPPED = 'shipped',
-  // Legacy aliases keep older callers source-compatible while the public
-  // lifecycle remains pending -> confirmed -> shipped -> delivered.
-  PROCESSING = 'confirmed',
-  PACKED = 'confirmed',
-  PICKED_UP = 'shipped',
-  IN_TRANSIT = 'shipped',
   DELIVERED = 'delivered',
   CANCELLED = 'cancelled',
   RETURNED = 'returned',
   REFUNDED = 'refunded',
+}
+
+export enum CommercePaymentMethod {
+  PREPAID = 'PREPAID',
+  PAY_AT_HANDOVER = 'PAY_AT_HANDOVER',
+}
+
+export enum CommercePaymentStatus {
+  PENDING = 'PENDING',
+  PROCESSING = 'PROCESSING',
+  CONFIRMED = 'CONFIRMED',
+  FAILED = 'FAILED',
+  DUE_AT_HANDOVER = 'DUE_AT_HANDOVER',
+  REFUND_PENDING = 'REFUND_PENDING',
+  REFUNDED = 'REFUNDED',
+}
+
+export enum CommerceOrderStatus {
+  AWAITING_PAYMENT = 'AWAITING_PAYMENT',
+  VERIFICATION_PENDING = 'VERIFICATION_PENDING',
+  OPERATIONS_REVIEW = 'OPERATIONS_REVIEW',
+  APPROVED_FOR_FULFILMENT = 'APPROVED_FOR_FULFILMENT',
+  CANCELLED = 'CANCELLED',
+}
+
+export enum CommerceChannel {
+  SHOPPER_APP = 'SHOPPER_APP',
+  PARTNER_ASSISTED = 'PARTNER_ASSISTED',
+}
+
+export enum DeliveryMethod {
+  HOME_DELIVERY = 'HOME_DELIVERY',
+  PARTNER_PICKUP = 'PARTNER_PICKUP',
 }
 
 export enum PaymentMode {
@@ -41,6 +115,7 @@ export enum OrderType {
   GIFT = 'gift',
 }
 
+/** @deprecated Vendor fulfilment is retained for historical records only. */
 export enum VendorFulfilmentStatus {
   AWAITING_CONFIRMATION = 'awaiting_confirmation',
   CONFIRMED = 'confirmed',
@@ -70,9 +145,12 @@ export enum PaymentStatus {
 
 export enum NegotiationStatus {
   ACTIVE = 'active',
+  AGREED = 'agreed',
+  /** @deprecated Retained while legacy negotiation records are migrated. */
   ACCEPTED = 'accepted',
   DECLINED = 'declined',
   EXPIRED = 'expired',
+  CLOSED = 'closed',
   WITHDRAWN = 'withdrawn',
 }
 
@@ -89,13 +167,43 @@ export enum LogisticsStatus {
 
 export enum ProductStatus {
   DRAFT = 'draft',
+  PUBLISHED = 'published',
+  PAUSED = 'paused',
+  AVAILABILITY_UNCONFIRMED = 'availability_unconfirmed',
+  UNPUBLISHED = 'unpublished',
+  /** @deprecated Legacy catalog workflow status. */
   PENDING_APPROVAL = 'pending_approval',
+  /** @deprecated Legacy published status. */
   APPROVED = 'approved',
   REJECTED = 'rejected',
   DISABLED = 'disabled',
   SOLD_OUT = 'sold_out',
 }
 
+export enum ProductSubmissionStatus {
+  DRAFT = 'draft',
+  SUBMITTED = 'submitted',
+  IN_REVIEW = 'in_review',
+  CHANGES_REQUESTED = 'changes_requested',
+  APPROVED = 'approved',
+  REJECTED = 'rejected',
+}
+
+export enum ProductAvailabilityStatus {
+  AVAILABLE = 'available',
+  LIMITED = 'limited',
+  UNAVAILABLE = 'unavailable',
+  UNCONFIRMED = 'unconfirmed',
+}
+
+export enum NegotiatedQuoteStatus {
+  ACTIVE = 'active',
+  USED = 'used',
+  EXPIRED = 'expired',
+  CANCELLED = 'cancelled',
+}
+
+/** @deprecated Vendor tiers are retained for legacy product/source records. */
 export enum VendorTier {
   TIER_1 = 'tier_1', // Major retailers — full IMS/API integration
   TIER_2 = 'tier_2', // Independent boutiques — vendor portal
@@ -109,6 +217,7 @@ export enum SettlementStatus {
   FAILED = 'failed',
 }
 
+/** @deprecated Booth records are retained pending Hook Partner migration. */
 export enum BoothType {
   PHYGITAL = 'phygital',
   MICRO_HUB = 'micro_hub',
@@ -127,5 +236,7 @@ export const VENDOR_COMMISSION_PERCENTAGE = 15;
 export const ESCROW_HOLD_HOURS = 24;
 export const DELIVERY_SLA_HOURS = 24;
 export const DEFAULT_DELIVERY_FEE = 3000;
+export const DEFAULT_DELIVERY_FEE_MINOR = 300000;
+export const DEFAULT_POD_LIMIT_MINOR = 10000000;
 export const VENDOR_CONFIRMATION_HOURS = 2;
 export const GIFT_EXPIRY_DAYS = 7;

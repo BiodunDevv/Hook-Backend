@@ -1,6 +1,14 @@
-import { BaseEntity, createModel, createSchema } from '@models/base.model';
+import { BaseEntity, createModel, createSchema } from "@models/base.model";
 
 export interface Cart extends BaseEntity {
+  publicId?: string;
+  ownerType?: "guest" | "customer" | "partner_assisted";
+  customerId?: string;
+  guestSessionId?: string;
+  partnerId?: string;
+  assistedCustomerId?: string;
+  version?: number;
+  status?: "active" | "converted" | "checked_out" | "abandoned";
   userId?: string;
   guestId?: string;
   items?: any[];
@@ -10,11 +18,29 @@ export interface Cart extends BaseEntity {
   isCheckedOut: boolean;
   boothId?: string;
   boothSessionVersion?: number;
-  boothSource?: 'code' | 'qr';
+  boothSource?: "code" | "qr";
   user?: any;
+  commerceMigrationVersion?: number;
 }
 
 const CartSchema = createSchema<Cart>({
+  publicId: { type: String, unique: true, sparse: true, index: true },
+  ownerType: {
+    type: String,
+    enum: ["guest", "customer", "partner_assisted"],
+    index: true,
+  },
+  customerId: { type: String, index: true, sparse: true },
+  guestSessionId: { type: String, index: true, sparse: true },
+  partnerId: { type: String, index: true, sparse: true },
+  assistedCustomerId: { type: String, index: true, sparse: true },
+  version: { type: Number, default: 1, min: 1 },
+  status: {
+    type: String,
+    enum: ["active", "converted", "checked_out", "abandoned"],
+    default: "active",
+    index: true,
+  },
   userId: { type: String, index: true },
   guestId: { type: String, index: true },
   subtotal: { type: Number, default: 0 },
@@ -23,11 +49,20 @@ const CartSchema = createSchema<Cart>({
   isCheckedOut: { type: Boolean, default: false },
   boothId: { type: String, index: true },
   boothSessionVersion: { type: Number },
-  boothSource: { type: String, enum: ['code', 'qr'] },
+  boothSource: { type: String, enum: ["code", "qr"] },
+  commerceMigrationVersion: { type: Number, index: true },
   deletedAt: { type: Date },
 });
 
 CartSchema.index({ userId: 1, isCheckedOut: 1 });
 CartSchema.index({ guestId: 1, isCheckedOut: 1 });
+CartSchema.index({ ownerType: 1, customerId: 1, status: 1 });
+CartSchema.index({ ownerType: 1, guestSessionId: 1, status: 1 });
+CartSchema.index({
+  ownerType: 1,
+  partnerId: 1,
+  assistedCustomerId: 1,
+  status: 1,
+});
 
-export const Cart = createModel<Cart>('Cart', CartSchema);
+export const Cart = createModel<Cart>("Cart", CartSchema);

@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { UserRole } from '@lib/constants';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
 import { adminRepos, actor, routeParam } from './admin.helpers';
+import { nextPublicId } from '@services/public-id.service';
 
 const MANAGER_ROLES: UserRole[] = [UserRole.SUPPORT, UserRole.ADMIN];
 
@@ -90,6 +91,7 @@ export class AdminCategoriesController {
     if (existing) throw new HttpError(400, `A category named "${existing.name}" already exists`);
 
     const category = await categories.save(categories.create({
+      publicId: await nextPublicId('category'),
       name,
       slug,
       description: req.body.description || '',

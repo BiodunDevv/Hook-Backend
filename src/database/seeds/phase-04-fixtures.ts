@@ -92,7 +92,8 @@ async function main() {
     : null;
   if (!city || !zone)
     throw new Error("Phase 4 fixtures require an active Lagos city and zone");
-  const email = "customer@hook.test";
+  // Paystack rejects reserved test TLDs such as `.test` during initialization.
+  const email = "qa.customer@hook.ng";
   const customer = await User.findOneAndUpdate(
     { email },
     {

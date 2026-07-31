@@ -10,6 +10,13 @@ import { NegotiatedQuote, ProductVariant } from "@models/catalog/catalog.model";
 import { Product } from "@models/products/product.model";
 import { nextPublicId } from "@services/public-id.service";
 import { HttpError } from "@utils/http";
+import { Types } from "mongoose";
+
+function identifierFilter(identifier: string) {
+  return Types.ObjectId.isValid(identifier)
+    ? { $or: [{ _id: identifier }, { publicId: identifier }] }
+    : { publicId: identifier };
+}
 
 export type CustomerOwner = {
   userId?: string;
@@ -63,7 +70,7 @@ export class CartService {
     quoteId?: string,
   ) {
     const product = await Product.findOne({
-      $or: [{ _id: productIdentifier }, { publicId: productIdentifier }],
+      ...identifierFilter(productIdentifier),
       status: ProductStatus.PUBLISHED,
       availabilityStatus: {
         $in: [
@@ -80,6 +87,7 @@ export class CartService {
         undefined,
         "PRODUCT_NOT_AVAILABLE",
       );
+    const productId = product._id.toString();
     if (
       !product.marketId ||
       !product.sourceStateId ||
@@ -102,8 +110,8 @@ export class CartService {
     }
     const variant = variantId
       ? await ProductVariant.findOne({
-          $or: [{ _id: variantId }, { publicId: variantId }],
-          productId: product.id,
+          ...identifierFilter(variantId),
+          productId,
           active: true,
         }).lean({ virtuals: true })
       : null;
@@ -118,8 +126,8 @@ export class CartService {
     let quote = null;
     if (quoteId) {
       quote = await NegotiatedQuote.findOne({
-        $or: [{ _id: quoteId }, { publicId: quoteId }],
-        productId: product.id,
+        ...identifierFilter(quoteId),
+        productId,
         customerId: owner.userId,
         status: NegotiatedQuoteStatus.ACTIVE,
         expiresAt: { $gt: new Date() },
@@ -136,14 +144,15 @@ export class CartService {
     }
 
     const cart = await this.getCart(owner);
-    const variantKey = variant?.id || this.variantKey(selectedVariants);
+    const cartId = String(cart._id || cart.id);
+    const variantKey = variant?._id.toString() || this.variantKey(selectedVariants);
     const unitPriceMinor = Number(
       quote?.agreedPriceMinor ??
         product.sellingPriceMinor - Number(product.discountMinor || 0),
     );
     const existing = await CartItem.findOne({
-      cartId: cart.id,
-      productId: product.id,
+      cartId,
+      productId,
       variantKey,
     });
     if (existing) {
@@ -172,12 +181,12 @@ export class CartService {
     } else {
       await CartItem.create({
         publicId: await nextPublicId("cartItem"),
-        cartId: cart.id,
-        productId: product.id,
-        variantId: variant?.id,
+        cartId,
+        productId,
+        variantId: variant?._id.toString(),
         marketId: product.marketId,
         stateId: product.sourceStateId,
-        quoteId: quote?.id,
+        quoteId: quote?._id.toString(),
         quantity,
         unitPriceMinor,
         totalPriceMinor: unitPriceMinor * quantity,
@@ -192,17 +201,18 @@ export class CartService {
         variantKey,
       });
     }
-    await Cart.findByIdAndUpdate(cart.id, { $inc: { version: 1 } });
-    return this.recalculate(cart.id);
+    await Cart.findByIdAndUpdate(cartId, { $inc: { version: 1 } });
+    return this.recalculate(cartId);
   }
 
   async updateItem(owner: CustomerOwner, itemId: string, quantity: number) {
     const cart = await this.getCart(owner);
+    const cartId = String(cart._id || cart.id);
     if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > 99)
       throw new HttpError(400, "Quantity must be between 1 and 99");
     const item = await CartItem.findOne({
-      $or: [{ _id: itemId }, { publicId: itemId }],
-      cartId: cart.id,
+      ...identifierFilter(itemId),
+      cartId,
     });
     if (!item) throw new HttpError(404, "Cart item not found");
     const product = await Product.findById(item.productId).lean();
@@ -225,29 +235,31 @@ export class CartService {
     item.unitPrice = Number(item.unitPriceMinor || 0) / 100;
     item.totalPrice = Number(item.totalPriceMinor || 0) / 100;
     await item.save();
-    await Cart.findByIdAndUpdate(cart.id, { $inc: { version: 1 } });
-    return this.recalculate(cart.id);
+    await Cart.findByIdAndUpdate(cartId, { $inc: { version: 1 } });
+    return this.recalculate(cartId);
   }
 
   async removeItem(owner: CustomerOwner, itemId: string) {
     const cart = await this.getCart(owner);
+    const cartId = String(cart._id || cart.id);
     const removed = await CartItem.findOneAndDelete({
-      $or: [{ _id: itemId }, { publicId: itemId }],
-      cartId: cart.id,
+      ...identifierFilter(itemId),
+      cartId,
     });
     if (!removed) throw new HttpError(404, "Cart item not found");
-    await Cart.findByIdAndUpdate(cart.id, { $inc: { version: 1 } });
-    return this.recalculate(cart.id);
+    await Cart.findByIdAndUpdate(cartId, { $inc: { version: 1 } });
+    return this.recalculate(cartId);
   }
 
   async clear(owner: CustomerOwner, stateId?: string) {
     const cart = await this.getCart(owner);
+    const cartId = String(cart._id || cart.id);
     await CartItem.deleteMany({
-      cartId: cart.id,
+      cartId,
       ...(stateId ? { stateId } : {}),
     });
-    await Cart.findByIdAndUpdate(cart.id, { $inc: { version: 1 } });
-    return this.recalculate(cart.id);
+    await Cart.findByIdAndUpdate(cartId, { $inc: { version: 1 } });
+    return this.recalculate(cartId);
   }
 
   async recalculate(cartId: string) {
@@ -261,7 +273,7 @@ export class CartService {
       virtuals: true,
     });
     const productMap = new Map(
-      products.map((product) => [product.id, product]),
+      products.map((product) => [product._id.toString(), product]),
     );
     const enriched = items.map((item) => {
       const product = productMap.get(item.productId);

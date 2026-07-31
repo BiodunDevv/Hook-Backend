@@ -58,6 +58,10 @@ function idFilter(value: string) {
     : { publicId: value };
 }
 
+function recordId(record: { _id?: unknown; id?: string }) {
+  return String(record._id || record.id);
+}
+
 export class CheckoutService {
   private addresses = new AddressService();
 
@@ -89,13 +93,14 @@ export class CheckoutService {
         undefined,
         "CHECKOUT_STATE_UNAVAILABLE",
       );
+    const stateId = recordId(state);
     const partner = actor.partnerId
       ? await HookPartner.findOne({
           _id: actor.partnerId,
           status: "active",
         }).lean({ virtuals: true })
       : null;
-    if (actor.type === "partner" && (!partner || partner.stateId !== state.id))
+    if (actor.type === "partner" && (!partner || partner.stateId !== stateId))
       throw new HttpError(
         403,
         "Partner cannot checkout this State group",
@@ -142,9 +147,10 @@ export class CheckoutService {
     }).lean({ virtuals: true });
     if (!cart)
       throw new HttpError(409, "Basket is empty", undefined, "CART_EMPTY");
+    const cartId = recordId(cart);
     const cartItems = await CartItem.find({
-      cartId: cart.id,
-      stateId: state.id,
+      cartId,
+      stateId,
     }).lean({ virtuals: true });
     if (!cartItems.length)
       throw new HttpError(
@@ -164,7 +170,7 @@ export class CheckoutService {
         actor.customerId,
         input.addressId,
       );
-      if (address.stateId !== state.id)
+      if (address.stateId !== stateId)
         throw new HttpError(
           409,
           "Address must be in the basket State",
@@ -253,8 +259,8 @@ export class CheckoutService {
       actorId: actor.actorId,
       customerId: actor.customerId,
       partnerId: actor.partnerId,
-      stateId: state.id,
-      cartId: cart.id,
+      stateId,
+      cartId,
       cartVersion: cart.version || 1,
       channel:
         actor.type === "partner"
@@ -590,7 +596,9 @@ export class CheckoutService {
       _id: { $in: items.map((item) => item.productId) },
       status: ProductStatus.PUBLISHED,
     }).lean({ virtuals: true });
-    const map = new Map(products.map((product) => [product.id, product]));
+    const map = new Map(
+      products.map((product) => [recordId(product), product]),
+    );
     const lines: any[] = [];
     for (const item of items) {
       const product = map.get(item.productId);
@@ -608,10 +616,11 @@ export class CheckoutService {
         );
       let quote: any;
       if (item.quoteId) {
+        const productId = recordId(product);
         quote = await NegotiatedQuote.findOne({
           _id: item.quoteId,
           customerId,
-          productId: product.id,
+          productId,
           quantity: item.quantity,
           status: NegotiatedQuoteStatus.ACTIVE,
           expiresAt: { $gt: new Date() },
@@ -630,13 +639,13 @@ export class CheckoutService {
             Number(product.discountMinor || 0),
       );
       lines.push({
-        cartItemId: item.id,
-        productId: product.id,
+        cartItemId: recordId(item),
+        productId: recordId(product),
         productPublicId: product.publicId,
         variantId: item.variantId,
         marketId: product.marketId,
         stateId: product.sourceStateId,
-        quoteId: quote?.id,
+        quoteId: quote ? recordId(quote) : undefined,
         quantity: item.quantity,
         unitPriceMinor,
         totalPriceMinor: unitPriceMinor * item.quantity,

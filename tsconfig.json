@@ -10,7 +10,6 @@
     "sourceMap": true,
     "outDir": "./dist",
     "rootDir": "src",
-    "baseUrl": "./",
     "skipLibCheck": true,
     "strictNullChecks": true,
     "strict": true,
@@ -22,17 +21,17 @@
     "esModuleInterop": true,
     "ignoreDeprecations": "6.0",
     "paths": {
-      "@/*": ["src/*"],
-      "@config/*": ["src/config/*"],
-      "@controllers/*": ["src/controllers/*"],
-      "@emails/*": ["src/emails/*"],
-      "@lib/*": ["src/lib/*"],
-      "@middleware/*": ["src/middleware/*"],
-      "@models/*": ["src/models/*"],
-      "@routes/*": ["src/routes/*"],
-      "@services/*": ["src/services/*"],
-      "@validations/*": ["src/validations/*"],
-      "@utils/*": ["src/utils/*"]
+      "@/*": ["./src/*"],
+      "@config/*": ["./src/config/*"],
+      "@controllers/*": ["./src/controllers/*"],
+      "@emails/*": ["./src/emails/*"],
+      "@lib/*": ["./src/lib/*"],
+      "@middleware/*": ["./src/middleware/*"],
+      "@models/*": ["./src/models/*"],
+      "@routes/*": ["./src/routes/*"],
+      "@services/*": ["./src/services/*"],
+      "@validations/*": ["./src/validations/*"],
+      "@utils/*": ["./src/utils/*"]
     }
   },
   "include": [

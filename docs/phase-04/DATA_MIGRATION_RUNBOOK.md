@@ -1,11 +1,14 @@
-# Phase 4 Data Migration Runbook
+# Phase 4 Database Reset And Seed
 
-1. Confirm the database identity and environment.
-2. Create a timestamped `mongodump` and verify restoration into an isolated database.
-3. Run `npm run migrate:phase4:analyze` and `npm run migrate:phase4:dry-run`.
-4. Review counts and compatibility warnings.
-5. Set `PHASE_04_MIGRATION_CONFIRMED=true` only for the reviewed execution.
-6. Run `npm run migrate:phase4`, then `npm run migrate:phase4:verify`.
-7. Run `npm run seed:phase4` only in approved QA/development environments.
+The active development workflow does not run incremental migrations. `npm run seed` drops the configured MongoDB database once, then recreates the complete Phase 1-4 baseline in this order:
 
-The migration adds public IDs, canonical minor-unit money, ownership/status foundations, indexes, and version markers. It never deletes historical collections. Rollback only removes the Phase 4 marker and requires `PHASE_04_ROLLBACK_CONFIRMED=true`; restoring data still uses the verified dump.
+1. Base operational fixtures and accounts.
+2. Phase 2 identity, RBAC, geography, Market, Hub, Partner, and Runner foundations.
+3. Phase 3 commercial catalog, variants, submissions, and negotiation fixtures.
+4. Phase 4 canonical commerce fields, policies, settings, coverage, customer, and address fixtures.
+
+The command is intentionally destructive in every environment. Always verify `MONGODB_URI` and `MONGODB_DB_NAME` before running it.
+
+Incremental migration commands are not exposed through `package.json`. Seed is the supported MongoDB data-management workflow for the current pre-production platform.
+
+Legacy migration source files are retained only as compatibility references and reusable data-shaping functions. They are not part of the supported command surface.

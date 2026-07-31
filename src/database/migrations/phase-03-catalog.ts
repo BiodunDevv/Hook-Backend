@@ -214,10 +214,7 @@ async function migrateCategories() {
   }
 }
 
-async function execute() {
-  if (process.env.PHASE_03_MIGRATION_CONFIRMED !== 'true') {
-    throw new Error('Set PHASE_03_MIGRATION_CONFIRMED=true only after a verified mongodump backup');
-  }
+export async function seedPhase3CatalogFoundation() {
   await ensureIndexes();
   await migrateCategories();
   await migrateProducts();
@@ -279,7 +276,12 @@ async function main() {
   const mode = modeFromArgs();
   await connectDatabase();
   console.log(JSON.stringify({ stage: 'analysis', ...(await summary(mode)) }, null, 2));
-  if (mode === 'execute') await execute();
+  if (mode === 'execute') {
+    if (process.env.PHASE_03_MIGRATION_CONFIRMED !== 'true') {
+      throw new Error('Set PHASE_03_MIGRATION_CONFIRMED=true only after a verified mongodump backup');
+    }
+    await seedPhase3CatalogFoundation();
+  }
   if (mode === 'rollback') await rollback();
   if (['execute', 'verify', 'rollback'].includes(mode)) {
     console.log(JSON.stringify({ stage: 'verification', ...(await verify()), ...(await summary(mode)) }, null, 2));
@@ -287,9 +289,11 @@ async function main() {
   await disconnectDatabase();
 }
 
-main().catch(async (error) => {
-  console.error('Phase 3 catalog migration failed');
-  console.error(error);
-  await disconnectDatabase().catch(() => undefined);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch(async (error) => {
+    console.error('Phase 3 catalog migration failed');
+    console.error(error);
+    await disconnectDatabase().catch(() => undefined);
+    process.exit(1);
+  });
+}

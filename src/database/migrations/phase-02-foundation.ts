@@ -122,10 +122,7 @@ async function buildSummary(mode: Mode): Promise<MigrationSummary> {
   };
 }
 
-async function execute() {
-  if (process.env.PHASE_02_MIGRATION_CONFIRMED !== 'true') {
-    throw new Error('Set PHASE_02_MIGRATION_CONFIRMED=true only after a verified backup');
-  }
+export async function seedPhase2Foundation() {
   await ensurePlatformAccessCatalog();
   await ensurePhase2Indexes();
   const roleByKey = new Map((await Role.find().lean()).map((role) => [role.key, role]));
@@ -253,15 +250,20 @@ async function main() {
   const before = await buildSummary(mode);
   console.log(JSON.stringify({ stage: 'preflight', ...before }, null, 2));
   if (mode === 'execute') {
-    await execute();
+    if (process.env.PHASE_02_MIGRATION_CONFIRMED !== 'true') {
+      throw new Error('Set PHASE_02_MIGRATION_CONFIRMED=true only after a verified backup');
+    }
+    await seedPhase2Foundation();
     console.log(JSON.stringify({ stage: 'verified', ...(await buildSummary(mode)) }, null, 2));
   }
   await disconnectDatabase();
 }
 
-main().catch(async (error) => {
-  console.error('Phase 2 migration failed');
-  console.error(error);
-  await disconnectDatabase().catch(() => undefined);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch(async (error) => {
+    console.error('Phase 2 migration failed');
+    console.error(error);
+    await disconnectDatabase().catch(() => undefined);
+    process.exit(1);
+  });
+}

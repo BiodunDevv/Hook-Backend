@@ -188,7 +188,7 @@ const previewSchema = createSchema<CheckoutPreview>({
   currency: { type: String, default: "NGN" },
   policyVersions: { type: Object, required: true },
   podDecision: { type: Object, default: {} },
-  expiresAt: { type: Date, required: true, index: true },
+  expiresAt: { type: Date, required: true },
   consumedAt: { type: Date },
   orderId: { type: String, index: true },
   deletedAt: { type: Date },

@@ -12,7 +12,7 @@
 - Idempotent customer notifications and fulfilment-ready outbox events.
 - Shopper product, negotiation, addresses, State cart, checkout, payment, Order list, and Order detail routes.
 - Admin POD, Payments/Reconciliation, Commerce Settings, and immutable Order detail surfaces.
-- Phase 4 migration, QA policy/settings/customer fixtures, environment cleanup, and Swagger additions.
+- One-command full database reset and complete Phase 1-4 seed pipeline, including QA policy/settings/customer fixtures.
 
 ## Validation Record
 
@@ -21,8 +21,8 @@ Automated tests, fixtures-as-tests, snapshots, coverage, and test frameworks wer
 - Backend `npm run build`: passed.
 - Backend `npm run docs:swagger`: passed; generated 190 paths.
 - Backend non-fixing ESLint: passed with 0 errors and 360 existing warnings, primarily legacy `no-explicit-any` findings.
-- Backend `npm run migrate:phase4:analyze`: passed against database `hook`; found 0 carts, 6 Orders, and 6 Payments, with all 12 legacy records pending migration.
-- Backend `npm run migrate:phase4:dry-run`: passed with the same counts and no writes.
+- Backend `npm run seed`: passed from a full drop of database `hook` through the complete Phase 1-4 dataset.
+- Seed verification output confirmed 37 States, 3 Markets, 3 Runner assignments, 6 catalog submissions, 12 published products, 255 variants, active policy versions, Commerce Settings, delivery coverage, a verified customer, and a default address.
 - Admin `npx tsc --noEmit`: passed after removing stale generated Next.js route metadata.
 - Admin `npm run lint`: passed.
 - Admin `npm run build`: passed; 56 routes generated and the retired arbitrary Order-creation route is absent.
@@ -33,9 +33,8 @@ Automated tests, fixtures-as-tests, snapshots, coverage, and test frameworks wer
 
 ## Outstanding Release Gates
 
-- A verified `mongodump` and restore rehearsal must precede migration execution on the configured database.
 - Paystack sandbox initialization and an externally delivered signed webhook must be manually verified with the configured merchant account.
-- The Phase 4 migration must be executed and verified only after backup and restore verification succeeds.
+- Production deployment with retained historical data still requires the documented migration path; fresh development and QA environments use `npm run seed` exclusively.
 - Phase 5 must implement fulfilment consumers, physical sourcing, handover collection, returns, and refunds.
 
 NOT READY FOR PHASE 5

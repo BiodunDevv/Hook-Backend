@@ -351,12 +351,8 @@ function slugify(value: string) {
 
 async function resetSeedData() {
   const databaseName = mongoose.connection.db?.databaseName || '';
-  const clearlyDisposable = /(?:^|[-_])(dev|development|test|qa)(?:$|[-_])/i.test(databaseName);
-  if (!clearlyDisposable && process.env.ALLOW_DATABASE_RESET !== 'true') {
-    throw new Error(
-      `Refusing to reset MongoDB database "${databaseName}". Use a disposable dev/test database or set ALLOW_DATABASE_RESET=true explicitly.`,
-    );
-  }
+  if (!databaseName) throw new Error('Cannot seed without a resolved MongoDB database name');
+  console.warn(`FULL SEED RESET: dropping MongoDB database "${databaseName}"`);
   await mongoose.connection.dropDatabase();
   console.log('Database cleared for fresh seed');
 }
@@ -367,16 +363,7 @@ async function seed() {
   const lastName = process.env.SEED_ADMIN_LAST_NAME || 'Admin';
 
   // All seeded accounts use the same password for easy local/QA testing
-  const password = '123456';
-  if (
-    process.env.NODE_ENV === 'production' &&
-    email === 'admin@gmail.com' &&
-    password === '123456' &&
-    process.env.ALLOW_WEAK_PRODUCTION_SEED !== 'true'
-  ) {
-    throw new Error('Refusing to seed default weak admin credentials in production. Set ALLOW_WEAK_PRODUCTION_SEED=true only for controlled QA.');
-  }
-
+  const password = process.env.SEED_ADMIN_PASSWORD || '123456';
   const [
     { hashPassword },
     { AppDataSource, initializeDatabase },

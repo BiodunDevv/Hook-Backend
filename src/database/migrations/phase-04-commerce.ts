@@ -63,6 +63,14 @@ async function ensureCollections() {
     await model.createCollection().catch((error: any) => {
       if (error?.codeName !== "NamespaceExists") throw error;
     });
+    if (model === CheckoutPreview) {
+      const expiresIndex = (await model.collection.indexes()).find(
+        (index) => index.name === "expiresAt_1",
+      );
+      if (expiresIndex && expiresIndex.expireAfterSeconds !== 86400) {
+        await model.collection.dropIndex(expiresIndex.name!);
+      }
+    }
     await model.createIndexes();
   }
   await Promise.all([
@@ -74,11 +82,7 @@ async function ensureCollections() {
   ]);
 }
 
-async function execute() {
-  if (process.env.PHASE_04_MIGRATION_CONFIRMED !== "true")
-    throw new Error(
-      "Set PHASE_04_MIGRATION_CONFIRMED=true only after a verified mongodump backup and dry run",
-    );
+export async function seedPhase4CommerceFoundation() {
   await ensureCollections();
   for (const cart of await Cart.find({
     commerceMigrationVersion: { $ne: VERSION },
@@ -194,7 +198,13 @@ async function main() {
   console.log(
     JSON.stringify({ stage: "analysis", mode, ...(await counts()) }, null, 2),
   );
-  if (mode === "execute") await execute();
+  if (mode === "execute") {
+    if (process.env.PHASE_04_MIGRATION_CONFIRMED !== "true")
+      throw new Error(
+        "Set PHASE_04_MIGRATION_CONFIRMED=true only after a verified mongodump backup and dry run",
+      );
+    await seedPhase4CommerceFoundation();
+  }
   if (mode === "rollback") await rollback();
   if (["execute", "verify", "rollback"].includes(mode))
     console.log(
@@ -206,9 +216,11 @@ async function main() {
     );
   await disconnectDatabase();
 }
-main().catch(async (error) => {
-  console.error("Phase 4 commerce migration failed");
-  console.error(error);
-  await disconnectDatabase().catch(() => undefined);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch(async (error) => {
+    console.error("Phase 4 commerce migration failed");
+    console.error(error);
+    await disconnectDatabase().catch(() => undefined);
+    process.exit(1);
+  });
+}

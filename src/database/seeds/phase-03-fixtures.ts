@@ -2,14 +2,20 @@ import dotenv from 'dotenv';
 import { createHash } from 'crypto';
 import { connectDatabase, disconnectDatabase } from '@config/data-source';
 import {
+  AccountStatus,
+  AccountType,
   ProductAvailabilityStatus,
   ProductStatus,
   ProductSubmissionStatus,
+  ScopeType,
+  UserRole,
 } from '@lib/constants';
+import { hashPassword } from '@lib/security';
 import { nextPublicId } from '@services/public-id.service';
 import { OperationCity, OperationState, ServiceZone } from '@models/platform/geography.model';
 import { DispatchHub, Market } from '@models/platform/network.model';
-import { RunnerMarketAssignment, RunnerProfile } from '@models/platform/operations-accounts.model';
+import { HookPartner, RunnerMarketAssignment, RunnerProfile } from '@models/platform/operations-accounts.model';
+import { User } from '@models/users/user.model';
 import { Category } from '@models/categories/category.model';
 import { Product } from '@models/products/product.model';
 import { CatalogMediaAsset, ProductSubmission, ProductVariant } from '@models/catalog/catalog.model';
@@ -68,7 +74,54 @@ async function upsertNetwork() {
   }
   hub.marketIds = markets.map((market) => market.id);
   await hub.save();
-  return { state, hub, markets };
+  return { state, city, zone, hub, markets };
+}
+
+async function seedPartner(
+  state: { id: string },
+  city: { id: string },
+  zone: { id: string },
+) {
+  const email = 'partner.lagos@hook.africa';
+  const publicId = (await User.findOne({ email }).lean())?.publicId || await nextPublicId('partner');
+  const account = await User.findOneAndUpdate(
+    { email },
+    {
+      $set: {
+        firstName: 'Tola',
+        lastName: 'Akinyemi',
+        phone: '+2348010000401',
+        password: await hashPassword(process.env.SEED_PARTNER_PASSWORD || '123456'),
+        role: UserRole.VENDOR,
+        accountType: AccountType.PARTNER,
+        accountStatus: AccountStatus.ACTIVE,
+        scopeType: ScopeType.SELF,
+        isActive: true,
+        isEmailVerified: true,
+        isPhoneVerified: true,
+      },
+      $setOnInsert: { publicId },
+    },
+    { upsert: true, returnDocument: 'after' },
+  );
+  await HookPartner.findOneAndUpdate(
+    { accountId: account.id },
+    {
+      $set: {
+        name: 'Hook Partner Lekki',
+        stateId: state.id,
+        cityId: city.id,
+        zoneId: zone.id,
+        address: '12 Admiralty Way, Lekki Phase 1',
+        coordinates: { lat: 6.4478, lng: 3.4723 },
+        contact: { name: 'Tola Akinyemi', email, phone: '+2348010000401' },
+        status: 'active',
+      },
+      $setOnInsert: { publicId },
+    },
+    { upsert: true, returnDocument: 'after' },
+  );
+  return account;
 }
 
 async function assignRunners(stateId: string, hubId: string, markets: Array<{ id: string }>) {
@@ -195,12 +248,13 @@ async function seedSubmissions(
 
 async function main() {
   await connectDatabase();
-  const { state, hub, markets } = await upsertNetwork();
+  const { state, city, zone, hub, markets } = await upsertNetwork();
+  await seedPartner(state, city, zone);
   const runners = await assignRunners(state.id, hub.id, markets);
   if (!runners.length) throw new Error('Phase 3 fixtures require at least one migrated Runner profile');
   const products = await publishCatalog(state.id, markets);
   await seedSubmissions(state.id, markets, runners, products);
-  console.log(`Phase 3 QA fixtures ready: ${markets.length} Markets, ${runners.length} Runner assignments, 6 submissions, 12 published products`);
+  console.log(`Phase 3 QA fixtures ready: ${markets.length} Markets, ${runners.length} Runner assignments, 1 Hook Partner, 6 submissions, 12 published products`);
   console.log(`Catalog variants available: ${await ProductVariant.countDocuments({ active: true })}`);
   await disconnectDatabase();
 }

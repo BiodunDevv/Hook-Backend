@@ -54,13 +54,18 @@ export function createApp() {
   });
   app.get(`${apiPrefix}/payments/paystack/callback`, (req, res) => {
     const reference = String(req.query.reference || req.query.trxref || '');
-    const safeReference = /^[A-Za-z0-9._=-]{1,120}$/.test(reference)
-      ? reference
-      : '';
+    if (!/^[A-Za-z0-9._=-]{1,120}$/.test(reference)) {
+      return sendError(
+        res,
+        400,
+        'VALIDATION_ERROR',
+        'A valid payment reference is required',
+      );
+    }
     const returnUrl = new URL(
       process.env.PAYSTACK_APP_RETURN_URL || 'hook://payments/return',
     );
-    if (safeReference) returnUrl.searchParams.set('reference', safeReference);
+    returnUrl.searchParams.set('reference', reference);
     returnUrl.searchParams.set('source', 'paystack');
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     res.redirect(302, returnUrl.toString());

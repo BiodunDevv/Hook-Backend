@@ -31,11 +31,11 @@ Automated tests, fixtures-as-tests, snapshots, coverage, and test frameworks wer
 - Shopper `npx expo-doctor`: passed all 18 checks.
 - `git diff --check`: passed in all three repositories.
 - Paystack sandbox checkout: passed locally with a real Hosted Checkout authorization, successful test payment, provider status re-query, signed `charge.success` processing, invalid-signature rejection, replay deduplication, customer status polling, and exactly one `ORDER_APPROVED_FOR_FULFILMENT` outbox event.
-- Render deployment verification (`https://hook-api.onrender.com`, 2026-08-01): `/health` returned the Phase 2 success envelope and request ID, the Paystack callback returned a `302` to `hook://payments/return` with the validated reference, an unsigned webhook was rejected with `401 WEBHOOK_SIGNATURE_INVALID`, public geography responded successfully, and deployed OpenAPI returned `200`.
+- Render deployment verification (`https://hook-api.onrender.com`, 2026-08-01): `/health` returned the Phase 2 success envelope and request ID; a missing callback reference returned `400 VALIDATION_ERROR`; a valid callback returned `302` to `hook://payments/return`; an unsigned webhook was rejected with `401 WEBHOOK_SIGNATURE_INVALID`; a correctly HMAC-signed harmless event was accepted without matching or modifying a Payment; replaying that event returned `duplicate: true`; public geography responded successfully; and deployed OpenAPI returned `200`.
 
 ## Outstanding Release Gates
 
-- The configured Paystack dashboard must deliver a real signed test webhook to the deployed Render endpoint. Callback routing and unsigned-webhook rejection have passed against the deployed service; the equivalent signed sandbox flow has passed locally.
+- The configured Paystack dashboard must deliver a real signed test-payment webhook to the deployed Render endpoint. Callback routing, signature rejection/acceptance, and replay deduplication pass against the deployed service; the complete real-payment sandbox flow has passed locally.
 - Production deployment with retained historical data still requires the documented migration path; fresh development and QA environments use `npm run seed` exclusively.
 - Phase 5 must implement fulfilment consumers, physical sourcing, handover collection, returns, and refunds.
 

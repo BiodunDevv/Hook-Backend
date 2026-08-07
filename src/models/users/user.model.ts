@@ -81,6 +81,5 @@ const UserSchema = createSchema<User>({
 UserSchema.index({ role: 1, isActive: 1 });
 UserSchema.index({ role: 1, operationalStateCode: 1 });
 UserSchema.index({ accountType: 1, accountStatus: 1 });
-UserSchema.index({ roleIds: 1, assignedStateIds: 1, assignedHubIds: 1 });
 
 export const User = createModel<User>('User', UserSchema);

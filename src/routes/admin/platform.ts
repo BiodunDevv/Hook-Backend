@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { PlatformController } from '@controllers/admin/platform.controller';
+import { AdminFieldAgentsController } from '@controllers/admin/field-agents.controller';
+import { requirePermission } from '@middleware/permissions';
 import { validateBody } from '@middleware/validate';
 import { asyncHandler } from '@utils/http';
 
@@ -12,6 +14,7 @@ const lifecycleSchema = z.object({ reason: z.string().trim().min(3).max(500) });
 
 const stateSchema = z.object({
   name: z.string().trim().min(2).max(100),
+  capitalName: z.string().trim().min(2).max(100).optional(),
   code: z.string().trim().length(2),
   status,
   timezone: z.string().default('Africa/Lagos'),
@@ -48,6 +51,11 @@ const marketSchema = z.object({
   zoneId: z.string().optional(),
   hubId: z.string().optional(),
   address: z.string().trim().min(5).max(500),
+  imageUrl: z.string().url().optional(),
+  shortDisplayName: z.string().trim().min(2).max(60).optional(),
+  discoveryColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/, 'Use a six-digit hex colour').optional(),
+  isFeatured: z.boolean().default(false),
+  displayPriority: z.number().int().min(0).max(10000).default(100),
   coordinates,
   operatingHours: z.record(z.string(), z.unknown()).optional(),
   notes: z.string().max(1000).optional(),
@@ -84,6 +92,16 @@ const staffSchema = z.object({
   stateIds: idList,
   hubIds: idList,
 });
+const staffUpdateSchema = z.object({
+  firstName: z.string().trim().min(1).max(100).optional(),
+  lastName: z.string().trim().min(1).max(100).optional(),
+  phone: z.string().trim().min(7).max(30).optional(),
+  roleIds: idList.optional(),
+  scopeType: z.enum(['global', 'multi_state', 'single_state', 'hub']).optional(),
+  stateIds: idList.optional(),
+  hubIds: idList.optional(),
+  reason: z.string().trim().min(3).max(500).optional(),
+}).strict();
 const partnerSchema = z.object({
   ...person,
   name: z.string().trim().min(2).max(150),
@@ -135,23 +153,33 @@ function crud(
 export function createPlatformAdminRouter() {
   const router = Router();
   const controller = new PlatformController();
+  const legacyRunners = new AdminFieldAgentsController();
 
   router.get('/permissions', asyncHandler(controller.permissions));
   router.get('/roles', asyncHandler(controller.roles));
   router.post('/roles', validateBody(z.object({
     key: z.string().min(3), name: z.string().min(2), description: z.string().default(''),
     permissionKeys: idList, defaultScopeType: z.enum(['global', 'multi_state', 'single_state', 'hub', 'self']),
-    isSystem: z.boolean().default(false), isActive: z.boolean().default(true),
+    isActive: z.boolean().default(true),
   })), asyncHandler(controller.createRole));
   router.get('/roles/:id', asyncHandler(controller.roleDetail));
-  router.patch('/roles/:id', asyncHandler(controller.updateRole));
+  router.patch('/roles/:id', validateBody(z.object({
+    key: z.string().min(3).optional(),
+    name: z.string().min(2).optional(),
+    description: z.string().optional(),
+    permissionKeys: idList.optional(),
+    defaultScopeType: z.enum(['global', 'multi_state', 'single_state', 'hub', 'self']).optional(),
+    isActive: z.boolean().optional(),
+    reason,
+  }).strict()), asyncHandler(controller.updateRole));
 
   router.get('/staff', asyncHandler(controller.listStaff));
   router.post('/staff', validateBody(staffSchema), asyncHandler(controller.createStaff));
   router.get('/staff/:id', asyncHandler(controller.staffDetail));
-  router.patch('/staff/:id', asyncHandler(controller.updateStaff));
+  router.patch('/staff/:id', validateBody(staffUpdateSchema), asyncHandler(controller.updateStaff));
   router.post('/staff/:id/suspend', validateBody(lifecycleSchema), asyncHandler(controller.staffStatus));
   router.post('/staff/:id/reactivate', validateBody(lifecycleSchema), asyncHandler(controller.staffStatus));
+  router.post('/staff/:id/archive', validateBody(lifecycleSchema), asyncHandler(controller.archiveStaff));
   router.post('/staff/:id/revoke-sessions', validateBody(lifecycleSchema), asyncHandler(controller.revokeStaffSessions));
   router.post('/staff/:id/resend-invitation', asyncHandler(controller.resendStaffInvitation));
   router.post('/staff/:id/cancel-invitation', validateBody(lifecycleSchema), asyncHandler(controller.cancelStaffInvitation));
@@ -191,6 +219,8 @@ export function createPlatformAdminRouter() {
 
   router.get('/runners', asyncHandler(controller.listRunners));
   router.post('/runners', validateBody(runnerSchema), asyncHandler(controller.createRunner));
+  router.get('/runners/stats', requirePermission('runners.view'), asyncHandler(legacyRunners.stats));
+  router.get('/runners/queue', requirePermission('runners.view'), asyncHandler(legacyRunners.queue));
   router.get('/runners/:id', asyncHandler(controller.runnerDetail));
   router.patch('/runners/:id', validateBody(runnerSchema.partial()), asyncHandler(controller.updateRunner));
   router.post('/runners/:id/activate', validateBody(lifecycleSchema), asyncHandler(controller.runnerStatus));

@@ -31,9 +31,16 @@ export async function resolveGuestSession(token: string) {
     tokenHash: hash(token),
     revokedAt: { $exists: false },
     expiresAt: { $gt: new Date() },
-  }).lean({ virtuals: true });
+  })
+    .select("_id publicId platform deviceId deviceName expiresAt")
+    .lean({ virtuals: true });
   if (!session) throw new HttpError(401, 'Guest session is invalid or expired', undefined, 'TOKEN_INVALID');
-  await GuestSession.updateOne({ _id: session._id }, { $set: { lastSeenAt: new Date() } });
+  // Presence is telemetry, not an authentication prerequisite. Do not make
+  // every guest cart/order request wait for a second database write.
+  void GuestSession.updateOne(
+    { _id: session._id },
+    { $set: { lastSeenAt: new Date() } },
+  ).catch(() => undefined);
   return session;
 }
 

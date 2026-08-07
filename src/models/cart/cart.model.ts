@@ -56,6 +56,8 @@ const CartSchema = createSchema<Cart>({
 
 CartSchema.index({ userId: 1, isCheckedOut: 1 });
 CartSchema.index({ guestId: 1, isCheckedOut: 1 });
+CartSchema.index({ customerId: 1, status: 1, isCheckedOut: 1 });
+CartSchema.index({ guestSessionId: 1, status: 1, isCheckedOut: 1 });
 CartSchema.index({ ownerType: 1, customerId: 1, status: 1 });
 CartSchema.index({ ownerType: 1, guestSessionId: 1, status: 1 });
 CartSchema.index({

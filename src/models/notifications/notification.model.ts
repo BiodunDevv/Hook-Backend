@@ -27,5 +27,7 @@ const NotificationSchema = createSchema<Notification>({
 
 NotificationSchema.index({ userId: 1, createdAt: -1 });
 NotificationSchema.index({ guestId: 1, createdAt: -1 });
+NotificationSchema.index({ userId: 1, isRead: 1, createdAt: -1 });
+NotificationSchema.index({ guestId: 1, isRead: 1, createdAt: -1 });
 
 export const Notification = createModel<Notification>('Notification', NotificationSchema);

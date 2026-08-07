@@ -18,6 +18,17 @@ export interface Order extends BaseEntity {
     | "VERIFICATION_PENDING"
     | "OPERATIONS_REVIEW"
     | "APPROVED_FOR_FULFILMENT"
+    | "IN_FULFILMENT"
+    | "PARTIALLY_RECEIVED"
+    | "READY_FOR_CONSOLIDATION"
+    | "READY_FOR_DISPATCH"
+    | "IN_TRANSIT"
+    | "DELIVERED"
+    | "COLLECTED"
+    | "COMPLETED"
+    | "ON_HOLD"
+    | "RETURN_IN_PROGRESS"
+    | "REFUNDED"
     | "CANCELLED";
   commercePaymentStatus?:
     | "PENDING"
@@ -29,6 +40,7 @@ export interface Order extends BaseEntity {
     | "REFUNDED";
   subtotalMinor?: number;
   deliveryFeeMinor?: number;
+  deliveryPricing?: Record<string, unknown>;
   totalMinor?: number;
   currency?: string;
   customerSnapshot?: Record<string, unknown>;
@@ -94,6 +106,9 @@ export interface Order extends BaseEntity {
   cancellationReason?: string;
   commerceMigrationVersion?: number;
   legacyCommerceSnapshot?: Record<string, unknown>;
+  fulfilmentSummary?: Record<string, unknown>;
+  fulfilmentCompletedAt?: Date;
+  customerProgress?: Array<Record<string, unknown>>;
 }
 
 const OrderSchema = createSchema<Order>({
@@ -118,6 +133,17 @@ const OrderSchema = createSchema<Order>({
       "VERIFICATION_PENDING",
       "OPERATIONS_REVIEW",
       "APPROVED_FOR_FULFILMENT",
+      "IN_FULFILMENT",
+      "PARTIALLY_RECEIVED",
+      "READY_FOR_CONSOLIDATION",
+      "READY_FOR_DISPATCH",
+      "IN_TRANSIT",
+      "DELIVERED",
+      "COLLECTED",
+      "COMPLETED",
+      "ON_HOLD",
+      "RETURN_IN_PROGRESS",
+      "REFUNDED",
       "CANCELLED",
     ],
     index: true,
@@ -137,6 +163,7 @@ const OrderSchema = createSchema<Order>({
   },
   subtotalMinor: { type: Number, min: 0 },
   deliveryFeeMinor: { type: Number, min: 0 },
+  deliveryPricing: { type: Object },
   totalMinor: { type: Number, min: 0 },
   currency: { type: String, default: "NGN" },
   customerSnapshot: { type: Object },
@@ -196,6 +223,9 @@ const OrderSchema = createSchema<Order>({
   cancellationReason: { type: String },
   commerceMigrationVersion: { type: Number, index: true },
   legacyCommerceSnapshot: { type: Object },
+  fulfilmentSummary: { type: Object, default: {} },
+  fulfilmentCompletedAt: { type: Date },
+  customerProgress: { type: [Object], default: [] },
   deletedAt: { type: Date },
 });
 

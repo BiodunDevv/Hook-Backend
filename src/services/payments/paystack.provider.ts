@@ -71,6 +71,22 @@ export class PaystackProvider implements PaymentProvider {
     };
   }
 
+  async refund(input: { reference: string; amountMinor: number; reason?: string }) {
+    const response = await this.request('/refund', {
+      method: 'POST',
+      body: JSON.stringify({
+        transaction: input.reference,
+        amount: String(input.amountMinor),
+        customer_note: input.reason,
+        merchant_note: 'Hook fulfilment refund',
+      }),
+    });
+    const data = response.data as Record<string, any>;
+    const providerReference = String(data?.id || data?.transaction || input.reference);
+    if (!providerReference) throw new HttpError(502, 'Payment provider returned an invalid refund response', undefined, 'PAYMENT_PROVIDER_ERROR');
+    return { providerReference };
+  }
+
   parseWebhook(rawBody: Buffer, signature: string) {
     const expected = createHmac("sha512", this.secret())
       .update(rawBody)

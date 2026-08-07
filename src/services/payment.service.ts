@@ -5,6 +5,7 @@ import {
   CommercePaymentStatus,
   OrderStatus,
   PaymentStatus,
+  ShipmentStatus,
 } from "@lib/constants";
 import type { MongoRepository as Repository } from "@lib/mongo-repository";
 import {
@@ -14,12 +15,14 @@ import {
 } from "@models/commerce/commerce.model";
 import { Order } from "@models/orders/order.model";
 import { Payment } from "@models/payments/payment.model";
+import { Shipment } from "@models/fulfilment/fulfilment.model";
 import { EscrowLedger } from "@models/payments/escrow-ledger.model";
 import { User } from "@models/users/user.model";
 import { nextPublicId } from "@services/public-id.service";
 import { createCommerceNotification } from "@services/commerce-notification.service";
 import { HttpError } from "@utils/http";
 import { PaystackProvider } from "./payments/paystack.provider";
+import { publishRealtime } from "@services/realtime.service";
 
 function identity(value: string) {
   return isValidObjectId(value)
@@ -39,9 +42,12 @@ export class PaymentService {
     const order = await Order.findOne({
       ...identity(orderIdentifier),
       userId: customerId,
-      commercePaymentMethod: "PREPAID",
     });
-    if (!order) throw new HttpError(404, "Order not found");
+    if (!order || !["PREPAID", "PAY_AT_HANDOVER"].includes(String(order.commercePaymentMethod))) throw new HttpError(404, "Order not found");
+    if (order.commercePaymentMethod === "PAY_AT_HANDOVER") {
+      const shipment = await Shipment.findOne({ orderId: order.id, status: ShipmentStatus.AWAITING_HANDOVER_PAYMENT, releaseStatus: "AWAITING_HANDOVER_PAYMENT" }).lean();
+      if (!shipment) throw new HttpError(409, "Pay-at-Handover payment is not due for this Order yet", undefined, "PAYMENT_INITIALIZATION_NOT_ALLOWED");
+    }
     return this.initializeOrder(order, customerId);
   }
 
@@ -115,6 +121,7 @@ export class PaymentService {
     await payment.save();
     order.commercePaymentStatus = CommercePaymentStatus.PROCESSING;
     await order.save();
+    this.publishOrderUpdate(order);
     return this.publicPayment(payment);
   }
 
@@ -251,7 +258,7 @@ export class PaymentService {
     providerEventId?: string,
   ) {
     const order = await Order.findById(payment.orderId);
-    if (!order || order.commercePaymentMethod !== "PREPAID")
+    if (!order || !["PREPAID", "PAY_AT_HANDOVER"].includes(String(order.commercePaymentMethod)))
       throw new HttpError(409, "Payment cannot activate this Order");
     if (payment.commerceStatus === CommercePaymentStatus.CONFIRMED) {
       if (order.userId)
@@ -273,6 +280,39 @@ export class PaymentService {
     payment.amountSettled = payment.amount;
     await payment.save();
     order.commercePaymentStatus = CommercePaymentStatus.CONFIRMED;
+    if (order.commercePaymentMethod === "PAY_AT_HANDOVER") {
+      order.paymentStatus = PaymentStatus.SUCCESSFUL;
+      order.timeline = [
+        ...(order.timeline || []),
+        {
+          status: "HANDOVER_PAYMENT_CONFIRMED",
+          at: new Date(),
+          actorType: "PAYSTACK_WEBHOOK",
+        },
+      ];
+      await order.save();
+      this.publishOrderUpdate(order);
+      await Shipment.findOneAndUpdate(
+        { orderId: order.id, status: ShipmentStatus.AWAITING_HANDOVER_PAYMENT, releaseStatus: "AWAITING_HANDOVER_PAYMENT" },
+        {
+          $set: { status: ShipmentStatus.RELEASE_APPROVED, releaseStatus: "RELEASE_APPROVED" },
+          $push: { trackingEvents: { status: ShipmentStatus.RELEASE_APPROVED, at: new Date(), actorId: "PAYSTACK_WEBHOOK", note: "Verified handover payment" } },
+          $inc: { version: 1 },
+        },
+        { returnDocument: "after" },
+      );
+      if (order.userId) {
+        await createCommerceNotification({
+          eventKey: `order:${order.publicId}:handover-payment-confirmed`,
+          userId: order.userId,
+          title: "Handover payment confirmed",
+          body: "Your payment was verified. Your delivery can now be released.",
+          type: "payment_confirmed",
+          data: { orderId: order.publicId, paymentId: payment.publicId },
+        }).catch(() => undefined);
+      }
+      return;
+    }
     order.commerceStatus = CommerceOrderStatus.APPROVED_FOR_FULFILMENT;
     order.paymentStatus = PaymentStatus.SUCCESSFUL;
     order.status = OrderStatus.APPROVED_FOR_FULFILMENT;
@@ -285,6 +325,7 @@ export class PaymentService {
       },
     ];
     await order.save();
+    this.publishOrderUpdate(order);
     await this.emitOrderApproved(order);
     if (order.userId)
       await createCommerceNotification({
@@ -322,6 +363,15 @@ export class PaymentService {
     }
   }
 
+  private publishOrderUpdate(order: any) {
+    publishRealtime({
+      type: "order.updated",
+      entityId: order.publicId || order._id?.toString() || order.id,
+      version: Number(order.version || 1),
+      scope: order.sourceStateId ? { stateId: String(order.sourceStateId) } : undefined,
+    }, order.userId ? { accountId: String(order.userId), admin: true } : { admin: true });
+  }
+
   capability() {
     return {
       provider: "paystack",
@@ -332,16 +382,30 @@ export class PaymentService {
   }
 
   async refund(
-    _paymentId: string,
-    _amount: number,
+    paymentIdentifier: string,
+    amountMinor: number,
     _idempotencyKey: string,
   ): Promise<{ providerReference?: string }> {
-    throw new HttpError(
-      409,
-      "Refund execution is deferred to the returns and refunds phase",
-      undefined,
-      "INVALID_STATE_TRANSITION",
-    );
+    const payment = await Payment.findOne({
+      ...identity(paymentIdentifier),
+    });
+    if (!payment) throw new HttpError(404, 'Payment record not found', undefined, 'PAYMENT_RECORD_MISSING');
+    const captured = Number(payment.amountMinor || Math.round(Number(payment.amount || 0) * 100));
+    const refunded = Number(payment.refundedAmount || 0);
+    if (!Number.isSafeInteger(amountMinor) || amountMinor < 1 || amountMinor > captured - refunded) {
+      throw new HttpError(409, 'Refund exceeds the captured payment balance', undefined, 'REFUND_LIMIT_EXCEEDED');
+    }
+    if (!payment.transactionRef || payment.gateway !== 'paystack') {
+      throw new HttpError(409, 'Only captured Paystack payments can be refunded', undefined, 'PAYMENT_METHOD_NOT_ALLOWED');
+    }
+    const result = await this.provider.refund({ reference: payment.transactionRef, amountMinor, reason: _idempotencyKey });
+    payment.refundedAmount = refunded + amountMinor;
+    payment.commerceStatus = payment.refundedAmount >= captured ? CommercePaymentStatus.REFUNDED : CommercePaymentStatus.REFUND_PENDING;
+    payment.status = payment.refundedAmount >= captured ? PaymentStatus.REFUNDED : PaymentStatus.PARTIALLY_REFUNDED;
+    payment.refundedAt = new Date();
+    payment.gatewayResponse = { ...(payment.gatewayResponse || {}), lastRefundReference: result.providerReference, lastRefundAt: new Date() };
+    await payment.save();
+    return result;
   }
 
   private publicPayment(payment: any) {

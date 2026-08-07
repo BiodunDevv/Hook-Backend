@@ -1,4 +1,5 @@
-import { ScopeType } from '@lib/constants';
+import { ScopeType, UserRole } from '@lib/constants';
+import { isActiveAccount, isActiveStaffProfile } from '@lib/account-state';
 import { Role } from '@models/platform/access.model';
 import { StaffProfile } from '@models/platform/operations-accounts.model';
 import { User } from '@models/users/user.model';
@@ -12,15 +13,40 @@ export interface AccessContext {
   hubIds: string[];
 }
 
-export async function resolveAccessContext(accountId: string): Promise<AccessContext> {
+export async function resolveAccessContext(accountId: string, knownUser?: any): Promise<AccessContext> {
   const [user, staff] = await Promise.all([
-    User.findById(accountId).lean(),
+    knownUser ? Promise.resolve(knownUser) : User.findById(accountId).lean(),
     StaffProfile.findOne({ accountId }).lean(),
   ]);
-  if (!user || !staff || user.accountStatus !== 'active' || staff.status !== 'active') {
+  if (!user || !isActiveAccount(user)) {
     throw new HttpError(401, 'Account is not active', undefined, 'TOKEN_INVALID');
   }
-  const roles = await Role.find({ _id: { $in: staff.roleIds }, isActive: true }).lean();
+  // Older seeded super-admin accounts may predate StaffProfile. Keep the
+  // recovery authority usable while the next full seed repairs the profile;
+  // an existing suspended or disabled profile still fails closed below.
+  if (!staff && user.role === 'super_admin') {
+    const superAdminRole = await Role.findOne({ key: 'SUPER_ADMIN', isActive: true }).lean();
+    return {
+      permissions: superAdminRole?.permissionKeys || user.permissions || [],
+      roleKeys: ['SUPER_ADMIN'],
+      scopeType: ScopeType.GLOBAL,
+      stateIds: [],
+      hubIds: [],
+    };
+  }
+  if (!staff || !isActiveStaffProfile(staff)) {
+    throw new HttpError(401, 'Account is not active', undefined, 'TOKEN_INVALID');
+  }
+  if (user.role === UserRole.SUPER_ADMIN) {
+    return {
+      permissions: user.permissions || [],
+      roleKeys: ['SUPER_ADMIN'],
+      scopeType: staff.scopeType as ScopeType,
+      stateIds: staff.stateIds || [],
+      hubIds: staff.hubIds || [],
+    };
+  }
+  const roles = await Role.find({ _id: { $in: staff.roleIds }, isActive: true }).select('key permissionKeys').lean();
   const roleKeys = roles.map((role) => role.key);
   const permissions = [...new Set(roles.flatMap((role) => role.permissionKeys))];
   return {

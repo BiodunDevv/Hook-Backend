@@ -13,7 +13,13 @@ import { User } from '@models/users/user.model';
 import { NotificationService } from '@services/notification.service';
 import { HttpError } from '@utils/http';
 import { verifyGoogleIdToken } from './google-auth.service';
-import { issueAccountSession, revokeAccountSession, revokeAccountSessions, rotateAccountSession } from './account-session.service';
+import {
+  issueAccountSession,
+  presentAccountUser,
+  revokeAccountSession,
+  revokeAccountSessions,
+  rotateAccountSession,
+} from './account-session.service';
 import { nextPublicId } from './public-id.service';
 import { CartItem } from '@models/cart/cart-item.model';
 import { Negotiation } from '@models/negotiations/negotiation.model';
@@ -121,6 +127,24 @@ export class AuthService {
     ) {
       throw new HttpError(403, 'Admin access required');
     }
+
+    // Older seeded/admin records predate the typed account fields. Normalize
+    // only an already-active legacy admin during its next successful login;
+    // explicit suspended/disabled records are rejected above.
+    if (
+      options?.adminOnly &&
+      user.isActive &&
+      [UserRole.SUPPORT, UserRole.ADMIN, UserRole.SUPER_ADMIN].includes(user.role) &&
+      (!user.accountType || !user.accountStatus)
+    ) {
+      user.accountType = AccountType.STAFF;
+      user.accountStatus = AccountStatus.ACTIVE;
+      await this.userRepo.update(user.id, {
+        accountType: AccountType.STAFF,
+        accountStatus: AccountStatus.ACTIVE,
+      });
+    }
+
     if (options?.expectedAccountType && user.accountType !== options.expectedAccountType) {
       throw new HttpError(403, 'This account cannot access the requested portal', undefined, 'ACCESS_DENIED');
     }
@@ -471,9 +495,7 @@ export class AuthService {
   async getProfile(userId: string) {
     const user = await this.userRepo.findOne({ where: { id: userId } });
     if (!user) throw new HttpError(404, 'User not found');
-
-    const { password, refreshToken, ...safeUser } = user;
-    return safeUser;
+    return presentAccountUser(user);
   }
 
   private async createOtp(email: string, type: Otp['type']) {

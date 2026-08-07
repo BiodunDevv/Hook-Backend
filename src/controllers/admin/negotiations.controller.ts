@@ -11,14 +11,14 @@ function identifier(value: string) {
     : { publicId: value };
 }
 
-function safeSession(session: any, product?: any) {
+function safeSession(session: any, product?: any, includeTranscript = false) {
   return {
     id: session.publicId,
     status: session.status,
     channel: session.channel,
     product: product ? {
       id: product.publicId,
-      name: product.name,
+      name: product.title || product.name,
       images: product.images || [],
     } : null,
     quantity: session.quantity,
@@ -27,12 +27,12 @@ function safeSession(session: any, product?: any) {
     maximumOffers: session.maximumOffers,
     lastDecision: session.lastDecision || null,
     agreedPriceMinor: session.agreedPriceMinor || null,
-    transcript: session.transcript || [],
-    providerTelemetry: (session.providerTelemetry || []).map((entry: any) => ({
+    ...(includeTranscript ? { transcript: session.transcript || [] } : {}),
+    ...(includeTranscript ? { providerTelemetry: (session.providerTelemetry || []).map((entry: any) => ({
       provider: entry.provider,
       failed: Boolean(entry.failed),
       failureCode: entry.failureCode || null,
-    })),
+    })) } : {}),
     expiresAt: session.expiresAt,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
@@ -47,15 +47,23 @@ export class AdminNegotiationsController {
       filter.status = req.query.status;
     }
     if (req.platformContext?.stateId) filter.sourceStateId = req.platformContext.stateId;
-    const sessions = await Negotiation.find(filter).sort({ createdAt: -1 }).limit(limit + 1).lean({ virtuals: true });
+    const [sessions, total, accepted] = await Promise.all([
+      Negotiation.find(filter)
+        .select('publicId status channel productId quantity currency offerCount maximumOffers lastDecision agreedPriceMinor expiresAt createdAt updatedAt')
+        .sort({ createdAt: -1 })
+        .limit(limit + 1)
+        .lean({ virtuals: true }),
+      Negotiation.countDocuments(filter),
+      Negotiation.countDocuments({
+        ...filter,
+        status: { $in: [NegotiationStatus.AGREED, NegotiationStatus.ACCEPTED] },
+      }),
+    ]);
     const page = sessions.slice(0, limit);
-    const products = await Product.find({ _id: { $in: page.map((item) => item.productId) } }).lean({ virtuals: true });
+    const products = await Product.find({ _id: { $in: page.map((item) => item.productId) } })
+      .select('publicId title name images')
+      .lean({ virtuals: true });
     const productById = new Map(products.map((product) => [product._id.toString(), product]));
-    const total = await Negotiation.countDocuments(filter);
-    const accepted = await Negotiation.countDocuments({
-      ...filter,
-      status: { $in: [NegotiationStatus.AGREED, NegotiationStatus.ACCEPTED] },
-    });
     sendSuccess(res, {
       data: page.map((session) => safeSession(session, productById.get(session.productId))),
       total,
@@ -70,7 +78,7 @@ export class AdminNegotiationsController {
     if (req.platformContext?.stateId) filter.sourceStateId = req.platformContext.stateId;
     const session = await Negotiation.findOne(filter).lean({ virtuals: true });
     if (!session) throw new HttpError(404, 'Negotiation not found', undefined, 'NOT_FOUND');
-    const product = await Product.findById(session.productId).lean({ virtuals: true });
-    sendSuccess(res, safeSession(session, product));
+    const product = await Product.findById(session.productId).select('publicId title name images').lean({ virtuals: true });
+    sendSuccess(res, safeSession(session, product, true));
   };
 }

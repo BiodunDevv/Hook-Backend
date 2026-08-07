@@ -26,6 +26,13 @@ export interface OrderItem extends BaseEntity {
   vendor?: any;
   order?: any;
   commerceMigrationVersion?: number;
+  fulfilmentTaskId?: string;
+  runnerPackageId?: string;
+  hubPackageId?: string;
+  fulfilmentStatus?: 'PENDING' | 'SOURCING' | 'SECURED' | 'PACKED' | 'RECEIVED' | 'QC_PASSED' | 'COMPLETED' | 'EXCEPTION' | 'REFUNDED';
+  resolutionState?: 'OPEN' | 'REPLACEMENT_PENDING' | 'REFUND_PENDING' | 'RESOLVED';
+  replacementSnapshot?: Record<string, unknown>;
+  refundSnapshot?: Record<string, unknown>;
 }
 
 const OrderItemSchema = createSchema<OrderItem>({
@@ -51,6 +58,13 @@ const OrderItemSchema = createSchema<OrderItem>({
   selectedVariants: { type: Object },
   commissionAmount: { type: Number, default: 0 },
   commerceMigrationVersion: { type: Number, index: true },
+  fulfilmentTaskId: { type: String, index: true, sparse: true },
+  runnerPackageId: { type: String, index: true, sparse: true },
+  hubPackageId: { type: String, index: true, sparse: true },
+  fulfilmentStatus: { type: String, enum: ['PENDING', 'SOURCING', 'SECURED', 'PACKED', 'RECEIVED', 'QC_PASSED', 'COMPLETED', 'EXCEPTION', 'REFUNDED'], default: 'PENDING', index: true },
+  resolutionState: { type: String, enum: ['OPEN', 'REPLACEMENT_PENDING', 'REFUND_PENDING', 'RESOLVED'], default: 'OPEN', index: true },
+  replacementSnapshot: { type: Object },
+  refundSnapshot: { type: Object },
   deletedAt: { type: Date },
 });
 

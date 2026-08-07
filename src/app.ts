@@ -19,6 +19,7 @@ import { createPartnerRouter, createRunnerRouter } from './routes/platform-self'
 import { createPublicGeographyRouter } from './routes/public-geography';
 import { createCatalogMediaRouter } from './routes/catalog-media';
 import { errorHandler, requestContext, sendError, sendSuccess } from './utils/http';
+import { requestTiming } from '@middleware/request-timing';
 
 export function createApp() {
   const app = express();
@@ -30,6 +31,7 @@ export function createApp() {
   app.disable('x-powered-by');
   app.set('trust proxy', 1);
   app.use(requestContext);
+  app.use(requestTiming);
   app.use(helmet({
     crossOriginResourcePolicy: { policy: 'cross-origin' },
   }));

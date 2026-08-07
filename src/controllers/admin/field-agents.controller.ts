@@ -3,6 +3,7 @@ import { ProductStatus } from '@lib/constants';
 import { normalizeStateCode, resolveActiveOperationalState } from '@services/operational-state.service';
 import { HttpError, sendSuccess } from '@utils/http';
 import { adminRepos, getPagination, paginated, routeParam } from './admin.helpers';
+import { Product } from '@models/products/product.model';
 
 // Titles hinting at counterfeit goods get flagged for manual review
 const COUNTERFEIT_PATTERN = /replica|first copy|copy|fake|counterfeit|knock[\s-]?off/i;
@@ -31,16 +32,25 @@ export class AdminFieldAgentsController {
       take: limit,
     });
 
-    // Live stats per agent from actual product attribution — no stale stored counters
-    const products = await adminRepos.products().find({});
+    const agentIds = (agents as any[]).map((agent) => agent.id);
+    const statsRows = agentIds.length ? await Product.aggregate([
+      { $match: { fieldAgentId: { $in: agentIds } } },
+      { $group: {
+        _id: '$fieldAgentId',
+        productsUploaded: { $sum: 1 },
+        pendingApproval: { $sum: { $cond: [{ $eq: ['$status', ProductStatus.PENDING_APPROVAL] }, 1, 0] } },
+        approvedToday: { $sum: { $cond: [{ $and: [{ $eq: ['$status', ProductStatus.APPROVED] }, { $gte: ['$updatedAt', startOfToday()] }] }, 1, 0] } },
+      } },
+    ]) : [];
+    const statsMap = new Map((statsRows as any[]).map((row) => [String(row._id), row]));
     const data = (agents as any[]).map((agent) => {
-      const mine = (products as any[]).filter((p) => p.fieldAgentId === agent.id);
+      const stats = statsMap.get(String(agent.id));
       return {
         ...agent,
         stats: {
-          productsUploaded: mine.length,
-          pendingApproval: mine.filter((p) => p.status === ProductStatus.PENDING_APPROVAL).length,
-          approvedToday: mine.filter((p) => p.status === ProductStatus.APPROVED && new Date(p.updatedAt) >= startOfToday()).length,
+          productsUploaded: Number(stats?.productsUploaded || 0),
+          pendingApproval: Number(stats?.pendingApproval || 0),
+          approvedToday: Number(stats?.approvedToday || 0),
         },
       };
     });
@@ -49,18 +59,19 @@ export class AdminFieldAgentsController {
   };
 
   stats = async (_req: Request, res: Response) => {
-    const [products, activeAgents] = await Promise.all([
-      adminRepos.products().find({}),
+    const [productStats, activeAgents] = await Promise.all([
+      Product.aggregate([{ $facet: {
+        pendingReview: [{ $match: { status: ProductStatus.PENDING_APPROVAL } }, { $count: 'count' }],
+        approvedToday: [{ $match: { $or: [{ source: 'field_agent' }, { fieldAgentId: { $exists: true } }], status: ProductStatus.APPROVED, updatedAt: { $gte: startOfToday() } } }, { $count: 'count' }],
+        rejected: [{ $match: { status: ProductStatus.REJECTED } }, { $count: 'count' }],
+      } }]),
       adminRepos.fieldAgents().count({ where: { isActive: true } }),
     ]);
-
-    const fieldProducts = (products as any[]).filter((p) => p.source === 'field_agent' || p.fieldAgentId);
-    const today = startOfToday();
-
+    const summary = (productStats as any[])[0] || {};
     sendSuccess(res, {
-      pendingReview: (products as any[]).filter((p) => p.status === ProductStatus.PENDING_APPROVAL).length,
-      approvedToday: fieldProducts.filter((p) => p.status === ProductStatus.APPROVED && new Date(p.updatedAt) >= today).length,
-      rejected: (products as any[]).filter((p) => p.status === ProductStatus.REJECTED).length,
+      pendingReview: Number(summary.pendingReview?.[0]?.count || 0),
+      approvedToday: Number(summary.approvedToday?.[0]?.count || 0),
+      rejected: Number(summary.rejected?.[0]?.count || 0),
       activeAgents,
     });
   };
@@ -72,6 +83,7 @@ export class AdminFieldAgentsController {
         where: { status: ProductStatus.PENDING_APPROVAL },
         relations: { vendor: true, category: true },
         order: { createdAt: 'ASC' },
+        take: 200,
       }),
       adminRepos.fieldAgents().find({ relations: { agent: true } }),
     ]);
@@ -113,16 +125,20 @@ export class AdminFieldAgentsController {
     });
     if (!agent) throw new HttpError(404, 'Runner not found');
 
-    const products = await adminRepos.products().find({
+    const [products, productCount] = await Promise.all([
+      adminRepos.products().find({
       where: { fieldAgentId: agent.id },
       order: { createdAt: 'DESC' },
-    });
+        take: 10,
+      }),
+      adminRepos.products().count({ where: { fieldAgentId: agent.id } }),
+    ]);
     const mine = products as any[];
 
     sendSuccess(res, {
       ...agent,
       stats: {
-        productsUploaded: mine.length,
+        productsUploaded: productCount,
         pendingApproval: mine.filter((p) => p.status === ProductStatus.PENDING_APPROVAL).length,
         approvedToday: mine.filter((p) => p.status === ProductStatus.APPROVED && new Date(p.updatedAt) >= startOfToday()).length,
       },

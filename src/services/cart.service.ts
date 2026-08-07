@@ -7,10 +7,15 @@ import type { MongoRepository as Repository } from "@lib/mongo-repository";
 import { Cart } from "@models/cart/cart.model";
 import { CartItem } from "@models/cart/cart-item.model";
 import { NegotiatedQuote, ProductVariant } from "@models/catalog/catalog.model";
+import { OperationState } from "@models/platform/geography.model";
 import { Product } from "@models/products/product.model";
-import { nextPublicId } from "@services/public-id.service";
+import {
+  nextCartItemPublicId,
+  nextPublicId,
+} from "@services/public-id.service";
 import { HttpError } from "@utils/http";
 import { Types } from "mongoose";
+import { publishRealtime } from "@services/realtime.service";
 
 function identifierFilter(identifier: string) {
   return Types.ObjectId.isValid(identifier)
@@ -23,7 +28,7 @@ export type CustomerOwner = {
   guestSessionId?: string;
   partnerId?: string;
   assistedCustomerId?: string;
-  /** Historical checkout compatibility only. */
+  // Legacy compatibility field.
   guestId?: string;
 };
 
@@ -34,31 +39,51 @@ export class CartService {
     _products?: Repository<Product>,
   ) {}
 
-  async getCart(owner: CustomerOwner) {
+  private async getOrCreateCart(owner: CustomerOwner) {
+    const existing = await this.findActiveCart(owner);
+    return existing || this.createCart(owner);
+  }
+
+  private findActiveCart(owner: CustomerOwner) {
     const ownerFilter = this.ownerWhere(owner);
-    let cart = await Cart.findOne({
+    return Cart.findOne({
       ...ownerFilter,
       status: "active",
       isCheckedOut: false,
+    })
+      .select("_id publicId version")
+      .lean({ virtuals: true });
+  }
+
+  private async createCart(owner: CustomerOwner) {
+    const ownerFilter = this.ownerWhere(owner);
+    return Cart.create({
+      publicId: await nextPublicId("cart"),
+      ...ownerFilter,
+      ownerType: owner.partnerId
+        ? "partner_assisted"
+        : owner.userId
+          ? "customer"
+          : "guest",
+      subtotal: 0,
+      deliveryFee: 0,
+      total: 0,
+      version: 1,
+      status: "active",
+      isCheckedOut: false,
     });
-    if (!cart) {
-      cart = await Cart.create({
-        publicId: await nextPublicId("cart"),
-        ...ownerFilter,
-        ownerType: owner.partnerId
-          ? "partner_assisted"
-          : owner.userId
-            ? "customer"
-            : "guest",
-        subtotal: 0,
-        deliveryFee: 0,
-        total: 0,
-        version: 1,
-        status: "active",
-        isCheckedOut: false,
-      });
-    }
-    return this.recalculate(cart.id);
+  }
+
+  async getCart(owner: CustomerOwner) {
+    const existing = await Cart.findOne({
+      ...this.ownerWhere(owner),
+      status: "active",
+      isCheckedOut: false,
+    })
+      .select("_id publicId version status isCheckedOut ownerType")
+      .lean({ virtuals: true });
+    const cart = existing || (await this.createCart(owner));
+    return this.recalculate(String(cart._id || cart.id), cart);
   }
 
   async addItem(
@@ -68,18 +93,27 @@ export class CartService {
     selectedVariants?: { color?: string; size?: string },
     variantId?: string,
     quoteId?: string,
+    options?: { deferRecalculation?: boolean },
   ) {
-    const product = await Product.findOne({
-      ...identifierFilter(productIdentifier),
-      status: ProductStatus.PUBLISHED,
-      availabilityStatus: {
-        $in: [
-          ProductAvailabilityStatus.AVAILABLE,
-          ProductAvailabilityStatus.LIMITED,
-        ],
-      },
-      deletedAt: null,
-    }).lean({ virtuals: true });
+    // Validate the product and find the cart in parallel.
+    const [product, existingCart] = await Promise.all([
+      Product.findOne({
+        ...identifierFilter(productIdentifier),
+        status: ProductStatus.PUBLISHED,
+        availabilityStatus: {
+          $in: [
+            ProductAvailabilityStatus.AVAILABLE,
+            ProductAvailabilityStatus.LIMITED,
+          ],
+        },
+        deletedAt: null,
+      })
+        .select(
+          "_id publicId hookId marketId sourceStateId sellingPriceMinor discountMinor currency catalogVersion status availabilityStatus",
+        )
+        .lean({ virtuals: true }),
+      this.findActiveCart(owner),
+    ]);
     if (!product)
       throw new HttpError(
         404,
@@ -143,79 +177,189 @@ export class CartService {
         );
     }
 
-    const cart = await this.getCart(owner);
+    // Writes return a receipt; the client reconciles the cart in the background.
+    const cart = existingCart || (await this.createCart(owner));
     const cartId = String(cart._id || cart.id);
-    const variantKey = variant?._id.toString() || this.variantKey(selectedVariants);
+    const variantKey =
+      variant?._id.toString() || this.variantKey(selectedVariants);
     const unitPriceMinor = Number(
       quote?.agreedPriceMinor ??
         product.sellingPriceMinor - Number(product.discountMinor || 0),
     );
-    const existing = await CartItem.findOne({
-      cartId,
-      productId,
-      variantKey,
-    });
-    if (existing) {
-      const nextQuantity = existing.quantity + quantity;
-      if (nextQuantity > 99)
-        throw new HttpError(
-          400,
-          "Quantity cannot exceed 99",
-          undefined,
-          "VALIDATION_ERROR",
+    let changedItemPublicId: string | undefined;
+    let reservedPublicId: string | undefined;
+    let fastPathCompleted = false;
+
+    if (!quoteId) {
+      reservedPublicId = await nextCartItemPublicId();
+      try {
+        const updated = await CartItem.findOneAndUpdate(
+          {
+            cartId,
+            productId,
+            variantKey,
+            // Preserve quoted and stale-price lines.
+            $or: [{ quoteId: { $exists: false } }, { quoteId: null }],
+            unitPriceMinor,
+            totalPriceMinor: { $exists: true },
+            totalPrice: { $exists: true },
+            quantity: { $lte: 99 - quantity },
+          },
+          {
+            $inc: {
+              quantity,
+              totalPriceMinor: unitPriceMinor * quantity,
+              totalPrice: (unitPriceMinor * quantity) / 100,
+            },
+            $setOnInsert: {
+              publicId: reservedPublicId,
+              cartId,
+              productId,
+              variantId: variant?._id.toString(),
+              marketId: product.marketId,
+              stateId: product.sourceStateId,
+              unitPriceMinor,
+              currency: product.currency || "NGN",
+              unitPrice: unitPriceMinor / 100,
+              productVersion: product.catalogVersion || 1,
+              selectedVariants: variant
+                ? { color: variant.colour, size: variant.size }
+                : selectedVariants,
+              variantKey,
+            },
+          },
+          { upsert: true, returnDocument: "after", setDefaultsOnInsert: true },
+        ).select(
+          "publicId quantity quoteId quoteVersion unitPriceMinor totalPriceMinor totalPrice",
         );
-      if (existing.quoteId && nextQuantity !== quote?.quantity) {
-        existing.quoteId = undefined;
-        existing.quoteVersion = undefined;
-        existing.unitPriceMinor = Number(
-          product.sellingPriceMinor - Number(product.discountMinor || 0),
-        );
+        changedItemPublicId = updated?.publicId;
+        fastPathCompleted = Boolean(updated);
+      } catch (error) {
+        // Retry through the validated path when the fast update misses.
+        if ((error as { code?: number })?.code !== 11000) throw error;
       }
-      existing.quantity = nextQuantity;
-      existing.totalPriceMinor =
-        nextQuantity * Number(existing.unitPriceMinor || unitPriceMinor);
-      existing.unitPrice =
-        Number(existing.unitPriceMinor || unitPriceMinor) / 100;
-      existing.totalPrice = Number(existing.totalPriceMinor) / 100;
-      await existing.save();
-    } else {
-      await CartItem.create({
-        publicId: await nextPublicId("cartItem"),
+    }
+
+    if (!fastPathCompleted) {
+      const existing = await CartItem.findOne({
         cartId,
         productId,
-        variantId: variant?._id.toString(),
-        marketId: product.marketId,
-        stateId: product.sourceStateId,
-        quoteId: quote?._id.toString(),
-        quantity,
-        unitPriceMinor,
-        totalPriceMinor: unitPriceMinor * quantity,
-        currency: product.currency || "NGN",
-        unitPrice: unitPriceMinor / 100,
-        totalPrice: (unitPriceMinor * quantity) / 100,
-        productVersion: product.catalogVersion || 1,
-        quoteVersion: quote?.version || undefined,
-        selectedVariants: variant
-          ? { color: variant.colour, size: variant.size }
-          : selectedVariants,
         variantKey,
-      });
+      }).select(
+        "publicId quantity quoteId quoteVersion unitPriceMinor totalPriceMinor unitPrice totalPrice",
+      );
+      if (existing) {
+        const nextQuantity = existing.quantity + quantity;
+        if (nextQuantity > 99)
+          throw new HttpError(
+            400,
+            "Quantity cannot exceed 99",
+            undefined,
+            "VALIDATION_ERROR",
+          );
+        if (existing.quoteId && nextQuantity !== quote?.quantity) {
+          existing.quoteId = undefined;
+          existing.quoteVersion = undefined;
+          existing.unitPriceMinor = Number(
+            product.sellingPriceMinor - Number(product.discountMinor || 0),
+          );
+        }
+        existing.quantity = nextQuantity;
+        existing.totalPriceMinor =
+          nextQuantity * Number(existing.unitPriceMinor || unitPriceMinor);
+        existing.unitPrice =
+          Number(existing.unitPriceMinor || unitPriceMinor) / 100;
+        existing.totalPrice = Number(existing.totalPriceMinor) / 100;
+        await existing.save();
+        changedItemPublicId = existing.publicId;
+      } else {
+        const created = await CartItem.create({
+          publicId: reservedPublicId || (await nextCartItemPublicId()),
+          cartId,
+          productId,
+          variantId: variant?._id.toString(),
+          marketId: product.marketId,
+          stateId: product.sourceStateId,
+          quoteId: quote?._id.toString(),
+          quantity,
+          unitPriceMinor,
+          totalPriceMinor: unitPriceMinor * quantity,
+          currency: product.currency || "NGN",
+          unitPrice: unitPriceMinor / 100,
+          totalPrice: (unitPriceMinor * quantity) / 100,
+          productVersion: product.catalogVersion || 1,
+          quoteVersion: quote?.version || undefined,
+          selectedVariants: variant
+            ? { color: variant.colour, size: variant.size }
+            : selectedVariants,
+          variantKey,
+        });
+        changedItemPublicId = created.publicId;
+      }
     }
-    await Cart.findByIdAndUpdate(cartId, { $inc: { version: 1 } });
-    return this.recalculate(cartId);
+    const versionedCart = await Cart.findOneAndUpdate(
+      { _id: cartId, status: "active", isCheckedOut: false },
+      { $inc: { version: 1 } },
+      { returnDocument: "after" },
+    )
+      .select("_id publicId version")
+      .lean({ virtuals: true });
+    if (!versionedCart)
+      throw new HttpError(
+        409,
+        "Basket is no longer active",
+        undefined,
+        "CART_VERSION_CHANGED",
+      );
+    const nextVersion = Number(versionedCart.version || 1);
+    const publicCartId = versionedCart.publicId || cart.publicId || cartId;
+
+    if (options?.deferRecalculation) {
+      publishRealtime(
+        {
+          type: "cart.updated",
+          entityId: publicCartId,
+          version: nextVersion,
+        },
+        owner.userId
+          ? { accountId: owner.userId }
+          : owner.guestId
+            ? { guestId: owner.guestId }
+            : undefined,
+      );
+      // Refresh legacy totals without hydrating the cart.
+      setImmediate(() => {
+        void this.refreshSummary(cartId).catch((error) => {
+          console.error("[cart] deferred summary refresh failed", error);
+        });
+      });
+      return {
+        cartId: publicCartId,
+        itemId: changedItemPublicId,
+        version: nextVersion,
+        accepted: true,
+      };
+    }
+    return this.changedCart(owner, cartId);
   }
 
-  async updateItem(owner: CustomerOwner, itemId: string, quantity: number) {
-    const cart = await this.getCart(owner);
+  async updateItem(
+    owner: CustomerOwner,
+    itemId: string,
+    quantity: number,
+    options?: { deferRecalculation?: boolean },
+  ) {
+    const cart = await this.getOrCreateCart(owner);
     const cartId = String(cart._id || cart.id);
     if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > 99)
       throw new HttpError(400, "Quantity must be between 1 and 99");
-    const item = await CartItem.findOne({
-      ...identifierFilter(itemId),
-      cartId,
-    });
+    const item = await CartItem.findOne({ ...identifierFilter(itemId), cartId })
+      .select("quantity unitPriceMinor quoteId quoteVersion productId")
+      .lean();
     if (!item) throw new HttpError(404, "Cart item not found");
-    const product = await Product.findById(item.productId).lean();
+    const product = await Product.findById(item.productId)
+      .select("status sellingPriceMinor discountMinor")
+      .lean();
     if (!product || product.status !== ProductStatus.PUBLISHED)
       throw new HttpError(
         409,
@@ -223,58 +367,116 @@ export class CartService {
         undefined,
         "PRODUCT_NOT_AVAILABLE",
       );
+    let unitPriceMinor = Number(item.unitPriceMinor || 0);
+    const resetQuote = Boolean(item.quoteId && item.quantity !== quantity);
     if (item.quoteId && item.quantity !== quantity) {
-      item.quoteId = undefined;
-      item.quoteVersion = undefined;
-      item.unitPriceMinor =
+      unitPriceMinor =
         Number(product.sellingPriceMinor || 0) -
         Number(product.discountMinor || 0);
     }
-    item.quantity = quantity;
-    item.totalPriceMinor = quantity * Number(item.unitPriceMinor || 0);
-    item.unitPrice = Number(item.unitPriceMinor || 0) / 100;
-    item.totalPrice = Number(item.totalPriceMinor || 0) / 100;
-    await item.save();
-    await Cart.findByIdAndUpdate(cartId, { $inc: { version: 1 } });
-    return this.recalculate(cartId);
-  }
-
-  async removeItem(owner: CustomerOwner, itemId: string) {
-    const cart = await this.getCart(owner);
-    const cartId = String(cart._id || cart.id);
-    const removed = await CartItem.findOneAndDelete({
-      ...identifierFilter(itemId),
+    const updated = await CartItem.findOneAndUpdate(
+      { ...identifierFilter(itemId), cartId },
+      {
+        $set: {
+          quantity,
+          unitPriceMinor,
+          unitPrice: unitPriceMinor / 100,
+          totalPriceMinor: quantity * unitPriceMinor,
+          totalPrice: (quantity * unitPriceMinor) / 100,
+        },
+        ...(resetQuote ? { $unset: { quoteId: 1, quoteVersion: 1 } } : {}),
+      },
+      { returnDocument: "after" },
+    )
+      .select("publicId quantity unitPriceMinor totalPriceMinor totalPrice")
+      .lean();
+    if (!updated)
+      throw new HttpError(
+        409,
+        "Cart changed before the quantity update completed",
+        undefined,
+        "CART_VERSION_CHANGED",
+      );
+    return this.finishMutation(
+      owner,
       cartId,
-    });
-    if (!removed) throw new HttpError(404, "Cart item not found");
-    await Cart.findByIdAndUpdate(cartId, { $inc: { version: 1 } });
-    return this.recalculate(cartId);
+      updated.publicId,
+      options?.deferRecalculation === true,
+    );
   }
 
-  async clear(owner: CustomerOwner, stateId?: string) {
-    const cart = await this.getCart(owner);
+  async removeItem(
+    owner: CustomerOwner,
+    itemId: string,
+    options?: { deferRecalculation?: boolean },
+  ) {
+    const cart = await this.getOrCreateCart(owner);
     const cartId = String(cart._id || cart.id);
+    const removed = await CartItem.findOneAndDelete({ ...identifierFilter(itemId), cartId })
+      .select("publicId")
+      .lean();
+    if (!removed) throw new HttpError(404, "Cart item not found");
+    return this.finishMutation(owner, cartId, removed.publicId, options?.deferRecalculation === true);
+  }
+
+  async clear(
+    owner: CustomerOwner,
+    stateId?: string,
+    options?: { deferRecalculation?: boolean },
+  ) {
+    const cart = await this.getOrCreateCart(owner);
+    const cartId = String(cart._id || cart.id);
+    let storedStateId = stateId;
+    if (stateId && !Types.ObjectId.isValid(stateId)) {
+      const state = await OperationState.findOne({ publicId: stateId })
+        .select("_id")
+        .lean();
+      storedStateId = state?._id?.toString();
+    }
     await CartItem.deleteMany({
       cartId,
-      ...(stateId ? { stateId } : {}),
+      ...(storedStateId ? { stateId: storedStateId } : {}),
     });
-    await Cart.findByIdAndUpdate(cartId, { $inc: { version: 1 } });
-    return this.recalculate(cartId);
+    return this.finishMutation(owner, cartId, undefined, options?.deferRecalculation === true);
   }
 
-  async recalculate(cartId: string) {
-    const cart = await Cart.findById(cartId).lean({ virtuals: true });
+  async recalculate(cartId: string, existingCart?: any) {
+    const [cart, items] = await Promise.all([
+      existingCart
+        ? Promise.resolve(existingCart)
+        : Cart.findById(cartId).select("_id publicId version status isCheckedOut ownerType").lean({ virtuals: true }),
+      CartItem.find({ cartId })
+        .select(
+          "_id publicId productId quantity selectedVariants variantKey variantId marketId stateId quoteId quoteVersion unitPriceMinor totalPriceMinor currency productVersion createdAt",
+        )
+        .sort({ createdAt: 1 })
+        .lean({ virtuals: true }),
+    ]);
     if (!cart) throw new HttpError(404, "Cart not found");
-    const items = await CartItem.find({ cartId })
-      .sort({ createdAt: 1 })
-      .lean({ virtuals: true });
     const productIds = [...new Set(items.map((item) => item.productId))];
-    const products = await Product.find({ _id: { $in: productIds } }).lean({
-      virtuals: true,
-    });
-    const productMap = new Map(
-      products.map((product) => [product._id.toString(), product]),
+    const stateIds = [...new Set(items.map((item) => item.stateId).filter(Boolean))];
+    const [products, states] = await Promise.all([
+      productIds.length
+        ? Product.find({ _id: { $in: productIds } })
+            .select(
+              "_id publicId hookId title slug images sellingPriceMinor discountMinor currency catalogVersion status",
+            )
+            .lean({ virtuals: true })
+        : [],
+      stateIds.length
+        ? OperationState.find({ _id: { $in: stateIds } })
+            .select("_id publicId name code")
+            .lean({ virtuals: true })
+        : [],
+    ]);
+    const productMap = new Map(products.map((product) => [product._id.toString(), product]));
+    const stateMap = new Map(
+      states.map((state) => [
+        state._id.toString(),
+        { publicId: state.publicId, name: state.name, code: state.code },
+      ]),
     );
+    const groupsByState = new Map<string, any[]>();
     const enriched = items.map((item) => {
       const product = productMap.get(item.productId);
       const blockingReasons: string[] = [];
@@ -282,17 +484,22 @@ export class CartService {
         blockingReasons.push("PRODUCT_NOT_AVAILABLE");
       if (product && product.catalogVersion !== item.productVersion)
         blockingReasons.push("PRODUCT_CHANGED");
-      return {
+      const enrichedItem = {
         ...item,
-        product: product ? this.publicProduct(product) : undefined,
+        productId: product?.publicId || product?.hookId || item.productId,
+        publicStateId: stateMap.get(String(item.stateId))?.publicId,
+        product: product ? this.cartProduct(product) : undefined,
         blockingReasons,
         checkoutEligible: blockingReasons.length === 0,
       };
+      if (item.stateId) {
+        const existing = groupsByState.get(String(item.stateId)) || [];
+        existing.push(enrichedItem);
+        groupsByState.set(String(item.stateId), existing);
+      }
+      return enrichedItem;
     });
-    const groups = [
-      ...new Set(enriched.map((item) => item.stateId).filter(Boolean)),
-    ].map((stateId) => {
-      const groupItems = enriched.filter((item) => item.stateId === stateId);
+    const groups = [...groupsByState.entries()].map(([stateId, groupItems]) => {
       const subtotalMinor = groupItems.reduce(
         (sum, item) => sum + Number(item.totalPriceMinor || 0),
         0,
@@ -302,6 +509,8 @@ export class CartService {
       ];
       return {
         stateId,
+        publicStateId: stateMap.get(String(stateId))?.publicId,
+        state: stateMap.get(String(stateId)),
         items: groupItems,
         subtotalMinor,
         currency: "NGN",
@@ -313,11 +522,6 @@ export class CartService {
       (sum, item) => sum + Number(item.totalPriceMinor || 0),
       0,
     );
-    await Cart.findByIdAndUpdate(cartId, {
-      subtotal: subtotalMinor / 100,
-      deliveryFee: 0,
-      total: subtotalMinor / 100,
-    });
     return {
       ...cart,
       items: enriched,
@@ -328,18 +532,51 @@ export class CartService {
     };
   }
 
-  private publicProduct(product: any) {
+  private async refreshSummary(cartId: string) {
+    const [summary] = await CartItem.aggregate<{
+      _id: null;
+      subtotalMinor: number;
+    }>([
+      { $match: { cartId } },
+      {
+        $group: {
+          _id: null,
+          subtotalMinor: {
+            $sum: {
+              $ifNull: [
+                "$totalPriceMinor",
+                { $multiply: ["$unitPriceMinor", "$quantity"] },
+              ],
+            },
+          },
+        },
+      },
+    ]);
+    const subtotalMinor = Number(summary?.subtotalMinor || 0);
+    await Cart.updateOne(
+      { _id: cartId },
+      {
+        $set: {
+          subtotal: subtotalMinor / 100,
+          deliveryFee: 0,
+          total: subtotalMinor / 100,
+        },
+      },
+    );
+  }
+
+  private cartProduct(product: any) {
+    const images = Array.isArray(product.images)
+      ? product.images
+          .map((image: any) => (typeof image === "string" ? image : image?.url))
+          .filter(Boolean)
+      : [];
     return {
-      id: product.publicId || product.id,
-      publicId: product.publicId,
+      id: product.publicId || product.hookId,
+      publicId: product.publicId || product.hookId,
       title: product.title,
       slug: product.slug,
-      images: product.images || [],
-      sellingPriceMinor: product.sellingPriceMinor,
-      discountMinor: product.discountMinor || 0,
-      currency: product.currency || "NGN",
-      status: product.status,
-      catalogVersion: product.catalogVersion,
+      imageUrl: images[0] || null,
     };
   }
 
@@ -351,6 +588,65 @@ export class CartService {
       .trim()
       .toLowerCase();
     return color || size ? `${color || "-"}::${size || "-"}` : "default";
+  }
+
+  private async changedCart(owner: CustomerOwner, cartId: string) {
+    const cart = await this.recalculate(cartId);
+    publishRealtime({
+      type: "cart.updated",
+      entityId: cart.publicId || cart.id,
+      version: Number(cart.version || 1),
+    }, owner.userId ? { accountId: owner.userId } : owner.guestId ? { guestId: owner.guestId } : undefined);
+    return cart;
+  }
+
+  private async finishMutation(
+    owner: CustomerOwner,
+    cartId: string,
+    itemId?: string,
+    deferRecalculation = false,
+  ) {
+    const versionedCart = await Cart.findOneAndUpdate(
+      { _id: cartId, status: "active", isCheckedOut: false },
+      { $inc: { version: 1 } },
+      { returnDocument: "after" },
+    )
+      .select("publicId version")
+      .lean();
+    if (!versionedCart)
+      throw new HttpError(
+        409,
+        "Basket is no longer active",
+        undefined,
+        "CART_VERSION_CHANGED",
+      );
+    const receipt = {
+      cartId: versionedCart.publicId || cartId,
+      ...(itemId ? { itemId } : {}),
+      version: Number(versionedCart.version || 1),
+      accepted: true,
+    };
+    publishRealtime(
+      {
+        type: "cart.updated",
+        entityId: receipt.cartId,
+        version: receipt.version,
+      },
+      owner.userId
+        ? { accountId: owner.userId }
+        : owner.guestId
+          ? { guestId: owner.guestId }
+          : undefined,
+    );
+    if (deferRecalculation) {
+      setImmediate(() => {
+        void this.refreshSummary(cartId).catch((error) => {
+          console.error("[cart] summary refresh failed", error);
+        });
+      });
+      return receipt;
+    }
+    return this.changedCart(owner, cartId);
   }
 
   private ownerWhere(owner: CustomerOwner) {

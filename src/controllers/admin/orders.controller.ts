@@ -12,6 +12,10 @@ import {
 import { publicOrder } from "@lib/public-resource";
 import { Order } from "@models/orders/order.model";
 import { isValidObjectId } from "mongoose";
+import { OrderItem } from "@models/orders/order-item.model";
+import { Logistics } from "@models/logistics/logistics.model";
+import { User } from "@models/users/user.model";
+import { adminOrderStatsCache } from "@lib/ttl-cache";
 
 export class AdminOrdersController {
   private readonly email = new EmailService();
@@ -37,7 +41,7 @@ export class AdminOrdersController {
       typeof req.query.search === "string"
         ? req.query.search.toLowerCase()
         : undefined;
-    const where: Record<string, unknown> = {};
+    const where: Record<string, any> = {};
     if (typeof req.query.status === "string") {
       if (req.query.status === "active") {
         where.status = {
@@ -58,34 +62,68 @@ export class AdminOrdersController {
       where.paymentMode = req.query.paymentMode;
     if (typeof req.query.orderType === "string")
       where.orderType = req.query.orderType;
-    const all = await adminRepos
-      .orders()
-      .find({ where, relations: { user: true }, order: { createdAt: "DESC" } });
-    let filtered = all as any[];
+    const scope = req.user?.scopeType === "global"
+      ? {}
+      : { sourceStateId: { $in: req.user?.assignedStateIds || [] } };
+    Object.assign(where, scope);
+    const expression = search
+      ? new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i")
+      : undefined;
+    const searchUsers = expression
+      ? await User.find({
+          $or: [{ email: expression }, { firstName: expression }, { lastName: expression }],
+        }).select("publicId firstName lastName email").limit(50).lean({ virtuals: true })
+      : [];
     if (search) {
-      filtered = filtered.filter((order) =>
-        [
-          order.orderCode,
-          order.guestEmail,
-          order.guestName,
-          order.user?.email,
-          order.user?.firstName,
-          order.user?.lastName,
-        ].some((value) =>
-          String(value || "")
-            .toLowerCase()
-            .includes(search),
-        ),
-      );
+      where.$or = [
+        { orderCode: expression },
+        { guestEmail: expression },
+        { guestName: expression },
+        ...((searchUsers as any[]).length
+          ? [{ userId: { $in: (searchUsers as any[]).flatMap((user) => [String(user._id), user.publicId].filter(Boolean)) } }]
+          : []),
+      ];
     }
-    const data = await Promise.all(
-      filtered
-        .slice(skip, skip + limit)
-        .map((order) => this.enrichOrder(order)),
-    );
-    const stats = await this.statsData();
+    const orderFields = "publicId orderCode userId guestEmail guestName subtotal deliveryFee discount total status paymentStatus paymentMode orderType createdAt updatedAt commerceStatus commercePaymentStatus sourceStateId deliveryAddress deliverySubsidy";
+    const [orders, total, stats] = await Promise.all([
+      Order.find(where).select(orderFields).sort({ createdAt: -1 }).skip(skip).limit(limit).lean({ virtuals: true }),
+      Order.countDocuments(where),
+      this.statsData(),
+    ]);
+    const orderIds = (orders as any[]).map((order) => String(order._id || order.id));
+    const userIds = [...new Set((orders as any[]).map((order) => String(order.userId || "")).filter(Boolean))];
+    const userFilters = userIds.flatMap((id) => [
+      ...(isValidObjectId(id) ? [{ _id: id }] : []),
+      { publicId: id },
+    ]);
+    const [users, items, logistics] = await Promise.all([
+      userFilters.length
+        ? User.find({ $or: userFilters }).select("publicId firstName lastName email phone").lean({ virtuals: true })
+        : [],
+      orderIds.length
+        ? OrderItem.find({ orderId: { $in: orderIds } }).select("orderId productId productTitle productImage quantity unitPrice totalPrice selectedVariants").lean({ virtuals: true })
+        : [],
+      orderIds.length
+        ? Logistics.find({ orderId: { $in: orderIds } }).select("orderId estimatedDeliveryAt status trackingNumber provider").lean({ virtuals: true })
+        : [],
+    ]);
+    const userMap = new Map((users as any[]).flatMap((user) => [[String(user._id), user], [String(user.publicId), user]]));
+    const itemMap = new Map<string, any[]>();
+    (items as any[]).forEach((item) => itemMap.set(String(item.orderId), [...(itemMap.get(String(item.orderId)) || []), item]));
+    const logisticsMap = new Map<string, any>();
+    (logistics as any[]).forEach((item) => logisticsMap.set(String(item.orderId), item));
+    const data = (orders as any[]).map((order) => {
+      const { _id, ...safeOrder } = order;
+      const key = String(_id || order.id);
+      return {
+        ...safeOrder,
+        user: userMap.get(String(order.userId)),
+        items: itemMap.get(key) || [],
+        logistics: logisticsMap.get(key),
+      };
+    });
     sendSuccess(res, {
-      ...paginated(data.map(publicOrder), filtered.length, page, limit),
+      ...paginated(data.map(publicOrder), total, page, limit),
       stats,
     });
   };
@@ -357,6 +395,8 @@ export class AdminOrdersController {
   };
 
   private async statsData() {
+    const cached = adminOrderStatsCache.get('summary');
+    if (cached) return cached;
     const orders = adminRepos.orders();
     const [revenueRow] = await orders.aggregate<{ total: number }>([
       { $group: { _id: null, total: { $sum: "$total" } } },
@@ -370,7 +410,7 @@ export class AdminOrdersController {
         orders.count({ where: { status: OrderStatus.CANCELLED } }),
         orders.count({ where: { paymentStatus: PaymentStatus.UNPAID } }),
       ]);
-    return {
+    return adminOrderStatsCache.set('summary', {
       total,
       pending,
       inTransit,
@@ -378,6 +418,6 @@ export class AdminOrdersController {
       cancelled,
       unpaid,
       revenue: Number(revenueRow?.total || 0),
-    };
+    });
   }
 }

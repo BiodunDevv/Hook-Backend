@@ -35,6 +35,7 @@ export type ErrorCode =
   | 'EMAIL_VERIFICATION_REQUIRED'
   | 'ADDRESS_OUTSIDE_COVERAGE'
   | 'ADDRESS_STATE_MISMATCH'
+  | 'ADDRESS_LGA_MISMATCH'
   | 'CHECKOUT_STATE_UNAVAILABLE'
   | 'CHECKOUT_PREVIEW_INVALID'
   | 'CHECKOUT_PREVIEW_EXPIRED'
@@ -52,7 +53,15 @@ export type ErrorCode =
   | 'PAYMENT_EVIDENCE_MISMATCH'
   | 'WEBHOOK_SIGNATURE_INVALID'
   | 'POD_CONFIRMATION_REQUIRED'
-  | 'POD_OVERRIDE_REQUIRED';
+  | 'POD_OVERRIDE_REQUIRED'
+  | 'ORDER_NOT_COMPLETE'
+  | 'HUB_MISMATCH'
+  | 'PAYMENT_REQUIRED'
+  | 'PAYMENT_NOT_CAPTURED'
+  | 'PROVIDER_NOT_READY'
+  | 'CUSTODY_EXPIRED'
+  | 'RETURN_WINDOW_CLOSED'
+  | 'REFUND_LIMIT_EXCEEDED'
 
 export class HttpError extends Error {
   constructor(
@@ -102,19 +111,21 @@ export function asyncHandler(
   };
 }
 
-export function sendSuccess<T>(res: Response, data: T, _message?: string) {
+export function sendSuccess<T>(res: Response, data: T, message?: string) {
   const req = res.req;
   res.json({
     success: true,
+    ...(message ? { message } : {}),
     data,
     meta: responseMeta(req.requestId || randomUUID(), extractPagination(data)),
   });
 }
 
-export function sendCreated<T>(res: Response, data: T, _message?: string) {
+export function sendCreated<T>(res: Response, data: T, message?: string) {
   const req = res.req;
   res.status(201).json({
     success: true,
+    ...(message ? { message } : {}),
     data,
     meta: responseMeta(req.requestId || randomUUID(), extractPagination(data)),
   });

@@ -1,13 +1,11 @@
 import { Request, Response } from 'express';
 import { UserRole } from '@lib/constants';
 import { sendSuccess } from '@utils/http';
-import { adminRepos } from './admin.helpers';
+import { Order } from '@models/orders/order.model';
+import { Product } from '@models/products/product.model';
+import { User } from '@models/users/user.model';
 
 const STAFF_ROLES = [UserRole.SUPPORT, UserRole.ADMIN, UserRole.SUPER_ADMIN];
-
-function matches(value: unknown, q: string): boolean {
-  return String(value || '').toLowerCase().includes(q);
-}
 
 function userHasPermission(req: Request, permission: string): boolean {
   const user = req.user;
@@ -30,43 +28,74 @@ export class AdminSearchController {
     const canOrders    = userHasPermission(req, 'orders.view');
     const canProducts  = userHasPermission(req, 'products.view');
     const canCustomers = userHasPermission(req, 'customers.view');
+    const expression = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
 
-    // Fetch only what the caller can see in parallel
-    const [allOrders, allProducts, allUsers, allStaff] = await Promise.all([
-      canOrders    ? adminRepos.orders().find({ relations: { user: true }, order: { createdAt: 'DESC' } }) : Promise.resolve([]),
-      canProducts  ? adminRepos.products().find({ order: { createdAt: 'DESC' } }) : Promise.resolve([]),
-      canCustomers ? adminRepos.users().find({ where: { role: UserRole.SHOPPER }, order: { createdAt: 'DESC' } }) : Promise.resolve([]),
-      // Staff bucket: super_admin only, searches across all staff roles
-      isSuperAdmin ? adminRepos.users().find({ order: { createdAt: 'DESC' } }) : Promise.resolve([]),
+    const userMatches = (canCustomers || isSuperAdmin)
+      ? await User.find({
+          $or: [
+            { email: expression },
+            { firstName: expression },
+            { lastName: expression },
+            { role: expression },
+          ],
+          role: { $in: [UserRole.SHOPPER, ...STAFF_ROLES] },
+        })
+          .select('firstName lastName email role isActive isEmailVerified permissions')
+          .sort({ createdAt: -1 })
+          .limit(limit * 4)
+          .lean({ virtuals: true })
+      : [];
+    const customerIds = (userMatches as any[])
+      .filter((user) => user.role === UserRole.SHOPPER)
+      .map((user) => String(user._id || user.id));
+    const orderFilter = {
+      $or: [
+        { orderCode: expression },
+        { guestEmail: expression },
+        { guestName: expression },
+        ...(customerIds.length ? [{ userId: { $in: customerIds } }] : []),
+      ],
+    };
+
+    const [ordersRows, productsRows] = await Promise.all([
+      canOrders
+        ? Order.find(orderFilter)
+          .select('publicId orderCode userId guestEmail guestName status paymentStatus total createdAt')
+          .sort({ createdAt: -1 })
+          .limit(limit)
+          .lean({ virtuals: true })
+        : [],
+      canProducts
+        ? Product.find({
+            $or: [
+              { title: expression },
+              { hookId: expression },
+              { publicId: expression },
+            ],
+          })
+          .select('publicId hookId title status sellingPrice sellingPriceMinor images')
+          .sort({ createdAt: -1 })
+          .limit(limit)
+          .lean({ virtuals: true })
+        : [],
     ]);
 
-    const orders = (allOrders as any[])
-      .filter((o) =>
-        matches(o.orderCode, q) ||
-        matches(o.user?.email, q) ||
-        matches(o.user?.firstName, q) ||
-        matches(o.user?.lastName, q) ||
-        matches(`${o.user?.firstName || ''} ${o.user?.lastName || ''}`, q),
-      )
-      .slice(0, limit)
-      .map((o) => ({
-        id: o.id,
+    const userMap = new Map((userMatches as any[]).map((user) => [String(user._id || user.id), user]));
+    const orders = (ordersRows as any[]).map((o) => {
+      const user = userMap.get(String(o.userId));
+      return {
+        id: o.publicId || o.orderCode || String(o._id),
         orderCode: o.orderCode,
         status: o.status,
         paymentStatus: o.paymentStatus,
         total: o.total,
-        customer: `${o.user?.firstName || ''} ${o.user?.lastName || ''}`.trim() || o.user?.email || 'Unknown',
+        customer: `${user?.firstName || ''} ${user?.lastName || ''}`.trim() || user?.email || o.guestEmail || o.guestName || 'Unknown',
         createdAt: o.createdAt,
-      }));
+      };
+    });
 
-    const products = (allProducts as any[])
-      .filter((p) =>
-        matches(p.title, q) ||
-        matches(p.hookId, q),
-      )
-      .slice(0, limit)
-      .map((p) => ({
-        id: p.id,
+    const products = (productsRows as any[]).map((p) => ({
+        id: p.publicId || p.hookId || String(p._id),
         title: p.title,
         hookId: p.hookId,
         status: p.status,
@@ -74,16 +103,11 @@ export class AdminSearchController {
         image: Array.isArray(p.images) ? p.images[0] : null,
       }));
 
-    const customers = (allUsers as any[])
-      .filter((u) =>
-        matches(u.email, q) ||
-        matches(u.firstName, q) ||
-        matches(u.lastName, q) ||
-        matches(`${u.firstName || ''} ${u.lastName || ''}`, q),
-      )
+    const customers = (userMatches as any[])
+      .filter((u) => u.role === UserRole.SHOPPER)
       .slice(0, limit)
       .map((u) => ({
-        id: u.id,
+        id: u.publicId || String(u._id || u.id),
         firstName: u.firstName,
         lastName: u.lastName,
         email: u.email,
@@ -91,20 +115,11 @@ export class AdminSearchController {
         isEmailVerified: u.isEmailVerified,
       }));
 
-    // Staff results are limited to active administrative role families.
-    const staff = (allStaff as any[])
-      .filter((u) =>
-        STAFF_ROLES.includes(u.role) && (
-          matches(u.email, q) ||
-          matches(u.firstName, q) ||
-          matches(u.lastName, q) ||
-          matches(`${u.firstName || ''} ${u.lastName || ''}`, q) ||
-          matches(u.role, q)
-        ),
-      )
+    const staff = (userMatches as any[])
+      .filter((u) => STAFF_ROLES.includes(u.role))
       .slice(0, limit)
       .map((u) => ({
-        id: u.id,
+        id: u.publicId || String(u._id || u.id),
         firstName: u.firstName,
         lastName: u.lastName,
         email: u.email,

@@ -4,6 +4,7 @@ import { PaymentService } from '@services/payment.service';
 import { HttpError, sendSuccess } from '@utils/http';
 import { adminRepos, getPagination, paginated, routeParam } from './admin.helpers';
 import { auditAdminAction } from '@lib/audit';
+import { CheckoutEvent } from '@models/analytics/checkout-event.model';
 
 export class AdminCommerceController {
   private paymentService = new PaymentService(adminRepos.payments(), adminRepos.orders(), adminRepos.escrowLedger());
@@ -82,10 +83,13 @@ export class AdminCommerceController {
   };
 
   checkoutAnalytics = async (_req: Request, res: Response) => {
-    const events = await adminRepos.checkoutEvents().find({});
-    const counts = (events as any[]).reduce((out, event) => ({ ...out, [event.event]: (out[event.event] || 0) + 1 }), {} as Record<string, number>);
-    const payNow = (events as any[]).filter((event) => event.event === 'payment_method_selected' && event.paymentMode === 'pay_now').length;
-    const pod = (events as any[]).filter((event) => event.event === 'payment_method_selected' && event.paymentMode === 'pay_on_delivery').length;
-    sendSuccess(res, { counts, paymentSelection: { payNow, payOnDelivery: pod }, totalSessions: new Set((events as any[]).map((event) => event.sessionId)).size });
+    const [counts, paymentSelection, sessions] = await Promise.all([
+      CheckoutEvent.aggregate([{ $group: { _id: '$event', count: { $sum: 1 } } }]),
+      CheckoutEvent.aggregate([{ $match: { event: 'payment_method_selected' } }, { $group: { _id: '$paymentMode', count: { $sum: 1 } } }]),
+      CheckoutEvent.distinct('sessionId'),
+    ]);
+    const countMap = Object.fromEntries((counts as any[]).map((row) => [row._id, row.count]));
+    const paymentMap = Object.fromEntries((paymentSelection as any[]).map((row) => [row._id, row.count]));
+    sendSuccess(res, { counts: countMap, paymentSelection: { payNow: paymentMap.pay_now || 0, payOnDelivery: paymentMap.pay_on_delivery || 0 }, totalSessions: sessions.length });
   };
 }

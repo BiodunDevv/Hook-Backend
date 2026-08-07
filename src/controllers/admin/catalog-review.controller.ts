@@ -5,6 +5,7 @@ import { CatalogReviewService } from '@services/catalog.service';
 import { recordAudit } from '@services/platform-audit.service';
 import { sendSuccess } from '@utils/http';
 import { presentSubmission } from '@services/catalog-presentation.service';
+import { adminReviewCache } from '@lib/ttl-cache';
 
 function stateScope(req: Request) {
   if (req.platformContext?.stateId) return [req.platformContext.stateId];
@@ -40,6 +41,7 @@ export class AdminCatalogReviewController {
       stateId: updated.sourceStateId,
       after: { status: updated.status, reviewedBy: updated.reviewedBy },
     });
+    adminReviewCache.clear();
     sendSuccess(res, await presentSubmission(updated));
   };
 
@@ -71,6 +73,7 @@ export class AdminCatalogReviewController {
       after: { status: updated.status, version: updated.version },
       reason: req.body.reason,
     });
+    adminReviewCache.clear();
     sendSuccess(res, await presentSubmission(updated));
   };
 }

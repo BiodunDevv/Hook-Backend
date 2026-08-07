@@ -25,11 +25,15 @@ import {
 import { requireAuth, requireAccountType } from "@middleware/auth";
 import { AccountType } from "@lib/constants";
 import { asyncHandler } from "@utils/http";
+import { FulfilmentController } from "@controllers/fulfilment.controller";
+import { ProductLikesController } from "@controllers/product-likes.controller";
 
 export function createCustomerRouter() {
   const router = Router();
   const controller = new CustomerController();
   const negotiations = new NegotiationController();
+  const fulfilment = new FulfilmentController();
+  const likes = new ProductLikesController();
 
   router.use(requireCustomerIdentity);
 
@@ -51,6 +55,25 @@ export function createCustomerRouter() {
     asyncHandler(controller.clearCartState),
   );
   router.get("/commerce/config", asyncHandler(controller.commerceConfig));
+
+  router.get(
+    "/likes",
+    requireAuth,
+    requireAccountType(AccountType.CUSTOMER),
+    asyncHandler(likes.list),
+  );
+  router.put(
+    "/likes/:productId",
+    requireAuth,
+    requireAccountType(AccountType.CUSTOMER),
+    asyncHandler(likes.add),
+  );
+  router.delete(
+    "/likes/:productId",
+    requireAuth,
+    requireAccountType(AccountType.CUSTOMER),
+    asyncHandler(likes.remove),
+  );
 
   router.get(
     "/addresses",
@@ -100,6 +123,34 @@ export function createCustomerRouter() {
   );
   router.get("/orders", asyncHandler(controller.listOrders));
   router.get("/orders/:id", asyncHandler(controller.getOrder));
+  router.get(
+    "/orders/:id/fulfilment",
+    requireAuth,
+    requireAccountType(AccountType.CUSTOMER),
+    asyncHandler(fulfilment.customerFulfilment),
+  );
+  router.post(
+    "/orders/:id/returns",
+    requireAuth,
+    requireAccountType(AccountType.CUSTOMER),
+    validateBody(
+      z
+        .object({
+          reasonType: z.enum([
+            "DAMAGED",
+            "WRONG_ITEM",
+            "NOT_DELIVERED",
+            "CUSTOMER_PREFERENCE",
+            "OTHER",
+          ]),
+          reason: z.string().min(3).max(2000),
+          orderItemIds: z.array(z.string().min(1)).min(1),
+          evidenceAssetIds: z.array(z.string().min(1)).max(10).default([]),
+        })
+        .strict(),
+    ),
+    asyncHandler(fulfilment.customerReturn),
+  );
   router.post(
     "/orders/:id/cancel",
     validateBody(z.object({ reason: z.string().optional() })),

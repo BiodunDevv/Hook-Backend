@@ -31,7 +31,7 @@ import { CommerceSettings } from "@models/commerce/commerce.model";
 function owner(req: Request) {
   return req.user?.sub
     ? { userId: req.user.sub }
-    : { guestSessionId: req.guestSessionId };
+    : { guestSessionId: req.guestSessionId, guestId: req.guestId };
 }
 
 function ownerId(req: Request) {
@@ -68,20 +68,28 @@ export class CustomerController {
   private readonly checkoutV4 = new CheckoutService();
 
   getCart = async (req: Request, res: Response) => {
-    sendSuccess(res, publicCart(await this.cart.getCart(owner(req))));
+    sendSuccess(
+      res,
+      publicCart(await this.cart.getCart(owner(req))),
+      "Cart retrieved successfully",
+    );
   };
 
   addCartItem = async (req: Request, res: Response) => {
     sendCreated(
       res,
-      await this.cart.addItem(
-        owner(req),
-        req.body.productId,
-        req.body.quantity,
-        req.body.selectedVariants,
-        req.body.variantId,
-        req.body.quoteId,
+      publicCart(
+        await this.cart.addItem(
+          owner(req),
+          req.body.productId,
+          req.body.quantity,
+          req.body.selectedVariants,
+          req.body.variantId,
+          req.body.quoteId,
+          { deferRecalculation: true },
+        ),
       ),
+      "Item added to cart successfully",
     );
   };
 
@@ -93,8 +101,10 @@ export class CustomerController {
           owner(req),
           routeParam(req.params.itemId),
           req.body.quantity,
+          { deferRecalculation: true },
         ),
       ),
+      "Cart updated successfully",
     );
   };
 
@@ -102,19 +112,31 @@ export class CustomerController {
     sendSuccess(
       res,
       publicCart(
-        await this.cart.removeItem(owner(req), routeParam(req.params.itemId)),
+        await this.cart.removeItem(owner(req), routeParam(req.params.itemId), {
+          deferRecalculation: true,
+        }),
       ),
+      "Item removed from cart successfully",
     );
   };
 
   clearCart = async (req: Request, res: Response) => {
-    sendSuccess(res, await this.cart.clear(owner(req)));
+    sendSuccess(
+      res,
+      publicCart(await this.cart.clear(owner(req), undefined, { deferRecalculation: true })),
+      "Cart cleared successfully",
+    );
   };
 
   clearCartState = async (req: Request, res: Response) => {
     sendSuccess(
       res,
-      await this.cart.clear(owner(req), routeParam(req.params.stateId)),
+      publicCart(
+        await this.cart.clear(owner(req), routeParam(req.params.stateId), {
+          deferRecalculation: true,
+        }),
+      ),
+      "State basket cleared successfully",
     );
   };
 
@@ -305,7 +327,10 @@ export class CustomerController {
   };
 
   listNotifications = async (req: Request, res: Response) => {
-    sendSuccess(res, await this.notificationService.list(owner(req)));
+    sendSuccess(res, await this.notificationService.list(owner(req), {
+      limit: Number(req.query.limit || 30),
+      cursor: typeof req.query.cursor === 'string' ? req.query.cursor : undefined,
+    }));
   };
 
   getNotification = async (req: Request, res: Response) => {

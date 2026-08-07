@@ -4,6 +4,10 @@ import { auditAdminAction } from '@lib/audit';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
 import { adminRepos, getPagination, paginated, routeParam } from './admin.helpers';
 import { publicProduct } from '@lib/public-resource';
+import { Product } from '@models/products/product.model';
+import { Category } from '@models/categories/category.model';
+import { User } from '@models/users/user.model';
+import { adminCategoryManagersCache, adminProductStatsCache } from '@lib/ttl-cache';
 
 function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'product';
@@ -11,16 +15,36 @@ function slugify(value: string) {
 
 const MANAGER_ROLES: UserRole[] = [UserRole.SUPPORT, UserRole.ADMIN];
 
+function adminProductSummary(product: any) {
+  const { _id, ...safeProduct } = product;
+  if (safeProduct.category) {
+    const { _id: categoryMongoId, ...safeCategory } = safeProduct.category;
+    safeProduct.category = {
+      ...safeCategory,
+      id: safeCategory.publicId || safeCategory.id || categoryMongoId?.toString?.(),
+    };
+  }
+  return publicProduct(safeProduct);
+}
+
 // categoryId → managers, computed once per request (no N+1)
 async function categoryManagersMap(): Promise<Map<string, any[]>> {
-  const users = await adminRepos.users().find({});
+  const cached = adminCategoryManagersCache.get('active');
+  if (cached) return cached;
+  const users = await User.find({
+    role: { $in: MANAGER_ROLES },
+    isActive: true,
+    assignedCategoryIds: { $exists: true, $ne: [] },
+  })
+    .select('firstName lastName email phone role assignedCategoryIds')
+    .lean({ virtuals: true });
   const map = new Map<string, any[]>();
   for (const user of users as any[]) {
     if (!MANAGER_ROLES.includes(user.role) || !user.isActive) continue;
     for (const categoryId of user.assignedCategoryIds || []) {
       const bucket = map.get(categoryId) || [];
       bucket.push({
-        id: user.id,
+        id: user.publicId || user.id,
         firstName: user.firstName,
         lastName: user.lastName,
         email: user.email,
@@ -30,7 +54,7 @@ async function categoryManagersMap(): Promise<Map<string, any[]>> {
       map.set(categoryId, bucket);
     }
   }
-  return map;
+  return adminCategoryManagersCache.set('active', map);
 }
 
 export class AdminProductsController {
@@ -49,23 +73,54 @@ export class AdminProductsController {
   list = async (req: Request, res: Response) => {
     const { page, limit, skip } = getPagination(req.query);
     const search = typeof req.query.search === 'string' ? req.query.search.toLowerCase() : undefined;
-    const where: Record<string, unknown> = {};
+    const where: Record<string, any> = {};
     if (typeof req.query.status === 'string') where.status = req.query.status;
     if (typeof req.query.categoryId === 'string') where.categoryId = req.query.categoryId;
-    const all = await adminRepos.products().find({ where, relations: { category: true }, order: { createdAt: 'DESC' } });
-    const filtered = all.filter((product: any) => {
-      if (req.query.stock === 'low' && !(product.quantity > 0 && product.quantity < 10)) return false;
-      if (req.query.stock === 'out' && product.quantity !== 0) return false;
-      if (search && ![product.title, product.hookId].some((value) => String(value || '').toLowerCase().includes(search))) return false;
-      return true;
+    if (req.query.stock === 'low') where.quantity = { $gt: 0, $lt: 10 };
+    if (req.query.stock === 'out') where.quantity = 0;
+    if (search) {
+      const expression = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      where.$or = [{ title: expression }, { hookId: expression }, { publicId: expression }];
+    }
+    const listFields = 'publicId hookId title slug description costPrice sellingPrice discountedPrice minAcceptablePrice sellingPriceMinor discountMinor currency quantity reservedQuantity colors sizes images status categoryId vendorId source viewCount orderCount averageRating createdAt updatedAt';
+    const productsQuery = Product.find(where)
+      .select(listFields)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean({ virtuals: true });
+    const [rows, total, managers, stats] = await Promise.all([
+      productsQuery,
+      Product.countDocuments(where),
+      categoryManagersMap(),
+      this.statsData(),
+    ]);
+    const categoryIds = [...new Set((rows as any[]).map((product) => String(product.categoryId || '')).filter(Boolean))];
+    const objectIds = categoryIds.filter((value) => /^[a-f\d]{24}$/i.test(value));
+    const categories = categoryIds.length
+      ? await Category.find({
+          $or: [
+            { publicId: { $in: categoryIds } },
+            ...(objectIds.length ? [{ _id: { $in: objectIds } }] : []),
+          ],
+        }).select('publicId name slug iconUrl').lean({ virtuals: true })
+      : [];
+    const categoryMap = new Map<string, any>();
+    (categories as any[]).forEach((category) => {
+      const { _id, ...safeCategory } = category;
+      const value = {
+        ...safeCategory,
+        id: safeCategory.publicId || safeCategory.id || _id?.toString?.(),
+      };
+      categoryMap.set(String(_id), value);
+      if (category.publicId) categoryMap.set(String(category.publicId), value);
     });
-    const managers = await categoryManagersMap();
-    const data = filtered.slice(skip, skip + limit).map((product: any) => ({
+    const data = (rows as any[]).map((product) => ({
       ...product,
-      managers: managers.get(product.categoryId) || [],
+      category: categoryMap.get(String(product.categoryId)) || null,
+      managers: managers.get(String(product.categoryId)) || [],
     }));
-    const stats = await this.statsData();
-    sendSuccess(res, { ...paginated(data.map(publicProduct), filtered.length, page, limit), stats });
+    sendSuccess(res, { ...paginated(data.map(adminProductSummary), total, page, limit), stats });
   };
 
   stats = async (_req: Request, res: Response) => {
@@ -140,6 +195,8 @@ export class AdminProductsController {
   };
 
   private async statsData() {
+    const cached = adminProductStatsCache.get('summary');
+    if (cached) return cached;
     const products = adminRepos.products();
     const [total, approved, pendingApproval, lowStock, soldOut] = await Promise.all([
       products.count(),
@@ -148,6 +205,6 @@ export class AdminProductsController {
       products.model.countDocuments({ quantity: { $gt: 0, $lt: 10 } }),
       products.count({ where: { status: ProductStatus.SOLD_OUT } }),
     ]);
-    return { total, approved, pendingApproval, lowStock, soldOut };
+    return adminProductStatsCache.set('summary', { total, approved, pendingApproval, lowStock, soldOut });
   }
 }

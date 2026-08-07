@@ -16,8 +16,14 @@ export const addressCreateSchema = z
     line2: z.string().trim().max(240).optional(),
     landmark: z.string().trim().max(240).optional(),
     stateId: publicId,
-    cityId: publicId,
-    zoneId: publicId,
+    cityId: publicId.optional(),
+    zoneId: publicId.optional(),
+    localGovernmentAreaId: publicId,
+    formattedAddress: z.string().trim().min(4).max(500).optional(),
+    stateCode: z.string().trim().regex(/^[A-Za-z]{2,3}$/),
+    stateName: z.string().trim().min(2).max(100),
+    cityName: z.string().trim().min(2).max(120),
+    localGovernmentArea: z.string().trim().max(120).optional(),
     postalCode: z.string().trim().max(20).optional(),
     coordinates: z
       .object({

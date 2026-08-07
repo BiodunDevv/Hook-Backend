@@ -115,3 +115,19 @@ export function presentCommercialSummary(record: any) {
     updatedAt: record.updatedAt,
   };
 }
+
+export function presentCommercialList(record: any) {
+  return {
+    id: record.publicId,
+    publicId: record.publicId,
+    title: record.title,
+    slug: record.slug,
+    status: record.status,
+    catalogVersion: record.catalogVersion,
+    pricing: record.pricing,
+    negotiationRules: record.negotiationRules,
+    availabilityStatus: record.availabilityStatus,
+    publishedAt: record.publishedAt,
+    updatedAt: record.updatedAt,
+  };
+}

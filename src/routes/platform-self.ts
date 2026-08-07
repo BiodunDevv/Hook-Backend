@@ -16,6 +16,7 @@ import { loginSchema } from "@validations/common.schemas";
 import { RunnerCatalogController } from "@controllers/runner/catalog.controller";
 import { runnerSubmissionDraftSchema } from "@validations/catalog.schemas";
 import { PartnerCommerceController } from "@controllers/partner-commerce.controller";
+import { FulfilmentController } from "@controllers/fulfilment.controller";
 import {
   checkoutConfirmSchema,
   checkoutPreviewSchema,
@@ -26,6 +27,7 @@ export function createRunnerRouter() {
   const router = Router();
   const auth = new AuthController();
   const catalog = new RunnerCatalogController();
+  const fulfilment = new FulfilmentController();
   router.post(
     "/auth/login",
     validateBody(loginSchema),
@@ -96,6 +98,19 @@ export function createRunnerRouter() {
     }),
   );
   router.get("/dashboard", asyncHandler(catalog.dashboard));
+  router.get("/fulfilments/dashboard", asyncHandler(fulfilment.runnerDashboard));
+  router.get("/fulfilments", asyncHandler(fulfilment.runnerTasks));
+  router.get("/fulfilments/:id", asyncHandler(fulfilment.runnerTask));
+  router.post(
+    "/fulfilments/:id/issues",
+    validateBody(z.object({ type: z.string().optional(), severity: z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']).optional(), summary: z.string().min(3).max(1000), evidence: z.array(z.unknown()).optional(), idempotencyKey: z.string().min(8).optional() }).strict()),
+    asyncHandler(fulfilment.runnerIssue),
+  );
+  router.post(
+    "/fulfilments/:id/:action",
+    validateBody(z.object({ version: z.coerce.number().int().positive(), actualCostMinor: z.coerce.number().int().nonnegative().optional(), evidence: z.array(z.object({ type: z.string().min(1), url: z.string().url().optional(), assetId: z.string().optional(), note: z.string().max(500).optional() })).optional(), arrivedAt: z.string().datetime().optional() }).passthrough()),
+    asyncHandler(fulfilment.runnerAction),
+  );
   router.get("/product-submissions", asyncHandler(catalog.list));
   router.post(
     "/product-submissions",
@@ -122,6 +137,7 @@ export function createPartnerRouter() {
   const router = Router();
   const auth = new AuthController();
   const commerce = new PartnerCommerceController();
+  const fulfilment = new FulfilmentController();
   router.post(
     "/auth/login",
     validateBody(loginSchema),
@@ -234,6 +250,10 @@ export function createPartnerRouter() {
     asyncHandler(commerce.confirm),
   );
   router.get("/orders", asyncHandler(commerce.orders));
+  router.get("/fulfilment/custody", asyncHandler(fulfilment.partnerCustodyList));
+  router.get("/fulfilment/custody/:orderId", asyncHandler(fulfilment.partnerCustody));
+  router.post("/fulfilment/custody/:id/receive", validateBody(z.object({ idempotencyKey: z.string().min(8).optional() }).strict()), asyncHandler(fulfilment.receiveCustody));
+  router.post("/fulfilment/custody/:id/release", validateBody(z.object({ code: z.string().regex(/^\d{6}$/), idempotencyKey: z.string().min(8).optional() }).strict()), asyncHandler(fulfilment.releaseCustody));
   router.get("/commerce/config", asyncHandler(commerce.commerceConfig));
   router.post(
     "/orders/:orderId/payment-instructions",

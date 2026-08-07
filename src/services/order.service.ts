@@ -15,6 +15,7 @@ import { HttpError } from '@utils/http';
 import { Otp } from '@models/auth/otp.model';
 import { randomInt } from 'crypto';
 import { nextPublicId } from './public-id.service';
+import { publishRealtime } from './realtime.service';
 
 type CheckoutBody = Pick<Order, 'deliveryAddress' | 'deliveryNotes' | 'scheduledDeliveryAt' | 'guestEmail' | 'guestName' | 'paymentMode' | 'orderType' | 'giftRecipient'>;
 
@@ -155,27 +156,37 @@ export class OrderService {
       where: { id: order.id },
       relations: { items: true, logistics: true },
     });
-    return { ...result, provisionalAccount: provisionalUser?.accountStatus === 'pending_password' ? { email: provisionalUser.email, nextStep: 'set_password' } : undefined };
+    const response = { ...result, provisionalAccount: provisionalUser?.accountStatus === 'pending_password' ? { email: provisionalUser.email, nextStep: 'set_password' } : undefined };
+    publishRealtime({ type: 'order.updated', entityId: order.publicId || order.id, version: 1 }, owner.userId ? { accountId: owner.userId, admin: true } : { admin: true });
+    return response;
   }
 
   async listCustomerOrders(owner: CustomerOwner) {
-    const orders = await Order.find(this.ownerWhere(owner)).sort({ createdAt: -1 }).lean({ virtuals: true });
-    return Promise.all(orders.map(async (order) => ({
-      ...order,
-      items: await OrderItem.find({ orderId: order.id }).lean({ virtuals: true }),
-      payment: await Payment.findOne({ orderId: order.id }).lean({ virtuals: true }),
-    }))) as any;
+    const orders = await Order.find(this.ownerWhere(owner))
+      .select('-legacyCommerceSnapshot -timeline -customerSnapshot -addressSnapshot')
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .lean({ virtuals: true });
+    const orderIds = orders.map((order) => order.id);
+    const [items, payments] = await Promise.all([
+      orderIds.length ? OrderItem.find({ orderId: { $in: orderIds } }).lean({ virtuals: true }) : [],
+      orderIds.length ? Payment.find({ orderId: { $in: orderIds } }).select('-gatewayResponse -authorizationUrl -accessCode').lean({ virtuals: true }) : [],
+    ]);
+    const itemMap = new Map<string, any[]>();
+    (items as any[]).forEach((item) => itemMap.set(String(item.orderId), [...(itemMap.get(String(item.orderId)) || []), item]));
+    const paymentMap = new Map((payments as any[]).map((payment) => [String(payment.orderId), payment]));
+    return orders.map((order) => ({ ...order, items: itemMap.get(order.id) || [], payment: paymentMap.get(order.id) })) as any;
   }
 
   async getCustomerOrder(owner: CustomerOwner, id: string) {
     const identifier = id.match(/^[a-f\d]{24}$/i) ? { $or: [{ _id: id }, { publicId: id }, { orderCode: id }] } : { $or: [{ publicId: id }, { orderCode: id }] };
     const order = await Order.findOne({ ...identifier, ...this.ownerWhere(owner) }).lean({ virtuals: true });
     if (!order) throw new HttpError(404, 'Order not found');
-    return {
-      ...order,
-      items: await OrderItem.find({ orderId: order.id }).lean({ virtuals: true }),
-      payment: await Payment.findOne({ orderId: order.id }).lean({ virtuals: true }),
-    } as any;
+    const [items, payment] = await Promise.all([
+      OrderItem.find({ orderId: order.id }).lean({ virtuals: true }),
+      Payment.findOne({ orderId: order.id }).select('-gatewayResponse -authorizationUrl -accessCode').lean({ virtuals: true }),
+    ]);
+    return { ...order, items, payment } as any;
   }
 
   async cancelCustomerOrder(owner: CustomerOwner, id: string, reason?: string) {
@@ -186,7 +197,9 @@ export class OrderService {
     order.status = OrderStatus.CANCELLED;
     order.cancelledAt = new Date();
     order.cancellationReason = reason;
-    return this.orders.save(order);
+    const saved = await this.orders.save(order);
+    publishRealtime({ type: 'order.updated', entityId: saved.publicId || saved.id, version: Number(saved.version || 1) }, { accountId: owner.userId, admin: true });
+    return saved;
   }
 
   private ownerWhere(owner: CustomerOwner) {

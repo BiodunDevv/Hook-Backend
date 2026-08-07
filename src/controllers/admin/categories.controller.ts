@@ -3,6 +3,10 @@ import { UserRole } from '@lib/constants';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
 import { adminRepos, actor, routeParam } from './admin.helpers';
 import { nextPublicId } from '@services/public-id.service';
+import { publishRealtime } from '@services/realtime.service';
+import { Product } from '@models/products/product.model';
+import { User } from '@models/users/user.model';
+import { adminCategoryCache } from '@lib/ttl-cache';
 
 const MANAGER_ROLES: UserRole[] = [UserRole.SUPPORT, UserRole.ADMIN];
 
@@ -21,16 +25,30 @@ function toManager(user: any) {
   };
 }
 
+function publishCategoryUpdate(category: any) {
+  const event = {
+    entityId: category.publicId || category.id,
+    version: Number(category.version || 1),
+  };
+  publishRealtime({ type: 'catalog.updated', ...event }, { public: true, admin: true });
+  publishRealtime({ type: 'home.updated', ...event }, { public: true, admin: true });
+  publishRealtime({ type: 'admin.dashboard.updated', ...event }, { admin: true });
+}
+
 async function loadEnrichment() {
   const [products, users] = await Promise.all([
-    adminRepos.products().find({}),
-    adminRepos.users().find({}),
+    Product.aggregate([
+      { $match: { categoryId: { $exists: true }, deletedAt: { $exists: false } } },
+      { $group: { _id: '$categoryId', count: { $sum: 1 } } },
+    ]),
+    User.find({ role: { $in: MANAGER_ROLES }, isActive: true, assignedCategoryIds: { $exists: true, $ne: [] } })
+      .select('publicId firstName lastName email phone role assignedCategoryIds')
+      .lean({ virtuals: true }),
   ]);
 
   const productCounts = new Map<string, number>();
   for (const product of products as any[]) {
-    if (!product.categoryId) continue;
-    productCounts.set(product.categoryId, (productCounts.get(product.categoryId) || 0) + 1);
+    productCounts.set(String(product._id), Number(product.count || 0));
   }
 
   const managersByCategory = new Map<string, any[]>();
@@ -48,6 +66,11 @@ async function loadEnrichment() {
 
 export class AdminCategoriesController {
   list = async (_req: Request, res: Response) => {
+    const cached = adminCategoryCache.get('list');
+    if (cached) {
+      sendSuccess(res, { data: cached, total: cached.length });
+      return;
+    }
     const [categories, { productCounts, managersByCategory }] = await Promise.all([
       adminRepos.categories().find({ order: { sortOrder: 'ASC', name: 'ASC' } }),
       loadEnrichment(),
@@ -66,6 +89,7 @@ export class AdminCategoriesController {
       managers: managersByCategory.get(category.id) || [],
     }));
 
+    adminCategoryCache.set('list', data);
     sendSuccess(res, { data, total: data.length });
   };
 
@@ -110,6 +134,8 @@ export class AdminCategoriesController {
       ...actor(req),
     }));
 
+    publishCategoryUpdate(category);
+    adminCategoryCache.clear();
     sendCreated(res, category);
   };
 
@@ -144,6 +170,8 @@ export class AdminCategoriesController {
       ...actor(req),
     }));
 
+    publishCategoryUpdate(category);
+    adminCategoryCache.clear();
     sendSuccess(res, category);
   };
 
@@ -154,6 +182,8 @@ export class AdminCategoriesController {
 
     category.isActive = !category.isActive;
     await categories.save(category);
+    publishCategoryUpdate(category);
+    adminCategoryCache.clear();
     sendSuccess(res, { id: category.id, isActive: category.isActive });
   };
 
@@ -175,14 +205,10 @@ export class AdminCategoriesController {
 
     // Strip the category from every staff member's assignment list
     const users = adminRepos.users();
-    const staff = await users.find({});
-    for (const member of staff as any[]) {
-      const assigned: string[] = member.assignedCategoryIds || [];
-      if (assigned.includes(category.id)) {
-        member.assignedCategoryIds = assigned.filter((id) => id !== category.id);
-        await users.save(member);
-      }
-    }
+    await User.updateMany(
+      { assignedCategoryIds: category.id },
+      { $pull: { assignedCategoryIds: category.id } },
+    );
 
     const auditLogs = adminRepos.auditLogs();
     await auditLogs.save(auditLogs.create({
@@ -194,6 +220,8 @@ export class AdminCategoriesController {
       ...actor(req),
     }));
 
+    publishCategoryUpdate(category);
+    adminCategoryCache.clear();
     sendSuccess(res, { id: category.id, deleted: true });
   };
 }

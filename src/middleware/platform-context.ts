@@ -5,10 +5,11 @@ import { DispatchHub } from '@models/platform/network.model';
 import { HttpError } from '@utils/http';
 
 async function internalId(model: any, identifier?: string) {
-  if (!identifier) return undefined;
-  const query = identifier.match(/^[a-f\d]{24}$/i)
-    ? { $or: [{ _id: identifier }, { publicId: identifier }] }
-    : { publicId: identifier };
+  const normalized = identifier?.trim();
+  if (!normalized || normalized.toLowerCase() === 'all') return undefined;
+  const query = normalized.match(/^[a-f\d]{24}$/i)
+    ? { $or: [{ _id: normalized }, { publicId: normalized }] }
+    : { publicId: normalized };
   const record = await model.findOne(query).select('_id').lean();
   if (!record) throw new HttpError(404, 'Operational context was not found', undefined, 'NOT_FOUND');
   return record._id.toString();

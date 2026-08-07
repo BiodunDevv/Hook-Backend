@@ -17,6 +17,7 @@ import { RunnerMarketAssignment, RunnerProfile } from '@models/platform/operatio
 import { nextPublicId } from './public-id.service';
 import { CatalogMediaService } from './catalog-media.service';
 import { HttpError } from '@utils/http';
+import { adminReviewCache } from '@lib/ttl-cache';
 
 type SubmissionInput = {
   marketId: string;
@@ -264,31 +265,49 @@ export class RunnerCatalogService {
 
 export class CatalogReviewService {
   async dashboard(stateIds?: string[]) {
+    const cacheKey = `review:${stateIds?.length ? [...stateIds].sort().join(',') : 'global'}`;
+    const cached = adminReviewCache.get(cacheKey);
+    if (cached) return cached;
+
     const stateFilter = stateIds?.length ? { sourceStateId: { $in: stateIds } } : {};
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const [statusCounts, approvedToday, rejectedToday, age, byState, byMarket] = await Promise.all([
-      ProductSubmission.aggregate([{ $match: stateFilter }, { $group: { _id: '$status', count: { $sum: 1 } } }]),
-      ProductSubmission.countDocuments({ ...stateFilter, status: ProductSubmissionStatus.APPROVED, reviewedAt: { $gte: today } }),
-      ProductSubmission.countDocuments({ ...stateFilter, status: ProductSubmissionStatus.REJECTED, reviewedAt: { $gte: today } }),
-      ProductSubmission.aggregate([
-        { $match: { ...stateFilter, status: { $in: [ProductSubmissionStatus.SUBMITTED, ProductSubmissionStatus.IN_REVIEW] } } },
-        { $group: { _id: null, averageMs: { $avg: { $subtract: [now, '$submittedAt'] } } } },
-      ]),
-      ProductSubmission.aggregate([{ $match: stateFilter }, { $group: { _id: '$sourceStateId', count: { $sum: 1 } } }]),
-      ProductSubmission.aggregate([{ $match: stateFilter }, { $group: { _id: '$marketId', count: { $sum: 1 } } }]),
+    const [summary] = await ProductSubmission.aggregate([
+      { $match: { ...stateFilter, deletedAt: { $exists: false } } },
+      {
+        $facet: {
+          statusCounts: [{ $group: { _id: '$status', count: { $sum: 1 } } }],
+          approvedToday: [
+            { $match: { status: ProductSubmissionStatus.APPROVED, reviewedAt: { $gte: today } } },
+            { $count: 'count' },
+          ],
+          rejectedToday: [
+            { $match: { status: ProductSubmissionStatus.REJECTED, reviewedAt: { $gte: today } } },
+            { $count: 'count' },
+          ],
+          age: [
+            { $match: { status: { $in: [ProductSubmissionStatus.SUBMITTED, ProductSubmissionStatus.IN_REVIEW] }, submittedAt: { $type: 'date' } } },
+            { $group: { _id: null, averageMs: { $avg: { $subtract: [now, '$submittedAt'] } } } },
+          ],
+          byState: [{ $group: { _id: '$sourceStateId', count: { $sum: 1 } } }],
+          byMarket: [{ $group: { _id: '$marketId', count: { $sum: 1 } } }],
+        },
+      },
     ]);
-    const counts = Object.fromEntries(statusCounts.map((item) => [item._id, item.count]));
-    return {
+    const statusCounts = summary?.statusCounts || [];
+    const counts = Object.fromEntries((statusCounts as any[]).map((item: any) => [item._id, item.count]));
+    const result = {
       pending: counts.submitted || 0,
       inReview: counts.in_review || 0,
       changesRequested: counts.changes_requested || 0,
-      approvedToday,
-      rejectedToday,
-      averageReviewAgeHours: Number(((age[0]?.averageMs || 0) / 3_600_000).toFixed(1)),
-      byState,
-      byMarket,
+      approvedToday: summary?.approvedToday?.[0]?.count || 0,
+      rejectedToday: summary?.rejectedToday?.[0]?.count || 0,
+      averageReviewAgeHours: Number(((summary?.age?.[0]?.averageMs || 0) / 3_600_000).toFixed(1)),
+      byState: summary?.byState || [],
+      byMarket: summary?.byMarket || [],
     };
+    adminReviewCache.set(cacheKey, result);
+    return result;
   }
 
   async list(query: Record<string, unknown>, stateIds?: string[]) {

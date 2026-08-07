@@ -20,8 +20,10 @@ import { revokeAccountSessions } from '@services/account-session.service';
 import { recordAudit } from '@services/platform-audit.service';
 import { nextPublicId, repairPublicIdCounter, PublicIdDomain } from '@services/public-id.service';
 import { issueAccountInvitation, revokeAccountInvitations } from '@services/account-invitation.service';
-import { presentPlatformRecords } from '@services/platform-presentation.service';
+import { presentMarketRecords, presentPlatformRecords } from '@services/platform-presentation.service';
+import { publishRealtime } from '@services/realtime.service';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
+import { adminAccessCatalogCache, adminStaffCache } from '@lib/ttl-cache';
 
 async function byIdentifier<T>(model: Model<T>, identifier: string) {
   const query = isValidObjectId(identifier)
@@ -33,8 +35,10 @@ async function byIdentifier<T>(model: Model<T>, identifier: string) {
 }
 
 async function stateAndHub(req: Request) {
-  const requestedState = req.platformContext?.stateId || (req.query.stateId as string | undefined);
-  const requestedHub = req.platformContext?.hubId || (req.query.hubId as string | undefined);
+  const requestedStateValue = req.platformContext?.stateId || (req.query.stateId as string | undefined);
+  const requestedHubValue = req.platformContext?.hubId || (req.query.hubId as string | undefined);
+  const requestedState = requestedStateValue?.trim().toLowerCase() === 'all' ? undefined : requestedStateValue;
+  const requestedHub = requestedHubValue?.trim().toLowerCase() === 'all' ? undefined : requestedHubValue;
   const state = requestedState ? await byIdentifier(OperationState, requestedState) : undefined;
   const hub = requestedHub ? await byIdentifier(DispatchHub, requestedHub) : undefined;
   if (state && hub && hub.stateId !== state._id.toString()) {
@@ -47,7 +51,14 @@ async function stateAndHub(req: Request) {
 }
 
 async function access(req: Request, permission: string) {
-  const context = await resolveAccessContext(req.user!.sub);
+  const user = req.user!;
+  const context = {
+    permissions: user.permissions || [],
+    roleKeys: user.roleKeys || [],
+    scopeType: user.scopeType || ScopeType.SELF,
+    stateIds: user.assignedStateIds || [],
+    hubIds: user.assignedHubIds || [],
+  };
   assertPermission(context, permission);
   return context;
 }
@@ -88,6 +99,23 @@ async function sendPlatformSuccess(res: Response, value: any) {
 
 async function sendPlatformCreated(res: Response, value: any) {
   sendCreated(res, await presentPlatformRecords(value));
+}
+
+function publishMarketUpdate(market: any) {
+  const event = {
+    entityId: market.publicId || market.id || market._id?.toString(),
+    version: Number(market.version || 1),
+    ...(market.stateId ? { scope: { stateId: String(market.stateId) } } : {}),
+  };
+  const targets = {
+    public: true,
+    admin: true,
+    ...(market.stateId ? { stateId: String(market.stateId) } : {}),
+    ...(market.hubId ? { hubId: String(market.hubId) } : {}),
+  };
+  publishRealtime({ type: 'catalog.updated', ...event }, targets);
+  publishRealtime({ type: 'home.updated', ...event }, targets);
+  publishRealtime({ type: 'admin.dashboard.updated', ...event }, targets);
 }
 
 async function ensureState(id: string, active = false) {
@@ -144,6 +172,15 @@ async function resolveIdentifiers<T>(model: Model<T>, identifiers: string[]) {
     const record = await byIdentifier(model, identifier);
     return record._id.toString();
   }));
+}
+
+async function validatePermissionKeys(permissionKeys: string[]) {
+  const normalized = [...new Set(permissionKeys.map((key) => key.trim().toLowerCase()).filter(Boolean))];
+  const active = await Permission.find({ key: { $in: normalized }, isActive: true }).select('key').lean();
+  if (active.length !== normalized.length) {
+    throw new HttpError(409, 'Every selected permission must be active and defined', undefined, 'CONFLICT');
+  }
+  return normalized;
 }
 
 async function resolveStaffScope(input: {
@@ -229,65 +266,294 @@ async function lifecycle(
     after: { status },
     reason: req.body.reason,
   });
+  if (entityType === 'market') publishMarketUpdate(updated);
   await sendPlatformSuccess(res, updated);
 }
 
 export class PlatformController {
-  permissions = async (_req: Request, res: Response) => {
-    sendSuccess(res, await Permission.find({ isActive: true }).sort({ domain: 1, key: 1 }).lean({ virtuals: true }));
+  permissions = async (req: Request, res: Response) => {
+    await access(req, 'roles.view');
+    const cached = adminAccessCatalogCache.get('permissions');
+    if (cached) {
+      sendSuccess(res, cached);
+      return;
+    }
+    const rows = await Permission.find({ isActive: true })
+      .select('key domain description isActive')
+      .sort({ domain: 1, key: 1 })
+      .lean();
+    adminAccessCatalogCache.set('permissions', rows);
+    sendSuccess(res, rows);
   };
 
-  roles = async (_req: Request, res: Response) => {
-    sendSuccess(res, await Role.find().sort({ name: 1 }).lean({ virtuals: true }));
+  roles = async (req: Request, res: Response) => {
+    await access(req, 'roles.view');
+    const cached = adminAccessCatalogCache.get('roles');
+    if (cached) {
+      sendSuccess(res, cached);
+      return;
+    }
+    const rows = await Role.find()
+      .select('key name description permissionKeys defaultScopeType isSystem isActive')
+      .sort({ name: 1 })
+      .lean();
+    adminAccessCatalogCache.set('roles', rows);
+    sendSuccess(res, rows);
   };
 
-  roleDetail = async (req: Request, res: Response) => sendSuccess(res, await byIdentifier(Role, routeParam(req.params.id)));
+  roleDetail = async (req: Request, res: Response) => {
+    await access(req, 'roles.view');
+    sendSuccess(res, await byIdentifier(Role, routeParam(req.params.id)));
+  };
 
   createRole = async (req: Request, res: Response) => {
     await access(req, 'roles.manage');
-    const role = await Role.create({ ...req.body, key: req.body.key.toUpperCase() });
+    const permissionKeys = await validatePermissionKeys(req.body.permissionKeys || []);
+    const role = await Role.create({
+      key: req.body.key.toUpperCase(),
+      name: req.body.name,
+      description: req.body.description || '',
+      permissionKeys,
+      defaultScopeType: req.body.defaultScopeType,
+      isSystem: false,
+      isActive: req.body.isActive !== false,
+    });
     await recordAudit(req, { action: 'role.created', entityType: 'role', entityId: role.id, after: role.toObject() });
+    adminAccessCatalogCache.clear();
     sendCreated(res, role);
   };
 
   updateRole = async (req: Request, res: Response) => {
     await access(req, 'roles.manage');
     const role = await byIdentifier(Role, routeParam(req.params.id));
-    if (role.isSystem && req.body.key && req.body.key !== role.key) {
-      throw new HttpError(409, 'System role keys cannot be changed', undefined, 'CONFLICT');
+    if (role.isSystem) {
+      throw new HttpError(409, 'System roles are protected and cannot be edited', undefined, 'CONFLICT');
     }
-    const updated = await Role.findByIdAndUpdate(role._id, { $set: req.body }, { returnDocument: 'after' }).lean({ virtuals: true });
+    const patch: Record<string, unknown> = {};
+    if (req.body.key !== undefined) patch.key = String(req.body.key).trim().toUpperCase();
+    if (req.body.name !== undefined) patch.name = req.body.name;
+    if (req.body.description !== undefined) patch.description = req.body.description;
+    if (req.body.permissionKeys !== undefined) patch.permissionKeys = await validatePermissionKeys(req.body.permissionKeys);
+    if (req.body.defaultScopeType !== undefined) patch.defaultScopeType = req.body.defaultScopeType;
+    if (req.body.isActive !== undefined) patch.isActive = req.body.isActive;
+    if (patch.key && patch.key !== role.key) {
+      const duplicate = await Role.exists({ key: patch.key, _id: { $ne: role._id } });
+      if (duplicate) throw new HttpError(409, 'A role with this key already exists', undefined, 'CONFLICT');
+    }
+    const updated = await Role.findByIdAndUpdate(role._id, { $set: patch }, { returnDocument: 'after' }).lean({ virtuals: true });
     await recordAudit(req, { action: 'role.updated', entityType: 'role', entityId: role._id.toString(), before: role, after: updated, reason: req.body.reason });
+    adminAccessCatalogCache.clear();
     sendSuccess(res, updated);
   };
 
   listStaff = async (req: Request, res: Response) => {
     const context = await access(req, 'staff.view');
+    const { stateId, hubId } = await stateAndHub(req);
     const { page, limit, skip } = getPagination(req.query);
-    const filter = context.scopeType === ScopeType.GLOBAL ? {} : { stateIds: { $in: context.stateIds } };
-    const [data, total] = await Promise.all([StaffProfile.find(filter).skip(skip).limit(limit).lean({ virtuals: true }), StaffProfile.countDocuments(filter)]);
-    sendSuccess(res, paginated(await presentPlatformRecords(data), total, page, limit));
+    const cacheKey = `staff:${req.user!.sub}:${page}:${limit}:${stateId || ''}:${hubId || ''}:${String(req.query.status || '')}:${String(req.query.scopeType || '')}:${String(req.query.role || '')}:${String(req.query.q || '')}`;
+    const cached = adminStaffCache.get(cacheKey);
+    if (cached) {
+      sendSuccess(res, cached);
+      return;
+    }
+    const filter: Record<string, unknown> = context.scopeType === ScopeType.GLOBAL
+      ? { ...(stateId && { stateIds: stateId }), ...(hubId && { hubIds: hubId }) }
+      : context.scopeType === ScopeType.HUB
+        ? { hubIds: hubId || { $in: context.hubIds } }
+        : { stateIds: stateId || { $in: context.stateIds } };
+    const requestedStatus = String(req.query.status || '').trim().toLowerCase();
+    const requestedScope = String(req.query.scopeType || '').trim();
+    const requestedRole = String(req.query.role || '').trim().toUpperCase();
+    const search = String(req.query.q || '').trim();
+
+    if (requestedStatus && Object.values(AccountStatus).includes(requestedStatus as AccountStatus)) {
+      filter.status = requestedStatus;
+    }
+    if (requestedScope && Object.values(ScopeType).includes(requestedScope as ScopeType)) {
+      filter.scopeType = requestedScope;
+    }
+    if (requestedRole) {
+      const role = await Role.findOne({ key: requestedRole }).select('_id').lean();
+      filter.roleIds = role?._id.toString() || '__no_matching_role__';
+    }
+    if (search) {
+      const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const accounts = await User.find({
+        $or: [
+          { email: { $regex: escaped, $options: 'i' } },
+          { firstName: { $regex: escaped, $options: 'i' } },
+          { lastName: { $regex: escaped, $options: 'i' } },
+          { phone: { $regex: escaped, $options: 'i' } },
+          { publicId: { $regex: escaped, $options: 'i' } },
+        ],
+      }).select('_id').lean();
+      filter.accountId = { $in: accounts.map((account) => account._id.toString()) };
+    }
+
+    const [data, total] = await Promise.all([
+      StaffProfile.find(filter)
+        .select('publicId accountId roleIds scopeType stateIds hubIds status createdAt updatedAt')
+        .sort({ createdAt: -1 }).skip(skip).limit(limit).lean({ virtuals: true }),
+      StaffProfile.countDocuments(filter),
+    ]);
+    const accountIds = data.map((profile) => profile.accountId).filter(Boolean).map((id) => id.toString());
+    const roleIds = data.flatMap((profile) => profile.roleIds || []).map((id) => id.toString());
+    const [accounts, roles] = await Promise.all([
+      User.find({ _id: { $in: accountIds } }).select('publicId email firstName lastName phone role accountType accountStatus isActive isEmailVerified lastLoginAt').lean(),
+      Role.find({ _id: { $in: roleIds } }).select('_id key name description permissionKeys isSystem isActive').lean(),
+    ]);
+    const accountMap = new Map(accounts.map((account) => [account._id.toString(), account]));
+    const roleMap = new Map(roles.map((role) => [role._id.toString(), role]));
+    const stateReferenceIds = [...new Set(data.flatMap((profile) => profile.stateIds || []).map((id) => id.toString()))];
+    const hubReferenceIds = [...new Set(data.flatMap((profile) => profile.hubIds || []).map((id) => id.toString()))];
+    const [states, hubs] = await Promise.all([
+      stateReferenceIds.length
+        ? OperationState.find({
+            $or: [
+              { publicId: { $in: stateReferenceIds } },
+              { _id: { $in: stateReferenceIds.filter((id) => isValidObjectId(id)) } },
+            ],
+          }).select('_id publicId').lean()
+        : [],
+      hubReferenceIds.length
+        ? DispatchHub.find({
+            $or: [
+              { publicId: { $in: hubReferenceIds } },
+              { _id: { $in: hubReferenceIds.filter((id) => isValidObjectId(id)) } },
+            ],
+          }).select('_id publicId').lean()
+        : [],
+    ]);
+    const stateMap = new Map((states as any[]).flatMap((state) => [[state._id.toString(), state.publicId], [state.publicId, state.publicId]]));
+    const hubMap = new Map((hubs as any[]).flatMap((hub) => [[hub._id.toString(), hub.publicId], [hub.publicId, hub.publicId]]));
+    const presented = data.map((source: any) => {
+      const { _id, accountId, stateIds, hubIds, ...profile } = source;
+      return {
+        ...profile,
+        id: source.publicId || _id?.toString(),
+        accountId: accountMap.get(String(accountId))?.publicId || accountId,
+        stateIds: (stateIds || []).map((id: unknown) => stateMap.get(String(id)) || String(id)),
+        hubIds: (hubIds || []).map((id: unknown) => hubMap.get(String(id)) || String(id)),
+      };
+    });
+    const rows = presented.map((profile: Record<string, unknown>, index: number) => {
+      const source = data[index];
+      const account = accountMap.get(source.accountId?.toString());
+      const assignedRoles = (source.roleIds || [])
+        .map((id) => roleMap.get(id.toString()))
+        .filter(Boolean)
+        .map((role) => ({
+          id: role!._id.toString(),
+          key: role!.key,
+          name: role!.name,
+          description: role!.description,
+          permissionKeys: role!.permissionKeys,
+          isSystem: role!.isSystem,
+          isActive: role!.isActive,
+        }));
+      const permissions = [...new Set(assignedRoles.flatMap((role) => role.permissionKeys))];
+      return {
+        ...profile,
+        firstName: account?.firstName || '',
+        lastName: account?.lastName || '',
+        email: account?.email || '',
+        phone: account?.phone || '',
+        role: account?.role,
+        account: account ? {
+          id: account.publicId || account._id.toString(),
+          publicId: account.publicId,
+          email: account.email,
+          firstName: account.firstName,
+          lastName: account.lastName,
+          phone: account.phone,
+          role: account.role,
+          accountType: account.accountType,
+          accountStatus: account.accountStatus,
+          isActive: account.isActive,
+          isEmailVerified: account.isEmailVerified,
+          lastLoginAt: account.lastLoginAt,
+        } : null,
+        roles: assignedRoles,
+        roleKeys: assignedRoles.map((role) => role.key),
+        permissions,
+        lastLoginAt: account?.lastLoginAt,
+      };
+    });
+    const response = paginated(rows, total, page, limit);
+    adminStaffCache.set(cacheKey, response);
+    sendSuccess(res, response);
   };
 
   staffDetail = async (req: Request, res: Response) => {
-    await access(req, 'staff.view');
+    const context = await access(req, 'staff.view');
     const profile = await byIdentifier(StaffProfile, routeParam(req.params.id));
-    const context = await resolveAccessContext(req.user!.sub);
     for (const stateId of profile.stateIds) assertScope(context, stateId);
-    const [account, roles] = await Promise.all([
+    const [account, roles, states, hubs] = await Promise.all([
       User.findById(profile.accountId).select('-password -refreshToken').lean({ virtuals: true }),
-      Role.find({ _id: { $in: profile.roleIds } }).lean({ virtuals: true }),
+      Role.find({ _id: { $in: profile.roleIds } }).select('_id key name description permissionKeys isSystem isActive').lean(),
+      OperationState.find({ $or: profile.stateIds.flatMap((id) => [
+        { publicId: id },
+        ...(isValidObjectId(id) ? [{ _id: id }] : []),
+      ]) }).select('_id publicId name code status').lean(),
+      DispatchHub.find({ $or: profile.hubIds.flatMap((id) => [
+        { publicId: id },
+        ...(isValidObjectId(id) ? [{ _id: id }] : []),
+      ]) }).select('_id publicId name status').lean(),
     ]);
+    for (const hubId of profile.hubIds) assertScope(context, undefined, hubId);
+    const roleSummaries = roles.map((role) => ({
+      id: role._id.toString(),
+      key: role.key,
+      name: role.name,
+      description: role.description,
+      permissionKeys: role.permissionKeys,
+      isSystem: role.isSystem,
+      isActive: role.isActive,
+    }));
+    const permissions = [...new Set(roleSummaries.flatMap((role) => role.permissionKeys || []))];
+    const presentedProfile = await presentPlatformRecords(profile);
     sendSuccess(res, {
-      ...await presentPlatformRecords(profile),
-      account: account ? { ...account, id: account.publicId, _id: undefined } : null,
-      roles,
+      ...presentedProfile,
+      account: account ? {
+        id: account.publicId || account._id.toString(),
+        publicId: account.publicId,
+        email: account.email,
+        firstName: account.firstName,
+        lastName: account.lastName,
+        phone: account.phone,
+        accountType: account.accountType,
+        accountStatus: account.accountStatus,
+        isActive: account.isActive,
+        isEmailVerified: account.isEmailVerified,
+        lastLoginAt: account.lastLoginAt,
+        createdAt: account.createdAt,
+        updatedAt: account.updatedAt,
+      } : null,
+      roles: roleSummaries,
+      permissions,
+      states: states.map((state) => ({
+        id: state.publicId || state._id.toString(),
+        publicId: state.publicId,
+        name: state.name,
+        code: state.code,
+        status: state.status,
+      })),
+      hubs: hubs.map((hub) => ({
+        id: hub.publicId || hub._id.toString(),
+        publicId: hub.publicId,
+        name: hub.name,
+        status: hub.status,
+      })),
     });
   };
 
   createStaff = async (req: Request, res: Response) => {
     const context = await access(req, 'staff.create');
     const scope = await resolveStaffScope(req.body);
+    const roles = await Role.find({ _id: { $in: scope.roleIds } }).select('key').lean();
+    if (!context.roleKeys.includes('SUPER_ADMIN') && roles.some((role) => role.key === 'SUPER_ADMIN')) {
+      throw new HttpError(403, 'Only a Super Admin can create a Super Admin account', undefined, 'ACCESS_DENIED');
+    }
     for (const stateId of scope.stateIds) assertScope(context, stateId);
     for (const hubId of scope.hubIds) assertScope(context, undefined, hubId);
     const publicId = await nextPublicId('staff');
@@ -326,6 +592,7 @@ export class PlatformController {
       invitedBy: req.user!.sub,
     });
     await recordAudit(req, { action: 'staff.created', entityType: 'staff', entityId: profile.id, entityPublicId: publicId, after: profile.toObject() });
+    adminStaffCache.clear();
     sendCreated(res, {
       ...await presentPlatformRecords(profile.toObject()),
       account: { ...account.toJSON(), id: account.publicId },
@@ -342,6 +609,10 @@ export class PlatformController {
       stateIds: req.body.stateIds || profile.stateIds,
       hubIds: req.body.hubIds || profile.hubIds,
     });
+    const roles = await Role.find({ _id: { $in: scope.roleIds } }).select('key').lean();
+    if (!context.roleKeys.includes('SUPER_ADMIN') && roles.some((role) => role.key === 'SUPER_ADMIN')) {
+      throw new HttpError(403, 'Only a Super Admin can assign the Super Admin role', undefined, 'ACCESS_DENIED');
+    }
     for (const stateId of scope.stateIds) assertScope(context, stateId);
     for (const hubId of scope.hubIds) assertScope(context, undefined, hubId);
     const patch = {
@@ -353,6 +624,9 @@ export class PlatformController {
     const updated = await StaffProfile.findByIdAndUpdate(profile._id, { $set: patch }, { returnDocument: 'after' }).lean({ virtuals: true });
     await User.updateOne({ _id: profile.accountId }, {
       $set: {
+        ...(req.body.firstName !== undefined && { firstName: req.body.firstName }),
+        ...(req.body.lastName !== undefined && { lastName: req.body.lastName }),
+        ...(req.body.phone !== undefined && { phone: req.body.phone }),
         roleIds: scope.roleIds,
         ...(req.body.scopeType && { scopeType: req.body.scopeType }),
         assignedStateIds: scope.stateIds,
@@ -360,12 +634,23 @@ export class PlatformController {
       },
     });
     await recordAudit(req, { action: 'staff.updated', entityType: 'staff', entityId: profile._id.toString(), entityPublicId: profile.publicId, before: profile, after: updated, reason: req.body.reason });
+    adminStaffCache.clear();
     await sendPlatformSuccess(res, updated);
   };
 
   staffStatus = async (req: Request, res: Response) => {
-    await access(req, 'staff.suspend');
+    const context = await access(req, 'staff.suspend');
     const profile = await byIdentifier(StaffProfile, routeParam(req.params.id));
+    for (const stateId of profile.stateIds) assertScope(context, stateId);
+    for (const hubId of profile.hubIds) assertScope(context, undefined, hubId);
+    if (profile.accountId.toString() === req.user!.sub) {
+      throw new HttpError(409, 'You cannot change the lifecycle of your own account', undefined, 'CONFLICT');
+    }
+    const target = await User.findById(profile.accountId).select('roleIds').lean();
+    const targetRoles = await Role.find({ _id: { $in: target?.roleIds || [] } }).select('key').lean();
+    if (targetRoles.some((role) => role.key === 'SUPER_ADMIN')) {
+      throw new HttpError(409, 'Super Admin accounts are protected', undefined, 'CONFLICT');
+    }
     const status = req.path.endsWith('/reactivate') ? AccountStatus.ACTIVE : AccountStatus.SUSPENDED;
     const active = status === AccountStatus.ACTIVE;
     await Promise.all([
@@ -374,20 +659,57 @@ export class PlatformController {
       active ? Promise.resolve() : revokeAccountSessions(profile.accountId, 'staff_suspended', req.user!.sub),
     ]);
     await recordAudit(req, { action: `staff.${status}`, entityType: 'staff', entityId: profile._id.toString(), entityPublicId: profile.publicId, before: { status: profile.status }, after: { status }, reason: req.body.reason });
+    adminStaffCache.clear();
     sendSuccess(res, { status });
   };
 
-  revokeStaffSessions = async (req: Request, res: Response) => {
-    await access(req, 'staff.revoke_sessions');
+  archiveStaff = async (req: Request, res: Response) => {
+    const context = await access(req, 'staff.suspend');
     const profile = await byIdentifier(StaffProfile, routeParam(req.params.id));
+    for (const stateId of profile.stateIds) assertScope(context, stateId);
+    for (const hubId of profile.hubIds) assertScope(context, undefined, hubId);
+    if (profile.accountId.toString() === req.user!.sub) {
+      throw new HttpError(409, 'You cannot archive your own account', undefined, 'CONFLICT');
+    }
+    const target = await User.findById(profile.accountId).select('roleIds').lean();
+    const targetRoles = await Role.find({ _id: { $in: target?.roleIds || [] } }).select('key').lean();
+    if (targetRoles.some((role) => role.key === 'SUPER_ADMIN')) {
+      throw new HttpError(409, 'Super Admin accounts are protected', undefined, 'CONFLICT');
+    }
+    await Promise.all([
+      StaffProfile.updateOne({ _id: profile._id }, { $set: { status: AccountStatus.DISABLED, deletedAt: new Date() } }),
+      User.updateOne({ _id: profile.accountId }, { $set: { accountStatus: AccountStatus.DISABLED, isActive: false, deletedAt: new Date() } }),
+      revokeAccountSessions(profile.accountId, 'staff_archived', req.user!.sub),
+      revokeAccountInvitations(profile.accountId),
+    ]);
+    await recordAudit(req, {
+      action: 'staff.archived',
+      entityType: 'staff',
+      entityId: profile._id.toString(),
+      entityPublicId: profile.publicId,
+      before: { status: profile.status },
+      after: { status: AccountStatus.DISABLED },
+      reason: req.body.reason,
+    });
+    adminStaffCache.clear();
+    sendSuccess(res, { status: AccountStatus.DISABLED, archived: true });
+  };
+
+  revokeStaffSessions = async (req: Request, res: Response) => {
+    const context = await access(req, 'staff.revoke_sessions');
+    const profile = await byIdentifier(StaffProfile, routeParam(req.params.id));
+    for (const stateId of profile.stateIds) assertScope(context, stateId);
+    for (const hubId of profile.hubIds) assertScope(context, undefined, hubId);
     await revokeAccountSessions(profile.accountId, req.body.reason || 'administrative_revocation', req.user!.sub);
     await recordAudit(req, { action: 'staff.sessions_revoked', entityType: 'staff', entityId: profile._id.toString(), entityPublicId: profile.publicId, reason: req.body.reason });
     sendSuccess(res, { revoked: true });
   };
 
   resendStaffInvitation = async (req: Request, res: Response) => {
-    await access(req, 'staff.create');
+    const context = await access(req, 'staff.create');
     const profile = await byIdentifier(StaffProfile, routeParam(req.params.id));
+    for (const stateId of profile.stateIds) assertScope(context, stateId);
+    for (const hubId of profile.hubIds) assertScope(context, undefined, hubId);
     const account = await User.findById(profile.accountId);
     if (!account || profile.status !== AccountStatus.INVITED) {
       throw new HttpError(409, 'Only invited staff accounts can receive a new invitation', undefined, 'CONFLICT');
@@ -404,8 +726,10 @@ export class PlatformController {
   };
 
   cancelStaffInvitation = async (req: Request, res: Response) => {
-    await access(req, 'staff.suspend');
+    const context = await access(req, 'staff.suspend');
     const profile = await byIdentifier(StaffProfile, routeParam(req.params.id));
+    for (const stateId of profile.stateIds) assertScope(context, stateId);
+    for (const hubId of profile.hubIds) assertScope(context, undefined, hubId);
     if (profile.status !== AccountStatus.INVITED) {
       throw new HttpError(409, 'Only pending staff invitations can be cancelled', undefined, 'INVALID_STATE_TRANSITION');
     }
@@ -423,6 +747,7 @@ export class PlatformController {
       after: { status: AccountStatus.DISABLED, revokedInvitations },
       reason: req.body.reason,
     });
+    adminStaffCache.clear();
     sendSuccess(res, { status: AccountStatus.DISABLED, revokedInvitations });
   };
 
@@ -441,7 +766,11 @@ export class PlatformController {
   };
   createState = async (req: Request, res: Response) => {
     await access(req, 'states.manage');
-    const state = await OperationState.create({ ...req.body, publicId: await nextPublicId('state') });
+    const state = await OperationState.create({
+      ...req.body,
+      capitalName: req.body.capitalName || req.body.name,
+      publicId: await nextPublicId('state'),
+    });
     await recordAudit(req, { action: 'state.created', entityType: 'state', entityId: state.id, entityPublicId: state.publicId, stateId: state.id, after: state.toObject() });
     await sendPlatformCreated(res, state.toObject());
   };
@@ -517,8 +846,23 @@ export class PlatformController {
   };
   zoneStatus = (req: Request, res: Response) => lifecycle(req, res, ServiceZone, 'zones.manage', 'zone', req.path.endsWith('/activate') ? 'active' : 'inactive');
 
-  listMarkets = async (req: Request, res: Response) => sendSuccess(res, await listScoped(req, Market, 'markets.view'));
-  marketDetail = async (req: Request, res: Response) => sendSuccess(res, await detailScoped(req, Market, 'markets.view'));
+  listMarkets = async (req: Request, res: Response) => {
+    const context = await access(req, 'markets.view');
+    const { stateId, hubId } = await stateAndHub(req);
+    const { page, limit, skip } = getPagination(req.query);
+    const filter = scopedFilter<Market>(context, {}, stateId, hubId);
+    const [data, total] = await Promise.all([
+      Market.find(filter).sort({ isFeatured: -1, displayPriority: 1, name: 1 }).skip(skip).limit(limit).lean({ virtuals: true }),
+      Market.countDocuments(filter),
+    ]);
+    sendSuccess(res, paginated(await presentMarketRecords(data), total, page, limit));
+  };
+  marketDetail = async (req: Request, res: Response) => {
+    const context = await access(req, 'markets.view');
+    const market = await byIdentifier(Market, routeParam(req.params.id));
+    assertScope(context, market.stateId, market.hubId);
+    sendSuccess(res, await presentMarketRecords(market));
+  };
   createMarket = async (req: Request, res: Response) => {
     const context = await access(req, 'markets.manage');
     const location = await resolveLocation(req.body);
@@ -532,6 +876,7 @@ export class PlatformController {
       normalizedName: req.body.name.trim().toLowerCase(),
     });
     await recordAudit(req, { action: 'market.created', entityType: 'market', entityId: market.id, entityPublicId: market.publicId, stateId: market.stateId, hubId: market.hubId, after: market.toObject() });
+    publishMarketUpdate(market);
     await sendPlatformCreated(res, market.toObject());
   };
   updateMarket = async (req: Request, res: Response) => {
@@ -556,6 +901,7 @@ export class PlatformController {
       ...(req.body.name && { normalizedName: req.body.name.trim().toLowerCase() }),
     } }, { returnDocument: 'after' }).lean({ virtuals: true });
     await recordAudit(req, { action: 'market.updated', entityType: 'market', entityId: market._id.toString(), entityPublicId: market.publicId, stateId: market.stateId, hubId: market.hubId, before: market, after: updated, reason: req.body.reason });
+    publishMarketUpdate(updated);
     await sendPlatformSuccess(res, updated);
   };
   marketStatus = (req: Request, res: Response) => lifecycle(req, res, Market, 'markets.manage', 'market', req.path.endsWith('/activate') ? 'active' : 'inactive');
@@ -565,6 +911,7 @@ export class PlatformController {
     const hub = await ensureHub(req.body.hubId, market.stateId);
     const updated = await Market.findByIdAndUpdate(market._id, { $set: { hubId: hub._id.toString() } }, { returnDocument: 'after' }).lean({ virtuals: true });
     await recordAudit(req, { action: 'market.hub_assigned', entityType: 'market', entityId: market._id.toString(), entityPublicId: market.publicId, stateId: market.stateId, hubId: hub._id.toString(), before: { hubId: market.hubId }, after: { hubId: hub._id.toString() }, reason: req.body.reason });
+    publishMarketUpdate(updated);
     await sendPlatformSuccess(res, updated);
   };
 
@@ -691,8 +1038,9 @@ export class PlatformController {
     await sendPlatformSuccess(res, updated);
   };
   partnerStatus = async (req: Request, res: Response) => {
-    await access(req, 'partners.manage');
+    const context = await access(req, 'partners.manage');
     const partner = await byIdentifier(HookPartner, routeParam(req.params.id));
+    assertScope(context, partner.stateId);
     const status = req.path.endsWith('/activate') || req.path.endsWith('/reactivate') ? 'active' : 'suspended';
     await Promise.all([
       HookPartner.updateOne({ _id: partner._id }, { $set: { status } }),
@@ -704,8 +1052,9 @@ export class PlatformController {
   };
 
   resendPartnerInvitation = async (req: Request, res: Response) => {
-    await access(req, 'partners.manage');
+    const context = await access(req, 'partners.manage');
     const partner = await byIdentifier(HookPartner, routeParam(req.params.id));
+    assertScope(context, partner.stateId);
     const account = await User.findById(partner.accountId);
     if (!account || partner.status !== AccountStatus.INVITED) {
       throw new HttpError(409, 'Only invited Partner accounts can receive a new invitation', undefined, 'CONFLICT');
@@ -722,8 +1071,9 @@ export class PlatformController {
   };
 
   cancelPartnerInvitation = async (req: Request, res: Response) => {
-    await access(req, 'partners.manage');
+    const context = await access(req, 'partners.manage');
     const partner = await byIdentifier(HookPartner, routeParam(req.params.id));
+    assertScope(context, partner.stateId);
     if (partner.status !== AccountStatus.INVITED) {
       throw new HttpError(409, 'Only pending Partner invitations can be cancelled', undefined, 'INVALID_STATE_TRANSITION');
     }
@@ -747,8 +1097,13 @@ export class PlatformController {
 
   listRunners = async (req: Request, res: Response) => {
     const context = await access(req, 'runners.view');
+    const { stateId, hubId } = await stateAndHub(req);
     const { page, limit, skip } = getPagination(req.query);
-    const filter = context.scopeType === ScopeType.GLOBAL ? {} : { stateIds: { $in: context.stateIds } };
+    const filter = context.scopeType === ScopeType.GLOBAL
+      ? { ...(stateId && { stateIds: stateId }), ...(hubId && { hubIds: hubId }) }
+      : context.scopeType === ScopeType.HUB
+        ? { hubIds: hubId || { $in: context.hubIds } }
+        : { stateIds: stateId || { $in: context.stateIds } };
     const [data, total] = await Promise.all([RunnerProfile.find(filter).skip(skip).limit(limit).lean({ virtuals: true }), RunnerProfile.countDocuments(filter)]);
     sendSuccess(res, paginated(await presentPlatformRecords(data), total, page, limit));
   };
@@ -758,6 +1113,7 @@ export class PlatformController {
     if (context.scopeType !== ScopeType.GLOBAL && !runner.stateIds.some((stateId) => context.stateIds.includes(stateId))) {
       throw new HttpError(403, 'Runner is outside your assigned operational scope', undefined, 'SCOPE_DENIED');
     }
+    for (const hubId of runner.hubIds) assertScope(context, undefined, hubId);
     await sendPlatformSuccess(res, runner);
   };
   createRunner = async (req: Request, res: Response) => {
@@ -796,8 +1152,10 @@ export class PlatformController {
     await sendPlatformSuccess(res, updated);
   };
   runnerStatus = async (req: Request, res: Response) => {
-    await access(req, 'runners.manage');
+    const context = await access(req, 'runners.manage');
     const runner = await byIdentifier(RunnerProfile, routeParam(req.params.id));
+    for (const stateId of runner.stateIds) assertScope(context, stateId);
+    for (const hubId of runner.hubIds) assertScope(context, undefined, hubId);
     const status = req.path.endsWith('/activate') || req.path.endsWith('/reactivate') ? 'active' : 'suspended';
     await Promise.all([
       RunnerProfile.updateOne({ _id: runner._id }, { $set: { status } }),
@@ -809,8 +1167,10 @@ export class PlatformController {
   };
 
   resendRunnerInvitation = async (req: Request, res: Response) => {
-    await access(req, 'runners.manage');
+    const context = await access(req, 'runners.manage');
     const runner = await byIdentifier(RunnerProfile, routeParam(req.params.id));
+    for (const stateId of runner.stateIds) assertScope(context, stateId);
+    for (const hubId of runner.hubIds) assertScope(context, undefined, hubId);
     const account = await User.findById(runner.accountId);
     if (!account || runner.status !== AccountStatus.INVITED) {
       throw new HttpError(409, 'Only invited Runner accounts can receive a new invitation', undefined, 'CONFLICT');
@@ -827,8 +1187,10 @@ export class PlatformController {
   };
 
   cancelRunnerInvitation = async (req: Request, res: Response) => {
-    await access(req, 'runners.manage');
+    const context = await access(req, 'runners.manage');
     const runner = await byIdentifier(RunnerProfile, routeParam(req.params.id));
+    for (const stateId of runner.stateIds) assertScope(context, stateId);
+    for (const hubId of runner.hubIds) assertScope(context, undefined, hubId);
     if (runner.status !== AccountStatus.INVITED) {
       throw new HttpError(409, 'Only pending Runner invitations can be cancelled', undefined, 'INVALID_STATE_TRANSITION');
     }
@@ -919,7 +1281,7 @@ export class PlatformController {
     await access(req, 'audit.view');
     const { page, limit, skip } = getPagination(req.query);
     const filter: Record<string, unknown> = {};
-    for (const key of ['action', 'entityType', 'actorId', 'stateId']) {
+    for (const key of ['action', 'entityType', 'entityId', 'entityPublicId', 'actorId', 'stateId']) {
       if (req.query[key]) filter[key] = req.query[key];
     }
     if (req.query.from || req.query.to) filter.createdAt = {

@@ -5,7 +5,8 @@ import { CommercialCatalogService, publicProductRepresentation } from '@services
 import { Product } from '@models/products/product.model';
 import { recordAudit } from '@services/platform-audit.service';
 import { sendSuccess } from '@utils/http';
-import { presentCommercialSummary } from '@services/catalog-presentation.service';
+import { presentCommercialList, presentCommercialSummary } from '@services/catalog-presentation.service';
+import { adminCatalogCache } from '@lib/ttl-cache';
 
 function stateScope(req: Request) {
   if (req.platformContext?.stateId) return [req.platformContext.stateId];
@@ -15,10 +16,21 @@ function stateScope(req: Request) {
 export class AdminCommercialCatalogController {
   private readonly catalog = new CommercialCatalogService();
 
-  dashboard = async (req: Request, res: Response) => sendSuccess(res, await this.catalog.dashboard(stateScope(req)));
+  dashboard = async (req: Request, res: Response) => {
+    const scope = stateScope(req);
+    const cacheKey = `commercial:${scope?.join(',') || 'global'}`;
+    const cached = adminCatalogCache.get(cacheKey);
+    if (cached) {
+      sendSuccess(res, cached);
+      return;
+    }
+    const response = await this.catalog.dashboard(scope);
+    adminCatalogCache.set(cacheKey, response);
+    sendSuccess(res, response);
+  };
   list = async (req: Request, res: Response) => {
     const result = await this.catalog.list(req.query, stateScope(req));
-    sendSuccess(res, { ...result, data: result.data.map(presentCommercialSummary) });
+    sendSuccess(res, { ...result, data: result.data.map(presentCommercialList) });
   };
   detail = async (req: Request, res: Response) => sendSuccess(
     res,

@@ -123,6 +123,7 @@ const ProductSchema = createSchema<Product>({
 ProductSchema.index({ vendorId: 1, status: 1 });
 ProductSchema.index({ title: 'text', description: 'text' });
 ProductSchema.index({ sourceStateId: 1, marketId: 1, status: 1, publishedAt: -1 });
+ProductSchema.index({ categoryId: 1, status: 1, publishedAt: -1 });
 
 ProductSchema.pre('validate', function normalizeColors() {
   this.colors = normalizeProductColors(this.colors);

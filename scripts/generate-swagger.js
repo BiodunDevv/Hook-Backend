@@ -7,6 +7,7 @@ const tags = [
   ['System', 'Health checks and API metadata.'],
   ['Authentication', 'Customer/mobile authentication and profile endpoints.'],
   ['Public Marketplace', 'Public product, category, vendor, booth, feed, and search endpoints.'],
+  ['Delivery Coverage', 'Customer delivery States and distance-aware delivery pricing.'],
   ['Customer Cart', 'Authenticated shopper cart management.'],
   ['Customer Orders', 'Authenticated checkout and order management.'],
   ['Negotiations', 'Customer AI negotiation sessions.'],
@@ -511,6 +512,16 @@ function boothSessionHeader(required = true) {
   };
 }
 
+function idempotencyHeader(required = true) {
+  return {
+    name: 'Idempotency-Key',
+    in: 'header',
+    required,
+    schema: { type: 'string', minLength: 8, maxLength: 160 },
+    description: 'Stable client command key. Repeating it returns the original result and cannot mutate a different resource.',
+  };
+}
+
 function op(tag, summary, options = {}) {
   return {
     tags: [tag],
@@ -754,6 +765,15 @@ add('get', `${apiPrefix}/admin/reports`, op('Admin Reports', 'List generated rep
 add('post', `${apiPrefix}/admin/reports/generate`, op('Admin Reports', 'Generate report metadata', { requestBody: body('ReportRequest', false) }));
 add('get', `${apiPrefix}/admin/settings`, op('Admin Settings', 'Get platform settings'));
 add('patch', `${apiPrefix}/admin/settings`, op('Admin Settings', 'Update platform settings (super-admin)', { requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } } } }));
+add('get', `${apiPrefix}/admin/delivery`, op('Delivery Coverage', 'View every Nigerian delivery State, pricing rule, and global delivery settings.'));
+add('get', `${apiPrefix}/admin/delivery/settings`, op('Delivery Coverage', 'View delivery coverage and pricing settings.'));
+add('patch', `${apiPrefix}/admin/delivery/settings`, op('Delivery Coverage', 'Update the global delivery fallback fee with an audit reason.'));
+add('get', `${apiPrefix}/admin/delivery/rules`, op('Delivery Coverage', 'List active and inactive delivery pricing rules.'));
+add('post', `${apiPrefix}/admin/delivery/rules`, op('Delivery Coverage', 'Create a State, Service Zone, or global flat/distance pricing rule.'));
+add('patch', `${apiPrefix}/admin/delivery/rules/{id}`, op('Delivery Coverage', 'Update an audited delivery pricing rule.', { parameters: [param('id', 'DPR public ID')] }));
+add('patch', `${apiPrefix}/admin/delivery/states/{id}`, op('Delivery Coverage', 'Enable or pause delivery in one Nigerian State.', { parameters: [param('id', 'STA public ID')] }));
+add('post', `${apiPrefix}/admin/delivery/locations/refresh`, op('Delivery Coverage', 'Refresh the cached Nigerian State, capital, and Local Government catalog.', { requestBody: body('AuditReasonRequest', false) }));
+add('post', `${apiPrefix}/admin/delivery/preview`, op('Delivery Coverage', 'Preview the effective delivery fee for a destination.'));
 
 add('post', `${apiPrefix}/guest-sessions`, op('Guest Sessions', 'Issue an opaque backend-managed guest session'));
 add('get', `${apiPrefix}/guest-sessions/current`, op('Guest Sessions', 'Restore the current guest session', {
@@ -768,6 +788,10 @@ for (const resource of ['states', 'cities', 'zones', 'markets']) {
     parameters: [param('id', 'Public Hook ID')],
   }));
 }
+add('get', `${apiPrefix}/public/states/{id}/lgas`, op('Public Geography', 'List active Local Government Areas for a delivery-enabled Nigerian State.', {
+  public: true,
+  parameters: [param('id', 'STA public ID')],
+}));
 const platformResources = [
   ['staff', 'Staff Accounts'], ['roles', 'Roles and Permissions'], ['permissions', 'Roles and Permissions'],
   ['states', 'Platform Geography'], ['cities', 'Platform Geography'], ['zones', 'Platform Geography'],
@@ -871,6 +895,44 @@ add('get', `${apiPrefix}/admin/commerce/outbox`, op('Commerce Operations', 'Insp
 add('get', `${apiPrefix}/admin/commerce/settings`, op('Commerce Operations', 'Get Super Admin commerce defaults.'));
 add('patch', `${apiPrefix}/admin/commerce/settings`, op('Commerce Operations', 'Update audited Super Admin commerce defaults.'));
 
+// Phase 5: Runner fulfilment, Hub custody, logistics, Partner collection, returns, and refunds.
+add('get', `${apiPrefix}/runner/fulfilments/dashboard`, op('Runner Fulfilment', 'Get self-scoped fulfilment metrics and SLA work.'));
+add('get', `${apiPrefix}/runner/fulfilments`, op('Runner Fulfilment', 'List fulfilment tasks assigned to the authenticated Runner.', { parameters: [query('status'), query('limit', { type: 'integer' })] }));
+add('get', `${apiPrefix}/runner/fulfilments/{id}`, op('Runner Fulfilment', 'Get one assigned fulfilment task and its customer-safe item details.', { parameters: [param('id', 'FUL public ID')] }));
+for (const action of ['accept', 'start_sourcing', 'secure', 'begin_packing', 'pack']) {
+  add('post', `${apiPrefix}/runner/fulfilments/{id}/${action}`, op('Runner Fulfilment', `Runner ${action.replaceAll('_', ' ')} action with optimistic versioning.`, { parameters: [param('id', 'FUL public ID')] }));
+}
+add('post', `${apiPrefix}/runner/fulfilments/{id}/issues`, op('Runner Fulfilment', 'Report a sourcing or fulfilment exception.', { parameters: [param('id', 'FUL public ID'), idempotencyHeader(false)] }));
+add('get', `${apiPrefix}/admin/fulfilment/control-tower`, op('Fulfilment Operations', 'View State/Hub-scoped fulfilment tasks, exceptions, shipments, and returns.'));
+add('get', `${apiPrefix}/admin/fulfilment/tasks/{id}`, op('Fulfilment Operations', 'Get a State/Hub-scoped fulfilment task, order summary, and assigned item snapshots.', { parameters: [param('id', 'FUL public ID')] }));
+add('get', `${apiPrefix}/admin/fulfilment/runners`, op('Fulfilment Operations', 'List active compatible Runner profiles for audited reassignment.', { parameters: [query('stateId'), query('limit', { type: 'integer' })] }));
+add('get', `${apiPrefix}/admin/fulfilment/hubs`, op('Fulfilment Operations', 'List active compatible Dispatch Hubs for audited reassignment.', { parameters: [query('stateId'), query('limit', { type: 'integer' })] }));
+add('post', `${apiPrefix}/admin/fulfilment/tasks/{id}/reassign`, op('Fulfilment Operations', 'Reassign a task only to a compatible active Runner and Hub with an audited reason.', { parameters: [param('id', 'FUL public ID')] }));
+add('get', `${apiPrefix}/admin/fulfilment/exceptions`, op('Fulfilment Operations', 'List open State/Hub-scoped fulfilment exceptions.', { parameters: [query('stateId'), query('hubId')] }));
+add('patch', `${apiPrefix}/admin/fulfilment/exceptions/{id}`, op('Fulfilment Operations', 'Move an exception to in-progress, resolved, or dismissed with an audited reason.', { parameters: [param('id', 'EXC public ID')] }));
+add('get', `${apiPrefix}/admin/fulfilment/hub`, op('Hub Operations', 'View inbound Runner packages, Hub packages, exceptions, and consolidations.'));
+add('get', `${apiPrefix}/admin/fulfilment/consolidations`, op('Hub Operations', 'List State/Hub-scoped consolidation records.', { parameters: [query('status'), query('stateId'), query('hubId'), query('limit', { type: 'integer' })] }));
+add('post', `${apiPrefix}/admin/fulfilment/packages/{id}/receive`, op('Hub Operations', 'Receive a Runner package after validating its one-time scan credential.', { parameters: [param('id', 'RPK public ID'), idempotencyHeader()] }));
+add('post', `${apiPrefix}/admin/fulfilment/packages/{id}/qc`, op('Hub Operations', 'Record a visible quality-check result with optimistic versioning.', { parameters: [param('id', 'HPK public ID')] }));
+add('post', `${apiPrefix}/admin/fulfilment/orders/{id}/consolidate`, op('Hub Operations', 'Create a single complete State Order consolidation; incomplete orders are rejected.', { parameters: [param('id', 'ORD public ID')] }));
+add('post', `${apiPrefix}/admin/fulfilment/consolidations/{id}/seal`, op('Hub Operations', 'Seal one complete customer parcel for dispatch.', { parameters: [param('id', 'CON public ID')] }));
+add('get', `${apiPrefix}/admin/fulfilment/shipments`, op('Fulfilment Logistics', 'List State/Hub-scoped shipment records.'));
+add('get', `${apiPrefix}/admin/fulfilment/logistics/readiness`, op('Fulfilment Logistics', 'Inspect manual, development simulator, and external provider readiness without exposing credentials.'));
+add('post', `${apiPrefix}/admin/fulfilment/orders/{id}/shipments`, op('Fulfilment Logistics', 'Book one sealed parcel through manual logistics fallback, the development-only simulator, or an enabled provider.', { parameters: [param('id', 'ORD public ID'), idempotencyHeader()] }));
+add('patch', `${apiPrefix}/admin/fulfilment/shipments/{id}`, op('Fulfilment Logistics', 'Advance a shipment through the explicit status map.', { parameters: [param('id', 'SHP public ID')] }));
+add('post', `${apiPrefix}/webhooks/logistics/{provider}`, op('Fulfilment Logistics', 'Receive an authenticated deduplicated provider tracking event.', { public: true, parameters: [param('provider', 'Logistics provider'), { name: 'x-provider-event-id', in: 'header', required: true, schema: { type: 'string' } }, { name: 'x-provider-signature', in: 'header', required: true, schema: { type: 'string' } }] }));
+add('get', `${apiPrefix}/partner/fulfilment/custody`, op('Partner Custody', 'List only packages assigned to the authenticated initiating Hook Partner.'));
+add('get', `${apiPrefix}/partner/fulfilment/custody/{orderId}`, op('Partner Custody', 'Get one Partner custody record without exposing the collection-code hash.', { parameters: [param('orderId', 'ORD public ID')] }));
+add('post', `${apiPrefix}/partner/fulfilment/custody/{id}/receive`, op('Partner Custody', 'Receive one package into the authenticated Partner location.', { parameters: [param('id', 'PCU public ID'), idempotencyHeader(false)] }));
+add('post', `${apiPrefix}/partner/fulfilment/custody/{id}/release`, op('Partner Custody', 'Release a package only after verified payment and a valid one-time collection code.', { parameters: [param('id', 'PCU public ID'), idempotencyHeader(false)] }));
+add('get', `${apiPrefix}/orders/{id}/fulfilment`, op('Customer Fulfilment', 'Return customer-safe Runner, Hub, shipment, Partner custody, return, and refund progress.', { parameters: [param('id', 'ORD public ID')] }));
+add('post', `${apiPrefix}/orders/{id}/returns`, op('Returns and Refunds', 'Create an eligible customer return issue within the delivery/collection window.', { parameters: [param('id', 'ORD public ID')] }));
+add('get', `${apiPrefix}/admin/fulfilment/returns`, op('Returns and Refunds', 'List State-scoped customer return requests.'));
+add('patch', `${apiPrefix}/admin/fulfilment/returns/{id}/review`, op('Returns and Refunds', 'Approve or reject a return with a mandatory reason.', { parameters: [param('id', 'RET public ID')] }));
+add('get', `${apiPrefix}/admin/fulfilment/refunds`, op('Returns and Refunds', 'List State-scoped refund records.'));
+add('post', `${apiPrefix}/admin/fulfilment/refunds`, op('Returns and Refunds', 'Create an idempotent refund request within the captured balance.', { parameters: [idempotencyHeader()] }));
+add('post', `${apiPrefix}/admin/fulfilment/refunds/{id}/process`, op('Returns and Refunds', 'Process a refund through the active payment provider.', { parameters: [param('id', 'RFD public ID'), idempotencyHeader(false)] }));
+
 const obsoletePrefixes = [
   `${apiPrefix}/vendors`,
   `${apiPrefix}/booths`,
@@ -904,7 +966,7 @@ const spec = {
   info: {
     title: 'Hook API',
     version: '1.0.0',
-    description: 'Hook Phase 4 platform API. State-grouped commerce, Partner-assisted ordering, Paystack evidence, and Pay-at-Handover use public Hook IDs and the standard { success, data, meta } contract.',
+    description: 'Hook Phase 5 platform API. State-grouped commerce, Paystack evidence, fulfilment operations, Hub custody, logistics boundaries, returns, and refunds use public Hook IDs and the standard { success, data, meta } contract.',
   },
   servers: [
     { url: 'http://localhost:4000', description: 'Local development server' },
@@ -932,6 +994,13 @@ const spec = {
     { name: 'Payments', description: 'Provider-neutral payment lifecycle with active Paystack Hosted Checkout.' },
     { name: 'Partner Commerce', description: 'Self-scoped prepaid assisted ordering through Hook Partners.' },
     { name: 'Commerce Operations', description: 'State-scoped POD, payment evidence, settings, and outbox operations.' },
+    { name: 'Runner Fulfilment', description: 'Self-scoped Runner sourcing, packing, and issue workflows.' },
+    { name: 'Fulfilment Operations', description: 'State/Hub-scoped fulfilment control and reassignment.' },
+    { name: 'Hub Operations', description: 'Runner package receipt, visible QC, consolidation, and sealing.' },
+    { name: 'Fulfilment Logistics', description: 'Shipment booking, explicit transitions, and provider webhooks.' },
+    { name: 'Partner Custody', description: 'Initiating Partner package custody and customer collection.' },
+    { name: 'Customer Fulfilment', description: 'Customer-safe post-order fulfilment progress.' },
+    { name: 'Returns and Refunds', description: 'Return review and provider-backed refund operations.' },
   ]),
   paths,
   components: {

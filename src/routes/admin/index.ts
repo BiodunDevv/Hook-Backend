@@ -10,7 +10,6 @@ import { AdminSearchController } from "@controllers/admin/search.controller";
 import { AdminProductsController } from "@controllers/admin/products.controller";
 import { AdminReportsController } from "@controllers/admin/reports.controller";
 import { AdminSettingsController } from "@controllers/admin/settings.controller";
-import { AdminStaffController } from "@controllers/admin/staff.controller";
 import { AdminUsersController } from "@controllers/admin/users.controller";
 import { AdminCommerceController } from "@controllers/admin/commerce.controller";
 import { AdminCatalogReviewController } from "@controllers/admin/catalog-review.controller";
@@ -27,10 +26,6 @@ import {
   adminUserSchema,
   categoryCreateSchema,
   categoryUpdateSchema,
-  staffCategoriesSchema,
-  staffCreateSchema,
-  staffPermissionsSchema,
-  staffUpdateSchema,
   adminProductCreateSchema,
   adminProductUpdateSchema,
   operationalStateAssignSchema,
@@ -59,6 +54,9 @@ import {
   podOverrideSchema,
 } from "@validations/commerce.schemas";
 import { z } from "zod";
+import { FulfilmentController } from "@controllers/fulfilment.controller";
+import { AdminNotificationsController } from "@controllers/admin/notifications.controller";
+import { AdminDeliveryController } from "@controllers/admin/delivery.controller";
 
 export function createAdminRouter() {
   const router = Router();
@@ -71,7 +69,6 @@ export function createAdminRouter() {
   const negotiations = new AdminNegotiationsController();
   const reports = new AdminReportsController();
   const settings = new AdminSettingsController();
-  const staff = new AdminStaffController();
   const search = new AdminSearchController();
   const categories = new AdminCategoriesController();
   const operations = new AdminOperationsController();
@@ -79,6 +76,9 @@ export function createAdminRouter() {
   const catalogReview = new AdminCatalogReviewController();
   const commercial = new AdminCommercialCatalogController();
   const phaseFour = new PhaseFourCommerceController();
+  const fulfilment = new FulfilmentController();
+  const notifications = new AdminNotificationsController();
+  const delivery = new AdminDeliveryController();
 
   // ── Public admin auth (no token required) ──────────────────────────────
   router.use("/auth", createAdminAuthRouter());
@@ -87,6 +87,11 @@ export function createAdminRouter() {
   router.use(requireAuth, requireAdmin);
   router.use(platformContext);
   router.use("/", createPlatformAdminRouter());
+
+  // The customer notification route is intentionally customer/guest scoped.
+  // Keep staff notifications on an explicit admin path so the Admin shell
+  // never presents a customer identity to the API.
+  router.get("/notifications", asyncHandler(notifications.list));
 
   // ── Search (permission-scoped — controller reads user from req) ────────
   router.get("/search", asyncHandler(search.global));
@@ -144,71 +149,37 @@ export function createAdminRouter() {
     asyncHandler(users.role),
   );
 
-  // ── Staff management (super_admin only) ────────────────────────────────
-  router.get("/staff", requireSuperAdmin, asyncHandler(staff.list));
-  router.post(
-    "/staff",
-    requireSuperAdmin,
-    validateBody(staffCreateSchema),
-    asyncHandler(staff.create),
-  );
-  router.get("/staff/:id", requireSuperAdmin, asyncHandler(staff.detail));
-  router.patch(
-    "/staff/:id",
-    requireSuperAdmin,
-    validateBody(staffUpdateSchema),
-    asyncHandler(staff.update),
-  );
-  router.patch(
-    "/staff/:id/permissions",
-    requireSuperAdmin,
-    validateBody(staffPermissionsSchema),
-    asyncHandler(staff.updatePermissions),
-  );
-  router.patch(
-    "/staff/:id/categories",
-    requireSuperAdmin,
-    validateBody(staffCategoriesSchema),
-    asyncHandler(staff.updateCategories),
-  );
-  router.patch(
-    "/staff/:id/toggle",
-    requireSuperAdmin,
-    asyncHandler(staff.toggle),
-  );
-  router.delete("/staff/:id", requireSuperAdmin, asyncHandler(staff.remove));
-
-  // ── Categories (taxonomy managed by super_admin, viewable with products.view) ──
+  // ── Categories (taxonomy managed through explicit catalog permissions) ──
   router.get(
     "/categories",
-    requirePermission("products.view"),
+    requirePermission("categories.view"),
     asyncHandler(categories.list),
   );
   router.post(
     "/categories",
-    requireSuperAdmin,
+    requirePermission("categories.manage"),
     validateBody(categoryCreateSchema),
     asyncHandler(categories.create),
   );
   router.get(
     "/categories/:id",
-    requirePermission("products.view"),
+    requirePermission("categories.view"),
     asyncHandler(categories.detail),
   );
   router.patch(
     "/categories/:id",
-    requireSuperAdmin,
+    requirePermission("categories.manage"),
     validateBody(categoryUpdateSchema),
     asyncHandler(categories.update),
   );
   router.patch(
     "/categories/:id/toggle",
-    requireSuperAdmin,
+    requirePermission("categories.manage"),
     asyncHandler(categories.toggle),
   );
   router.delete(
     "/categories/:id",
-    requireSuperAdmin,
+    requirePermission("categories.manage"),
     asyncHandler(categories.remove),
   );
 
@@ -432,6 +403,30 @@ export function createAdminRouter() {
     validateBody(commerceSettingsSchema),
     asyncHandler(phaseFour.updateSettings),
   );
+
+  // ── Phase 5 fulfilment, Hub, logistics, returns and refunds ───────────
+  router.get('/fulfilment/control-tower', requirePermission('fulfilment.view'), asyncHandler(fulfilment.controlTower));
+  router.get('/fulfilment/tasks/:id', requirePermission('fulfilment.view'), asyncHandler(fulfilment.adminTaskDetail));
+  router.get('/fulfilment/runners', requirePermission('fulfilment.assign'), asyncHandler(fulfilment.assignmentRunners));
+  router.get('/fulfilment/hubs', requirePermission('fulfilment.assign'), asyncHandler(fulfilment.assignmentHubs));
+  router.post('/fulfilment/tasks/:id/reassign', requirePermission('fulfilment.assign'), validateBody(z.object({ runnerId: z.string().min(1), hubId: z.string().min(1), version: z.coerce.number().int().positive(), reason: z.string().min(3).max(1000) }).strict()), asyncHandler(fulfilment.reassignTask));
+  router.get('/fulfilment/exceptions', requirePermission('fulfilment.view'), asyncHandler(fulfilment.adminExceptions));
+  router.patch('/fulfilment/exceptions/:id', requirePermission('fulfilment.resolve'), validateBody(z.object({ status: z.enum(['IN_PROGRESS', 'RESOLVED', 'DISMISSED']), reason: z.string().min(3).max(1000) }).strict()), asyncHandler(fulfilment.resolveException));
+  router.get('/fulfilment/hub', requirePermission('fulfilment.hub.view'), asyncHandler(fulfilment.hubDashboard));
+  router.get('/fulfilment/consolidations', requirePermission('fulfilment.hub.view'), asyncHandler(fulfilment.adminConsolidations));
+  router.post('/fulfilment/packages/:id/receive', requirePermission('fulfilment.hub.receive'), validateBody(z.object({ hubId: z.string().min(1), scanCredential: z.string().regex(/^\d{6}$/), idempotencyKey: z.string().min(8), stateId: z.string().optional(), evidence: z.array(z.object({ type: z.string().min(1), url: z.string().url().optional(), assetId: z.string().optional(), note: z.string().max(500).optional() })).optional() }).strict()), asyncHandler(fulfilment.receivePackage));
+  router.post('/fulfilment/packages/:id/qc', requirePermission('fulfilment.hub.qc'), validateBody(z.object({ version: z.coerce.number().int().positive().optional(), passed: z.boolean(), checks: z.array(z.record(z.string(), z.unknown())).default([]) }).strict()), asyncHandler(fulfilment.qualityCheck));
+  router.post('/fulfilment/orders/:id/consolidate', requirePermission('fulfilment.consolidate'), validateBody(z.object({ hubId: z.string().min(1) }).strict()), asyncHandler(fulfilment.consolidate));
+  router.post('/fulfilment/consolidations/:id/seal', requirePermission('fulfilment.consolidate'), validateBody(z.object({ version: z.coerce.number().int().positive().optional(), weightGrams: z.number().positive().optional(), dimensions: z.object({ lengthCm: z.number().positive(), widthCm: z.number().positive(), heightCm: z.number().positive() }).optional(), sealReference: z.string().max(100).optional() }).strict()), asyncHandler(fulfilment.sealConsolidation));
+  router.get('/fulfilment/shipments', requirePermission('logistics.view'), asyncHandler(fulfilment.adminShipments));
+  router.get('/fulfilment/logistics/readiness', requirePermission('logistics.view'), asyncHandler(fulfilment.logisticsReadiness));
+  router.post('/fulfilment/orders/:id/shipments', requirePermission('logistics.book'), validateBody(z.object({ provider: z.enum(['manual', 'simulated', 'gig', 'fez', 'other']), hubId: z.string().min(1), serviceName: z.string().max(100).optional(), externalReference: z.string().max(160).optional(), trackingNumber: z.string().max(160).optional(), estimatedDeliveryAt: z.string().datetime().optional(), providerCostMinor: z.number().int().nonnegative().optional(), providerQuoteMinor: z.number().int().nonnegative().optional(), idempotencyKey: z.string().min(8), evidence: z.array(z.object({ type: z.string().min(1), url: z.string().url().optional(), assetId: z.string().optional(), note: z.string().max(500).optional() })).optional() }).strict()), asyncHandler(fulfilment.createShipment));
+  router.patch('/fulfilment/shipments/:id', requirePermission('logistics.manage'), validateBody(z.object({ status: z.string().min(1), version: z.coerce.number().int().positive().optional(), note: z.string().max(500).optional() }).strict()), asyncHandler(fulfilment.updateShipment));
+  router.get('/fulfilment/returns', requirePermission('returns.view'), asyncHandler(fulfilment.adminReturns));
+  router.patch('/fulfilment/returns/:id/review', requirePermission('returns.review'), validateBody(z.object({ decision: z.enum(['APPROVED', 'REJECTED']), reason: z.string().min(3).max(1000) }).strict()), asyncHandler(fulfilment.adminReturnReview));
+  router.get('/fulfilment/refunds', requirePermission('refunds.view'), asyncHandler(fulfilment.adminRefunds));
+  router.post('/fulfilment/refunds', requirePermission('refunds.process'), validateBody(z.object({ orderId: z.string().min(1), returnRequestId: z.string().optional(), amountMinor: z.number().int().positive(), reason: z.string().min(3).max(1000), idempotencyKey: z.string().min(8) }).strict()), asyncHandler(fulfilment.adminRefund));
+  router.post('/fulfilment/refunds/:id/process', requirePermission('finance.refunds.process'), validateBody(z.object({ idempotencyKey: z.string().min(8).optional(), reason: z.string().max(1000).optional() }).strict()), asyncHandler(fulfilment.adminRefundProcess));
   // ── Runners ───────────────────────────────────────────────────────────
   // The controller still reads legacy field-agent collections. The API and
   // active permission vocabulary are canonical for the current product.
@@ -577,6 +572,59 @@ export function createAdminRouter() {
     validateBody(settingsSchema),
     asyncHandler(settings.update),
   );
+
+  // ── Delivery coverage and fee rules ────────────────────────────────────
+  router.get('/delivery', requirePermission('delivery.coverage.view'), asyncHandler(delivery.settings));
+  router.get('/delivery/settings', requirePermission('delivery.coverage.view'), asyncHandler(delivery.settings));
+  router.patch('/delivery/settings', requirePermission('delivery.pricing.manage'), validateBody(z.object({
+    defaultDeliveryFeeMinor: z.number().int().nonnegative(),
+    reason: z.string().trim().min(3).max(500).optional(),
+  }).strict()), asyncHandler(delivery.updateSettings));
+  router.get('/delivery/rules', requirePermission('delivery.pricing.view'), asyncHandler(delivery.listRules));
+  router.post('/delivery/rules', requirePermission('delivery.pricing.manage'), validateBody(z.object({
+    name: z.string().trim().min(2).max(120),
+    scope: z.enum(['global', 'state', 'zone']),
+    scopeId: z.string().min(1).optional(),
+    mode: z.enum(['flat', 'per_km', 'distance_bands']),
+    flatFeeMinor: z.number().int().nonnegative().optional(),
+    baseFeeMinor: z.number().int().nonnegative().optional(),
+    feePerKmMinor: z.number().int().nonnegative().optional(),
+    fallbackFeeMinor: z.number().int().nonnegative().optional(),
+    originHubId: z.string().min(1).optional(),
+    bands: z.array(z.object({ upToKm: z.number().positive(), feeMinor: z.number().int().nonnegative() }).strict()).max(20).optional(),
+    status: z.enum(['active', 'inactive']).optional(),
+    effectiveFrom: z.coerce.date().optional(),
+    effectiveUntil: z.coerce.date().optional(),
+    reason: z.string().trim().min(3).max(500).optional(),
+  }).strict()), asyncHandler(delivery.createRule));
+  router.patch('/delivery/rules/:id', requirePermission('delivery.pricing.manage'), validateBody(z.object({
+    name: z.string().trim().min(2).max(120).optional(),
+    scope: z.enum(['global', 'state', 'zone']).optional(),
+    scopeId: z.string().min(1).optional(),
+    mode: z.enum(['flat', 'per_km', 'distance_bands']).optional(),
+    flatFeeMinor: z.number().int().nonnegative().optional(),
+    baseFeeMinor: z.number().int().nonnegative().optional(),
+    feePerKmMinor: z.number().int().nonnegative().optional(),
+    fallbackFeeMinor: z.number().int().nonnegative().optional(),
+    originHubId: z.string().min(1).optional(),
+    bands: z.array(z.object({ upToKm: z.number().positive(), feeMinor: z.number().int().nonnegative() }).strict()).max(20).optional(),
+    status: z.enum(['active', 'inactive']).optional(),
+    effectiveFrom: z.coerce.date().optional(),
+    effectiveUntil: z.coerce.date().optional(),
+    reason: z.string().trim().min(3).max(500).optional(),
+  }).strict()), asyncHandler(delivery.updateRule));
+  router.patch('/delivery/states/:id', requirePermission('delivery.coverage.manage'), validateBody(z.object({
+    deliveryEnabled: z.boolean(),
+    reason: z.string().trim().min(3).max(500).optional(),
+  }).strict()), asyncHandler(delivery.toggleState));
+  router.post('/delivery/locations/refresh', requirePermission('delivery.coverage.manage'), validateBody(z.object({
+    reason: z.string().trim().min(3).max(500).optional(),
+  }).strict()), asyncHandler(delivery.refreshLocations));
+  router.post('/delivery/preview', requirePermission('delivery.pricing.preview'), validateBody(z.object({
+    stateId: z.string().min(1),
+    zoneId: z.string().min(1).optional(),
+    coordinates: z.object({ latitude: z.number(), longitude: z.number() }).optional(),
+  }).strict()), asyncHandler(delivery.preview));
 
   return router;
 }

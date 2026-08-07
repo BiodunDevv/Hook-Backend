@@ -26,6 +26,7 @@ export interface PaymentProvider {
     reference: string;
   }>;
   verify(reference: string): Promise<ProviderTransaction>;
+  refund(input: { reference: string; amountMinor: number; reason?: string }): Promise<{ providerReference: string }>;
   parseWebhook(
     rawBody: Buffer,
     signature: string,

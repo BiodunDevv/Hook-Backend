@@ -3,51 +3,67 @@ import { EscrowEventType, PaymentStatus, SettlementStatus } from '@lib/constants
 import { HttpError, sendSuccess } from '@utils/http';
 import { actor, adminRepos, getPagination, paginated, routeParam } from './admin.helpers';
 import { PaymentService } from '@services/payment.service';
+import { Order } from '@models/orders/order.model';
+import { Payment } from '@models/payments/payment.model';
+import { Settlement } from '@models/settlements/settlement.model';
+import { EscrowLedger } from '@models/payments/escrow-ledger.model';
+import { adminFinancialCache } from '@lib/ttl-cache';
 
 export class AdminFinancialsController {
   private paymentsService = new PaymentService(adminRepos.payments(), adminRepos.orders(), adminRepos.escrowLedger());
   dashboard = async (req: Request, res: Response) => {
-    const orders = await adminRepos.orders().find({});
-    const [paymentRows, settlementRows] = await Promise.all([
-      adminRepos.payments().find({ order: { createdAt: 'DESC' } }),
-      adminRepos.settlements().find({ order: { createdAt: 'DESC' } }),
-    ]);
-    const ledger = await adminRepos.escrowLedger().find({ order: { createdAt: 'DESC' } });
-    const successful = paymentRows.filter((payment) => payment.status === PaymentStatus.SUCCESSFUL);
-    const pendingSettlements = settlementRows.filter((settlement) => settlement.status === SettlementStatus.PENDING_ESCROW);
     const period = ['24h', '7d', '30d', 'ytd'].includes(String(req.query.period).toLowerCase()) ? String(req.query.period).toLowerCase() : '7d';
+    const cacheKey = String(period);
+    const cached = adminFinancialCache.get(cacheKey);
+    if (cached) {
+      sendSuccess(res, cached);
+      return;
+    }
     const now = new Date();
     const start = period === '24h' ? new Date(now.getTime() - 24 * 60 * 60 * 1000)
       : period === '30d' ? new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
         : period === 'ytd' ? new Date(now.getFullYear(), 0, 1)
           : new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    const bucketKey = (date: Date) => period === '24h'
-      ? `${String(date.getHours()).padStart(2, '0')}:00`
-      : period === 'ytd' ? date.toLocaleString('en', { month: 'short' })
-        : date.toLocaleString('en', { month: 'short', day: 'numeric' });
-    const trendMap = new Map<string, { label: string; volume: number; revenue: number }>();
-    for (const payment of successful.filter((row) => row.createdAt >= start)) {
-      const key = bucketKey(payment.createdAt);
-      const row = trendMap.get(key) || { label: key, volume: 0, revenue: 0 };
-      row.volume += payment.amount;
-      row.revenue += Number(payment.splitData?.commission || 0);
-      trendMap.set(key, row);
-    }
-    sendSuccess(res, {
-      grossVolume: successful.reduce((sum, payment) => sum + payment.amount, 0),
-      platformRevenue: settlementRows.reduce((sum, settlement) => sum + settlement.commissionAmount, 0),
-      escrowBalance: pendingSettlements.reduce((sum, settlement) => sum + settlement.netAmount, 0),
-      pendingPayouts: pendingSettlements.reduce((sum, settlement) => sum + settlement.netAmount, 0),
-      heldFunds: ledger.filter((row) => row.type === EscrowEventType.HELD).reduce((sum, row) => sum + row.amount, 0),
-      refundQueue: ledger.filter((row) => row.type === EscrowEventType.REFUND_PENDING).reduce((sum, row) => sum + row.amount, 0),
-      availablePayouts: ledger.filter((row) => row.type === EscrowEventType.ELIGIBLE_FOR_PAYOUT).reduce((sum, row) => sum + row.amount, 0),
-      gatewayFees: successful.reduce((sum, payment) => sum + payment.gatewayFee, 0),
-      deliverySubsidy: orders.reduce((sum, order) => sum + Number(order.deliverySubsidy || 0), 0),
+    const successfulFilter = { $or: [{ status: PaymentStatus.SUCCESSFUL }, { commerceStatus: 'CONFIRMED' }] };
+    const trendFormat = period === '24h' ? '%Y-%m-%d %H:00' : period === 'ytd' ? '%Y-%m' : '%Y-%m-%d';
+    const [paymentTotals, trendRows, settlementRows, ledgerRows, subsidyRows, recentPayments, recentSettlements] = await Promise.all([
+      Payment.aggregate([{ $match: successfulFilter }, { $group: { _id: null, grossVolume: { $sum: '$amount' }, gatewayFees: { $sum: '$gatewayFee' } } }]),
+      Payment.aggregate([
+        { $match: { ...successfulFilter, createdAt: { $gte: start } } },
+        { $group: { _id: { $dateToString: { format: trendFormat, date: '$createdAt', timezone: 'Africa/Lagos' } }, volume: { $sum: '$amount' }, revenue: { $sum: { $ifNull: ['$splitData.commission', 0] } } } },
+        { $sort: { _id: 1 } },
+      ]),
+      Settlement.aggregate([
+        { $facet: {
+          totals: [{ $group: { _id: null, platformRevenue: { $sum: '$commissionAmount' } } }],
+          pending: [{ $match: { status: SettlementStatus.PENDING_ESCROW } }, { $group: { _id: null, amount: { $sum: '$netAmount' } } }],
+        } },
+      ]),
+      EscrowLedger.aggregate([{ $group: { _id: '$type', amount: { $sum: '$amount' } } }]),
+      Order.aggregate([{ $group: { _id: null, total: { $sum: { $ifNull: ['$deliverySubsidy', 0] } } } }]),
+      Payment.find({}).select('publicId orderId transactionRef gateway paymentMethod amount gatewayFee amountSettled status commerceStatus currency amountMinor paidAt createdAt').sort({ createdAt: -1 }).limit(20).lean({ virtuals: true }),
+      Settlement.find({}).select('orderId settlementRef itemTotal commissionAmount netAmount deliveryFeePortion status escrowReleaseAt escrowReleasedAt paidAt gatewayTransferRef createdAt').sort({ createdAt: -1 }).limit(20).lean({ virtuals: true }),
+    ]);
+    const ledgerTotals = new Map((ledgerRows as any[]).map((row) => [String(row._id), Number(row.amount || 0)]));
+    const settlementFacet = (settlementRows as any[])[0] || {};
+    const pendingAmount = Number(settlementFacet.pending?.[0]?.amount || 0);
+    const response = {
+      grossVolume: Number(paymentTotals[0]?.grossVolume || 0),
+      platformRevenue: Number(settlementFacet.totals?.[0]?.platformRevenue || 0),
+      escrowBalance: pendingAmount,
+      pendingPayouts: pendingAmount,
+      heldFunds: ledgerTotals.get(EscrowEventType.HELD) || 0,
+      refundQueue: ledgerTotals.get(EscrowEventType.REFUND_PENDING) || 0,
+      availablePayouts: ledgerTotals.get(EscrowEventType.ELIGIBLE_FOR_PAYOUT) || 0,
+      gatewayFees: Number(paymentTotals[0]?.gatewayFees || 0),
+      deliverySubsidy: Number(subsidyRows[0]?.total || 0),
       period,
-      trend: Array.from(trendMap.values()),
-      recentPayments: paymentRows.slice(0, 20),
-      recentSettlements: settlementRows.slice(0, 20),
-    });
+      trend: (trendRows as any[]).map((row) => ({ label: row._id, volume: Number(row.volume || 0), revenue: Number(row.revenue || 0) })),
+      recentPayments,
+      recentSettlements,
+    };
+    adminFinancialCache.set(cacheKey, response);
+    sendSuccess(res, response);
   };
 
   settlements = async (req: Request, res: Response) => {
@@ -100,12 +116,18 @@ export class AdminFinancialsController {
   };
 
   reconciliation = async (_req: Request, res: Response) => {
-    const [payments, ledger] = await Promise.all([adminRepos.payments().find({}), adminRepos.escrowLedger().find({})]);
-    const successful = payments.filter((payment) => payment.status === PaymentStatus.SUCCESSFUL);
-    const receivedIds = new Set(ledger.filter((row) => row.type === EscrowEventType.PAYMENT_RECEIVED).map((row) => row.paymentId));
+    const [successful, receivedRows] = await Promise.all([
+      Payment.find({ $or: [{ status: PaymentStatus.SUCCESSFUL }, { commerceStatus: 'CONFIRMED' }] })
+        .select('publicId orderId transactionRef amount status commerceStatus createdAt')
+        .sort({ createdAt: -1 })
+        .limit(500)
+        .lean({ virtuals: true }),
+      EscrowLedger.find({ type: EscrowEventType.PAYMENT_RECEIVED }).select('paymentId').lean(),
+    ]);
+    const receivedIds = new Set((receivedRows as any[]).map((row) => row.paymentId));
     sendSuccess(res, {
       checked: successful.length,
-      unmatched: successful.filter((payment) => !receivedIds.has(payment.id)),
+      unmatched: (successful as any[]).filter((payment) => !receivedIds.has(payment.id || payment.publicId || payment._id?.toString())),
       generatedAt: new Date(),
     });
   };

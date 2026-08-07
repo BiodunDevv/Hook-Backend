@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'crypto';
 import jwt from 'jsonwebtoken';
-import { AccountStatus, AccountType } from '@lib/constants';
+import { AccountType } from '@lib/constants';
+import { isActiveAccount } from '@lib/account-state';
 import { jwtSecret } from '@config/env';
 import { AccountSession } from '@models/platform/session.model';
 import { User } from '@models/users/user.model';
@@ -22,9 +23,10 @@ function refreshExpiry() {
   return new Date(Date.now() + amount * unit);
 }
 
-async function safeUser(user: User) {
+export async function presentAccountUser(user: User) {
+  const accountId = (user as any)._id?.toString?.() || user.id;
   const base = {
-    id: user.id,
+    id: accountId,
     publicId: user.publicId,
     email: user.email,
     firstName: user.firstName,
@@ -36,7 +38,6 @@ async function safeUser(user: User) {
     isEmailVerified: user.isEmailVerified,
   };
   if (user.accountType !== AccountType.STAFF) return base;
-  const accountId = (user as any)._id?.toString() || user.id;
   const context = await resolveAccessContext(accountId);
   return presentPlatformRecords({
     ...base,
@@ -75,7 +76,7 @@ export async function issueAccountSession(
   const refreshToken = signRefreshToken(payload);
   session.refreshTokenHash = hash(refreshToken);
   await session.save();
-  return { accessToken, refreshToken, user: await safeUser(user) };
+  return { accessToken, refreshToken, user: await presentAccountUser(user) };
 }
 
 export async function rotateAccountSession(refreshToken: string) {
@@ -100,12 +101,14 @@ export async function rotateAccountSession(refreshToken: string) {
     throw new HttpError(401, 'Session has been revoked', undefined, 'TOKEN_INVALID');
   }
   const user = await User.findById(session.accountId).lean({ virtuals: true }) as User | null;
-  if (!user || !user.isActive || user.accountStatus !== AccountStatus.ACTIVE) {
+  if (!user || !isActiveAccount(user)) {
     await revokeAccountSessions(session.accountId, 'account_inactive');
     throw new HttpError(401, 'Account is not active', undefined, 'TOKEN_INVALID');
   }
   const nextPayload: AuthUserPayload = {
-    sub: user.id,
+    // `lean()` does not reliably include the base schema's virtual `id`.
+    // Access-token subjects must always use the persisted Mongo identifier.
+    sub: (user as any)._id?.toString?.() || user.id,
     email: user.email,
     role: user.role,
     accountType: user.accountType,
@@ -119,7 +122,7 @@ export async function rotateAccountSession(refreshToken: string) {
   return {
     accessToken: signAccessToken(nextPayload),
     refreshToken: nextRefresh,
-    user: await safeUser(user),
+    user: await presentAccountUser(user),
   };
 }
 

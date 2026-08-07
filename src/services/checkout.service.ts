@@ -26,11 +26,16 @@ import {
 import { OrderItem } from "@models/orders/order-item.model";
 import { Order } from "@models/orders/order.model";
 import { Payment } from "@models/payments/payment.model";
-import { OperationState, ServiceZone } from "@models/platform/geography.model";
+import { OperationState } from "@models/platform/geography.model";
 import { HookPartner } from "@models/platform/operations-accounts.model";
 import { Product } from "@models/products/product.model";
 import { User } from "@models/users/user.model";
 import { AddressService } from "@services/address.service";
+import {
+  calculateDeliveryPricing,
+  resolveDeliveryState,
+  resolveDeliveryZone,
+} from "@services/delivery-pricing.service";
 import { nextPublicId } from "@services/public-id.service";
 import { createCommerceNotification } from "@services/commerce-notification.service";
 import { HttpError } from "@utils/http";
@@ -162,6 +167,7 @@ export class CheckoutService {
     const lines = await this.revalidateLines(actor.customerId, cartItems);
 
     let addressSnapshot: Record<string, unknown> | undefined;
+    let deliveryState = state;
     let zone: any;
     if (input.deliveryMethod === DeliveryMethod.HOME_DELIVERY) {
       if (!input.addressId)
@@ -170,23 +176,24 @@ export class CheckoutService {
         actor.customerId,
         input.addressId,
       );
-      if (address.stateId !== stateId)
+      const resolvedDeliveryState = await resolveDeliveryState(
+        String(address.stateId),
+      );
+      if (
+        !resolvedDeliveryState ||
+        resolvedDeliveryState.deliveryEnabled === false
+      )
         throw new HttpError(
           409,
-          "Address must be in the basket State",
-          undefined,
-          "ADDRESS_STATE_MISMATCH",
-        );
-      zone = await ServiceZone.findById(address.zoneId).lean({
-        virtuals: true,
-      });
-      if (!zone?.deliveryEligible)
-        throw new HttpError(
-          409,
-          "Address is outside Hook delivery coverage",
+          "Delivery is not available in this State",
           undefined,
           "ADDRESS_OUTSIDE_COVERAGE",
         );
+      deliveryState = resolvedDeliveryState;
+      zone = await resolveDeliveryZone(
+        address.zoneId,
+        String(deliveryState.id),
+      );
       addressSnapshot = {
         publicId: address.publicId,
         label: address.label,
@@ -195,11 +202,17 @@ export class CheckoutService {
         line1: address.line1,
         line2: address.line2,
         landmark: address.landmark,
-        stateId: state.publicId,
+        stateId: deliveryState.publicId,
         cityId: address.cityId,
         zoneId: address.zoneId,
+        localGovernmentAreaId: address.localGovernmentAreaId,
         postalCode: address.postalCode,
         coordinates: address.coordinates,
+        formattedAddress: address.formattedAddress,
+        stateCode: address.stateCode,
+        stateName: address.stateName,
+        cityName: address.cityName,
+        localGovernmentArea: address.localGovernmentArea,
       };
     }
 
@@ -212,25 +225,25 @@ export class CheckoutService {
       (sum, line) => sum + Number(line.totalPriceMinor),
       0,
     );
-    const deliveryFeeMinor =
-      input.deliveryMethod === DeliveryMethod.PARTNER_PICKUP
-        ? 0
-        : Number(
-            zone?.deliveryFeeMinor ??
-              state.deliveryFeeMinor ??
-              settings.defaultDeliveryFeeMinor ??
-              DEFAULT_DELIVERY_FEE_MINOR,
-          );
+    const deliveryPricing = input.deliveryMethod === DeliveryMethod.PARTNER_PICKUP
+      ? { scope: "partner" as const, mode: "flat" as const, feeMinor: 0, ruleVersion: "partner-pickup-v1" }
+      : await calculateDeliveryPricing({
+          state: deliveryState,
+          zone,
+          coordinates: addressSnapshot?.coordinates as { latitude: number; longitude: number } | undefined,
+          defaultFeeMinor: settings.defaultDeliveryFeeMinor ?? DEFAULT_DELIVERY_FEE_MINOR,
+        });
+    const deliveryFeeMinor = deliveryPricing.feeMinor;
     const totalMinor = subtotalMinor + deliveryFeeMinor;
     const podLimitMinor = Number(
       zone?.podLimitMinor ??
-        state.podLimitMinor ??
+        deliveryState.podLimitMinor ??
         settings.defaultPodLimitMinor ??
         DEFAULT_POD_LIMIT_MINOR,
     );
     const podEnabled = Boolean(
       settings.podEnabled &&
-      state.podEnabled &&
+      deliveryState.podEnabled &&
       (zone?.podEnabled ?? true) &&
       customer.podEligible !== false,
     );
@@ -283,6 +296,7 @@ export class CheckoutService {
       lines,
       subtotalMinor,
       deliveryFeeMinor,
+      deliveryPricing,
       totalMinor,
       currency: "NGN",
       policyVersions: settings.activePolicyVersions,
@@ -306,6 +320,7 @@ export class CheckoutService {
       lines,
       subtotalMinor,
       deliveryFeeMinor,
+      deliveryPricing,
       totalMinor,
       currency: "NGN",
       podDecision: preview.podDecision,
@@ -437,6 +452,7 @@ export class CheckoutService {
             : CommercePaymentStatus.PENDING,
           subtotalMinor: preview.subtotalMinor,
           deliveryFeeMinor: preview.deliveryFeeMinor,
+          deliveryPricing: preview.deliveryPricing,
           totalMinor: preview.totalMinor,
           currency: preview.currency,
           subtotal: preview.subtotalMinor / 100,

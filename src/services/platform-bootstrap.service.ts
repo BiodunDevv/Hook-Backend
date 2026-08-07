@@ -9,6 +9,7 @@ const domains: Record<string, string[]> = {
   zones: ['view', 'manage'],
   markets: ['view', 'manage', 'assign_hub'],
   hubs: ['view', 'manage', 'assign_markets'],
+  categories: ['view', 'manage'],
   partners: ['view', 'manage'],
   runners: ['view', 'manage', 'assign'],
   orders: ['view', 'create', 'edit'],
@@ -31,6 +32,15 @@ const domains: Record<string, string[]> = {
   'commerce.payments': ['view', 'reconcile'],
   'commerce.outbox': ['view'],
   'commerce.settings': ['view', 'manage'],
+  'delivery.coverage': ['view', 'manage'],
+  'delivery.pricing': ['view', 'manage', 'preview'],
+  fulfilment: ['view', 'manage', 'assign', 'resolve', 'consolidate'],
+  'fulfilment.hub': ['view', 'receive', 'qc'],
+  'fulfilment.runner': ['view', 'monitor', 'reassign'],
+  logistics: ['view', 'book', 'manage', 'track'],
+  returns: ['view', 'review', 'manage'],
+  custody: ['view', 'manage'],
+  'finance.refunds': ['view', 'process'],
 };
 
 export const PLATFORM_PERMISSION_KEYS = Object.entries(domains)
@@ -38,19 +48,27 @@ export const PLATFORM_PERMISSION_KEYS = Object.entries(domains)
 
 const readPermissions = PLATFORM_PERMISSION_KEYS.filter((key) => key.endsWith('.view'));
 const operationsPermissions = PLATFORM_PERMISSION_KEYS.filter((key) =>
-  /^(states|cities|zones|markets|hubs|runners|partners|audit)\./.test(key),
+  /^(states|cities|zones|markets|hubs|runners|partners|audit|delivery\.)/.test(key),
 );
 const orderRead = ['orders.view', 'customers.view', 'reports.view'];
 const orderOperations = [...orderRead, 'orders.create', 'orders.edit'];
-const commerceOperations = ['commerce.pod.review', 'commerce.pod.eligibility', 'commerce.outbox.view'];
+const commerceOperations = [
+  'commerce.pod.review', 'commerce.pod.eligibility', 'commerce.outbox.view',
+  'fulfilment.view', 'fulfilment.manage', 'fulfilment.assign', 'fulfilment.resolve',
+  'fulfilment.hub.view', 'fulfilment.hub.receive', 'fulfilment.hub.qc', 'fulfilment.consolidate',
+  'logistics.view', 'logistics.book', 'logistics.manage', 'logistics.track',
+  'returns.view', 'returns.review', 'custody.view', 'custody.manage',
+];
 const catalogRead = [
   'products.view',
   'markets.view',
+  'categories.view',
   'catalog.submission.view',
   'catalog.product.view',
 ];
 const commercialManage = [
   ...catalogRead,
+  'categories.manage',
   'catalog.product.edit',
   'catalog.product.publish',
   'catalog.product.pause',
@@ -83,6 +101,8 @@ const financePermissions = [
   'commerce.payments.view',
   'commerce.payments.reconcile',
   'commerce.outbox.view',
+  'fulfilment.view', 'logistics.view', 'logistics.manage', 'returns.view', 'returns.review',
+  'finance.refunds.view', 'finance.refunds.process',
 ];
 
 const roles = [

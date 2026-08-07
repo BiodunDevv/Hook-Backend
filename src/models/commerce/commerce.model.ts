@@ -10,10 +10,18 @@ export interface CustomerAddress extends BaseEntity {
   line2?: string;
   landmark?: string;
   stateId: string;
-  cityId: string;
-  zoneId: string;
+  cityId?: string;
+  zoneId?: string;
+  localGovernmentAreaId?: string;
   postalCode?: string;
   coordinates?: { latitude: number; longitude: number };
+  formattedAddress?: string;
+  stateCode: string;
+  stateName: string;
+  cityName: string;
+  localGovernmentArea?: string;
+  deliveryDistanceKm?: number;
+  deliveryPricingSnapshot?: Record<string, unknown>;
   isDefault: boolean;
   status: "active" | "archived";
 }
@@ -37,6 +45,7 @@ export interface CheckoutPreview extends BaseEntity {
   lines: Array<Record<string, unknown>>;
   subtotalMinor: number;
   deliveryFeeMinor: number;
+  deliveryPricing?: Record<string, unknown>;
   totalMinor: number;
   currency: string;
   policyVersions: Record<string, string>;
@@ -90,6 +99,8 @@ export interface CommerceOutboxEvent extends BaseEntity {
   availableAt: Date;
   processedAt?: Date;
   lastError?: string;
+  lockedUntil?: Date;
+  lockToken?: string;
 }
 
 export interface IntegrationException extends BaseEntity {
@@ -138,10 +149,18 @@ const addressSchema = createSchema<CustomerAddress>({
   line2: { type: String, maxlength: 240 },
   landmark: { type: String, maxlength: 240 },
   stateId: { type: String, required: true, index: true },
-  cityId: { type: String, required: true, index: true },
-  zoneId: { type: String, required: true, index: true },
+  cityId: { type: String, index: true, sparse: true },
+  zoneId: { type: String, index: true, sparse: true },
+  localGovernmentAreaId: { type: String, index: true, sparse: true },
   postalCode: { type: String, maxlength: 20 },
   coordinates: { type: Object },
+  formattedAddress: { type: String, maxlength: 500 },
+  stateCode: { type: String, required: true, uppercase: true, index: true },
+  stateName: { type: String, required: true },
+  cityName: { type: String, required: true },
+  localGovernmentArea: { type: String },
+  deliveryDistanceKm: { type: Number, min: 0 },
+  deliveryPricingSnapshot: { type: Object },
   isDefault: { type: Boolean, default: false, index: true },
   status: {
     type: String,
@@ -184,6 +203,7 @@ const previewSchema = createSchema<CheckoutPreview>({
   lines: { type: [Object], required: true },
   subtotalMinor: { type: Number, required: true, min: 0 },
   deliveryFeeMinor: { type: Number, required: true, min: 0 },
+  deliveryPricing: { type: Object },
   totalMinor: { type: Number, required: true, min: 0 },
   currency: { type: String, default: "NGN" },
   policyVersions: { type: Object, required: true },
@@ -264,6 +284,8 @@ const outboxSchema = createSchema<CommerceOutboxEvent>({
   availableAt: { type: Date, default: Date.now, index: true },
   processedAt: { type: Date },
   lastError: { type: String, maxlength: 1000 },
+  lockedUntil: { type: Date, index: true },
+  lockToken: { type: String, index: true, sparse: true },
   deletedAt: { type: Date },
 });
 outboxSchema.index(

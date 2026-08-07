@@ -6,27 +6,14 @@
   "scripts": {
     "build": "tsc && tsc-alias",
     "docs:swagger": "node scripts/generate-swagger.js",
-    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
-    "dev": "node scripts/dev.js",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "dev": "nodemon --config nodemon.json",
     "start": "node dist/server.js",
     "start:dev": "npm run dev",
-    "start:debug": "TS_NODE_FILES=true node --inspect -r ts-node/register -r tsconfig-paths/register src/server.ts",
+    "start:debug": "node --inspect -r ts-node/register/transpile-only -r tsconfig-paths/register src/server.ts",
     "start:prod": "node dist/server.js",
-    "lint": "eslint \"{src,test}/**/*.ts\" --fix",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "test:cov": "jest --coverage",
-    "test:e2e": "jest --config ./test/jest-e2e.json",
-    "test:phase2:integration": "TS_NODE_FILES=true ts-node -r tsconfig-paths/register src/database/validation/phase-02-integration.ts",
-    "test:phase2:http": "TS_NODE_FILES=true TS_NODE_TRANSPILE_ONLY=true ts-node -r tsconfig-paths/register src/database/validation/phase-02-http-e2e.ts",
-    "seed": "npm run seed:base && npm run seed:platform && npm run seed:catalog-foundation && npm run seed:phase3 && npm run seed:commerce-foundation && npm run seed:phase4",
-    "seed:base": "TS_NODE_FILES=true TS_NODE_TRANSPILE_ONLY=true ts-node -r tsconfig-paths/register src/database/seeds/runner.ts",
-    "seed:platform": "TS_NODE_FILES=true TS_NODE_TRANSPILE_ONLY=true ts-node -r tsconfig-paths/register src/database/seeds/platform-foundation.ts",
-    "seed:catalog-foundation": "TS_NODE_FILES=true TS_NODE_TRANSPILE_ONLY=true ts-node -r tsconfig-paths/register src/database/seeds/catalog-foundation.ts",
-    "seed:phase3": "TS_NODE_FILES=true TS_NODE_TRANSPILE_ONLY=true ts-node -r tsconfig-paths/register src/database/seeds/phase-03-fixtures.ts",
-    "seed:commerce-foundation": "TS_NODE_FILES=true TS_NODE_TRANSPILE_ONLY=true ts-node -r tsconfig-paths/register src/database/seeds/commerce-foundation.ts",
-    "seed:phase4": "TS_NODE_FILES=true TS_NODE_TRANSPILE_ONLY=true ts-node -r tsconfig-paths/register src/database/seeds/phase-04-fixtures.ts",
-    "seed:dev": "NODE_ENV=development npm run seed"
+    "lint": "eslint \"src/**/*.ts\"",
+    "seed": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/seeds/index.ts"
   },
   "dependencies": {
     "@types/cors": "^2.8.19",
@@ -48,6 +35,7 @@
     "morgan": "^1.11.0",
     "multer": "^2.2.0",
     "openai": "^6.49.0",
+    "socket.io": "^4.8.3",
     "swagger-ui-dist": "^5.32.8",
     "swagger-ui-express": "^5.0.1",
     "tsc-alias": "^1.9.1",
@@ -59,45 +47,13 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/jest": "^30.0.0",
     "@types/uuid": "^11.0.0",
     "eslint": "^10.5.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.6",
-    "jest": "^30.4.2",
+    "nodemon": "^3.1.14",
     "prettier": "^3.8.4",
-    "ts-jest": "^29.4.11",
     "ts-node": "^10.9.2",
     "typescript-eslint": "^8.62.0"
-  },
-  "jest": {
-    "moduleFileExtensions": [
-      "js",
-      "json",
-      "ts"
-    ],
-    "rootDir": "src",
-    "testRegex": ".*\\.spec\\.ts$",
-    "transform": {
-      "^.+\\.(t|j)s$": "ts-jest"
-    },
-    "collectCoverageFrom": [
-      "**/*.(t|j)s"
-    ],
-    "coverageDirectory": "../coverage",
-    "testEnvironment": "node",
-    "moduleNameMapper": {
-      "^@/(.*)$": "<rootDir>/$1",
-      "^@config/(.*)$": "<rootDir>/config/$1",
-      "^@controllers/(.*)$": "<rootDir>/controllers/$1",
-      "^@emails/(.*)$": "<rootDir>/emails/$1",
-      "^@lib/(.*)$": "<rootDir>/lib/$1",
-      "^@middleware/(.*)$": "<rootDir>/middleware/$1",
-      "^@models/(.*)$": "<rootDir>/models/$1",
-      "^@routes/(.*)$": "<rootDir>/routes/$1",
-      "^@services/(.*)$": "<rootDir>/services/$1",
-      "^@validations/(.*)$": "<rootDir>/validations/$1",
-      "^@utils/(.*)$": "<rootDir>/utils/$1"
-    }
   }
 }

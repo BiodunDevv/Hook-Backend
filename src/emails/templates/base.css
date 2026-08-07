@@ -3,6 +3,8 @@ body { margin: 0; background: #f4f4f5; font-family: Arial, Helvetica, sans-serif
 .card { max-width: 680px; margin: 0 auto; background: #ffffff; border-radius: 0; padding: 48px 40px; box-sizing: border-box; }
 .brand { text-align: center; font-size: 36px; line-height: 1; font-weight: 800; letter-spacing: -1px; color: #064e3b; }
 .brand-dot { color: #f8c231; }
+.wordmark { font-size: 34px; line-height: 1; font-weight: 800; letter-spacing: -1px; color: #064e3b; }
+.wordmark span { color: #f8c231; }
 .icon { width: 64px; height: 64px; border-radius: 999px; background: #dcfce7; color: #065f46; margin: 28px auto 24px; text-align: center; line-height: 64px; font-size: 28px; }
 h1 { margin: 0; text-align: center; font-size: 28px; line-height: 1.2; font-weight: 700; color: #09090b; }
 p { margin: 0; font-size: 14px; line-height: 1.65; color: #3f3f46; }

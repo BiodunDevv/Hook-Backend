@@ -1,7 +1,8 @@
 import { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { jwtSecret } from '@config/env';
-import { AccountStatus, AccountType, ScopeType, UserRole } from '@lib/constants';
+import { AccountType, ScopeType, UserRole } from '@lib/constants';
+import { isActiveAccount } from '@lib/account-state';
 import { AccountSession } from '@models/platform/session.model';
 import { User } from '@models/users/user.model';
 import { resolveAccessContext } from '@services/access-control.service';
@@ -27,13 +28,15 @@ async function authenticateToken(token: string, req: Request) {
     throw new HttpError(401, 'Legacy session expired. Please sign in again.', undefined, 'TOKEN_INVALID');
   }
   const [session, user] = await Promise.all([
-    AccountSession.findById(payload.sid).lean(),
-    User.findById(payload.sub).lean(),
+    AccountSession.findById(payload.sid).select('revokedAt expiresAt').lean(),
+    User.findById(payload.sub)
+      .select('email role publicId accountType accountStatus scopeType assignedStateIds assignedHubIds permissions isActive')
+      .lean(),
   ]);
   if (!session || session.revokedAt || session.expiresAt <= new Date()) {
     throw new HttpError(401, 'Session is no longer active', undefined, 'TOKEN_INVALID');
   }
-  if (!user || !user.isActive || user.accountStatus !== AccountStatus.ACTIVE) {
+  if (!user || !isActiveAccount(user)) {
     throw new HttpError(401, 'Account is not active', undefined, 'TOKEN_INVALID');
   }
 
@@ -52,7 +55,7 @@ async function authenticateToken(token: string, req: Request) {
   };
 
   if (user.accountType === AccountType.STAFF) {
-    const access = await resolveAccessContext(user._id.toString());
+    const access = await resolveAccessContext(user._id.toString(), user);
     Object.assign(req.user, {
       permissions: access.permissions,
       roleKeys: access.roleKeys,
@@ -87,18 +90,25 @@ export async function optionalAuth(req: Request, _res: Response, next: NextFunct
   next();
 }
 
-export async function optionalCustomerIdentity(req: Request, res: Response, next: NextFunction) {
-  const guestToken = req.header('x-guest-session')?.trim();
-  if (guestToken) {
-    try {
-      const guest = await resolveGuestSession(guestToken);
-      req.guestId = guest.publicId;
-      req.guestSessionId = guest.id;
-    } catch (error) {
-      return next(error);
-    }
-  }
-  return optionalAuth(req, res, next);
+export function optionalCustomerIdentity(req: Request, res: Response, next: NextFunction) {
+  return optionalAuth(req, res, () => {
+    // A valid customer access token is authoritative. This avoids resolving
+    // a stale guest token that the app may still retain for basket conversion.
+    if (req.user) return next();
+
+    const guestToken = req.header('x-guest-session')?.trim();
+    if (!guestToken) return next();
+
+    resolveGuestSession(guestToken)
+      .then((guest) => {
+        req.guestId = guest.publicId;
+        // Lean Mongoose documents do not always expose the virtual `id` field.
+        // Keep the persisted Mongo identifier as the internal cart owner key.
+        req.guestSessionId = String(guest.id || guest._id);
+        next();
+      })
+      .catch(next);
+  });
 }
 
 export function requireCustomerIdentity(req: Request, res: Response, next: NextFunction) {

@@ -280,43 +280,6 @@ export const adminUserSchema = z.object({
   role: z.nativeEnum(UserRole).default(UserRole.SHOPPER),
 });
 
-const PHONE_REGEX = /^\+?[0-9\s-]{7,20}$/;
-
-export const staffCreateSchema = z
-  .object({
-    email: z.string().email(),
-    password: z.string().min(6),
-    firstName: z.string().min(1),
-    lastName: z.string().min(1),
-    phone: z.string().regex(PHONE_REGEX, 'Enter a valid phone number').optional(),
-    role: z.enum([UserRole.SUPPORT, UserRole.ADMIN, UserRole.SUPER_ADMIN]),
-    permissions: z.array(z.string()).default([]),
-  })
-  .superRefine((data, ctx) => {
-    // Admin and support staff are reachable contacts for categories — phone required
-    if (data.role !== UserRole.SUPER_ADMIN && !data.phone) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['phone'],
-        message: 'Phone number is required for admin and support staff',
-      });
-    }
-  });
-
-export const staffUpdateSchema = z.object({
-  firstName: z.string().min(1).optional(),
-  lastName: z.string().min(1).optional(),
-  phone: z.string().regex(PHONE_REGEX, 'Enter a valid phone number').optional(),
-});
-
-export const staffPermissionsSchema = z.object({
-  permissions: z.array(z.string()),
-});
-
-export const staffCategoriesSchema = z.object({
-  categoryIds: z.array(idSchema),
-});
-
 export const categoryCreateSchema = z.object({
   name: z.string().min(2).max(60),
   description: z.string().max(300).optional(),

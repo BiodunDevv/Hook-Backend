@@ -64,8 +64,11 @@ export function createApp() {
         'A valid payment reference is required',
       );
     }
+    const configuredReturnUrl = String(process.env.PAYSTACK_APP_RETURN_URL || '');
     const returnUrl = new URL(
-      process.env.PAYSTACK_APP_RETURN_URL || 'hook://payments/return',
+      configuredReturnUrl.startsWith('hook://')
+        ? configuredReturnUrl
+        : 'hook://payments/return',
     );
     returnUrl.searchParams.set('reference', reference);
     returnUrl.searchParams.set('source', 'paystack');

@@ -22,6 +22,7 @@ import { nextPublicId, repairPublicIdCounter, PublicIdDomain } from '@services/p
 import { issueAccountInvitation, revokeAccountInvitations } from '@services/account-invitation.service';
 import { presentMarketRecords, presentPlatformRecords } from '@services/platform-presentation.service';
 import { publishRealtime } from '@services/realtime.service';
+import { MarketVendorService } from '@services/market-vendor.service';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
 import { adminAccessCatalogCache, adminStaffCache } from '@lib/ttl-cache';
 
@@ -861,7 +862,17 @@ export class PlatformController {
     const context = await access(req, 'markets.view');
     const market = await byIdentifier(Market, routeParam(req.params.id));
     assertScope(context, market.stateId, market.hubId);
-    sendSuccess(res, await presentMarketRecords(market));
+    const detail = await new MarketVendorService().adminMarket(market.publicId || market.id);
+    sendSuccess(res, {
+      ...(await presentMarketRecords(market)),
+      vendors: detail.vendors,
+      assignments: detail.assignments,
+      runners: detail.runners,
+      submissions: detail.submissions,
+      products: detail.products,
+      collections: detail.collections,
+      summary: detail.summary,
+    });
   };
   createMarket = async (req: Request, res: Response) => {
     const context = await access(req, 'markets.manage');
@@ -999,7 +1010,7 @@ export class PlatformController {
     const account = await User.create({
       publicId, accountType: AccountType.PARTNER, accountStatus: AccountStatus.INVITED,
       email: req.body.email, phone: req.body.phone, password: req.body.password ? await hashPassword(req.body.password) : undefined,
-      firstName: req.body.firstName, lastName: req.body.lastName, role: UserRole.SUPPORT,
+      firstName: req.body.firstName, lastName: req.body.lastName, role: UserRole.PARTNER,
       isActive: true, isEmailVerified: false, isPhoneVerified: false, scopeType: ScopeType.SELF,
     });
     const partner = await HookPartner.create({
@@ -1125,7 +1136,7 @@ export class PlatformController {
     const account = await User.create({
       publicId, accountType: AccountType.RUNNER, accountStatus: AccountStatus.INVITED,
       email: req.body.email, phone: req.body.phone, password: req.body.password ? await hashPassword(req.body.password) : undefined,
-      firstName: req.body.firstName, lastName: req.body.lastName, role: UserRole.FIELD_AGENT,
+      firstName: req.body.firstName, lastName: req.body.lastName, role: UserRole.RUNNER,
       isActive: true, isEmailVerified: false, isPhoneVerified: false, scopeType: ScopeType.SELF,
     });
     const runner = await RunnerProfile.create({ publicId, accountId: account.id, stateIds: scope.stateIds, hubIds: scope.hubIds, availability: 'unavailable', status: 'invited' });

@@ -14,6 +14,7 @@ const variant = z.object({
 
 export const runnerSubmissionDraftSchema = z.object({
   marketId: publicOrInternalId,
+  marketVendorId: publicOrInternalId,
   categorySuggestionId: publicOrInternalId,
   basicTitle: z.string().trim().min(2).max(180),
   notes: z.string().trim().max(2000).optional(),

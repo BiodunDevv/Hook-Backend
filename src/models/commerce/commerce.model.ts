@@ -62,6 +62,7 @@ export interface CommerceSettings extends BaseEntity {
   podEnabled: boolean;
   defaultPodLimitMinor: number;
   previewTtlMinutes: number;
+  catalogAvailabilityCheckDays: number;
   activePolicyVersions: Record<string, string>;
   updatedBy?: string;
 }
@@ -222,6 +223,7 @@ const settingsSchema = createSchema<CommerceSettings>({
   podEnabled: { type: Boolean, default: false },
   defaultPodLimitMinor: { type: Number, default: 10000000, min: 0 },
   previewTtlMinutes: { type: Number, default: 10, min: 2, max: 30 },
+  catalogAvailabilityCheckDays: { type: Number, default: 4, min: 1, max: 30 },
   activePolicyVersions: { type: Object, default: {} },
   updatedBy: { type: String },
   deletedAt: { type: Date },

@@ -10,11 +10,11 @@ The source lives under `app/(admin)/dashboard`; public URLs remain `/dashboard/*
 
 ## Runner
 
-Source lives under `app/(runner)/runner`. `/runner/login`, dashboard, assigned Markets, profile, and security use a Runner-only backend login and account-type guard.
+Source lives under `app/(runner)/runner`. The shared `/auth/login` screen routes Runner identities to `/runner/dashboard`; assigned Markets, profile, and security remain protected by the Runner account-type guard.
 
 ## Partner
 
-Source lives under `app/(partner)/partner`. `/partner/login`, dashboard, profile, location, and security use a Partner-only backend login and account-type guard.
+Source lives under `app/(partner)/partner`. The shared `/auth/login` screen routes Partner identities to `/partner/dashboard`; profile, location, and security remain protected by the Partner account-type guard.
 
 ## Shopper
 

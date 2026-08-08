@@ -42,6 +42,11 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function persistedId(record: { _id?: unknown; id?: unknown } | null | undefined) {
+  const value = record?.id ?? record?._id;
+  return value == null ? undefined : String(value);
+}
+
 export class AddressService {
   async list(customerId: string) {
     return CustomerAddress.find({ customerId, status: "active" })
@@ -175,15 +180,17 @@ export class AddressService {
         undefined,
         "ADDRESS_OUTSIDE_COVERAGE",
       );
+    const stateDbId = persistedId(state) || state.publicId;
+    const stateIds = [String(state._id), state.publicId].filter(Boolean);
     const localGovernmentArea = input.localGovernmentAreaId
       ? await OperationLocalGovernment.findOne({
           ...identity(input.localGovernmentAreaId),
-          stateId: state.id,
+          stateId: { $in: stateIds },
           status: 'active',
         }).lean({ virtuals: true })
       : input.localGovernmentArea
         ? await OperationLocalGovernment.findOne({
-            stateId: state.id,
+            stateId: { $in: stateIds },
             normalizedName: input.localGovernmentArea.trim().replace(/\s+/g, ' ').toLocaleLowerCase('en-NG'),
             status: 'active',
           }).lean({ virtuals: true })
@@ -195,21 +202,22 @@ export class AddressService {
     const city = input.cityId
       ? await OperationCity.findOne({
           ...identity(input.cityId),
-          stateId: state.id,
+          stateId: { $in: stateIds },
           status: "active",
         }).lean({ virtuals: true })
       : await OperationCity.findOne({
-          stateId: state.id,
+          stateId: { $in: stateIds },
           status: "active",
           name: new RegExp(`^${escapeRegExp(input.cityName)}$`, "i"),
         }).lean({ virtuals: true });
     if (input.cityId && !city)
       throw new HttpError(409, "Selected city is not available in this State", undefined, "ADDRESS_OUTSIDE_COVERAGE");
+    const cityDbId = persistedId(city);
     const zone = input.zoneId
       ? await ServiceZone.findOne({
           ...identity(input.zoneId),
-          stateId: state.id,
-          ...(city ? { cityId: city.id } : {}),
+          stateId: { $in: stateIds },
+          ...(cityDbId ? { cityId: cityDbId } : {}),
           status: "active",
           deliveryEligible: true,
         }).lean({ virtuals: true })
@@ -217,10 +225,10 @@ export class AddressService {
     if (input.zoneId && !zone)
       throw new HttpError(409, "This address is outside Hook delivery coverage", undefined, "ADDRESS_OUTSIDE_COVERAGE");
     return {
-      stateId: state.id,
-      cityId: city?.id,
-      zoneId: zone?.id,
-      localGovernmentAreaId: localGovernmentArea?.id || input.localGovernmentAreaId,
+      stateId: stateDbId,
+      cityId: persistedId(city),
+      zoneId: persistedId(zone),
+      localGovernmentAreaId: persistedId(localGovernmentArea) || input.localGovernmentAreaId,
       formattedAddress: input.formattedAddress || [input.line1, input.line2, input.landmark].filter(Boolean).join(', '),
       stateCode: state.code,
       stateName: state.name,

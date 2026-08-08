@@ -546,9 +546,10 @@ const paths = {};
 Object.assign(schemas, {
   RunnerSubmissionRequest: {
     type: 'object',
-    required: ['marketId', 'categorySuggestionId', 'basicTitle', 'basePriceMinor', 'currency', 'availabilityStatus'],
+    required: ['marketId', 'marketVendorId', 'categorySuggestionId', 'basicTitle', 'basePriceMinor', 'currency', 'availabilityStatus'],
     properties: {
       marketId: { type: 'string', example: 'MAR-2026-000001' },
+      marketVendorId: { type: 'string', example: 'MVD-2026-000001' },
       categorySuggestionId: { type: 'string', example: 'CAT-2026-000001' },
       basicTitle: { type: 'string', maxLength: 180 },
       notes: { type: 'string', maxLength: 2000 },
@@ -606,6 +607,74 @@ Object.assign(schemas, {
     required: ['offeredPriceMinor'],
     properties: { offeredPriceMinor: { type: 'integer', minimum: 1 } },
   },
+  MarketVendorRequest: {
+    type: 'object',
+    required: ['businessName', 'contactName', 'phone', 'preferredContactChannel', 'paymentProfile'],
+    properties: {
+      businessName: { type: 'string', maxLength: 180 },
+      contactName: { type: 'string', maxLength: 120 },
+      phone: { type: 'string' },
+      email: { type: 'string', format: 'email' },
+      address: { type: 'string', maxLength: 500 },
+      preferredContactChannel: { type: 'string', enum: ['phone', 'email', 'whatsapp'] },
+      paymentProfile: {
+        type: 'object',
+        required: ['method'],
+        properties: {
+          method: { type: 'string', enum: ['cash', 'bank_transfer', 'other'] },
+          bankName: { type: 'string' },
+          accountName: { type: 'string' },
+          accountNumber: { type: 'string', writeOnly: true },
+        },
+      },
+      notes: { type: 'string', maxLength: 1000 },
+    },
+  },
+  VendorCollectionRequest: {
+    type: 'object',
+    required: ['quantity', 'actualCostMinor'],
+    properties: {
+      quantity: { type: 'integer', minimum: 1 },
+      actualCostMinor: { type: 'integer', minimum: 0, description: 'Internal procurement cost in kobo.' },
+      evidenceAssetIds: { type: 'array', items: { type: 'string' } },
+      notes: { type: 'string' },
+      payment: {
+        type: 'object',
+        properties: {
+          amountMinor: { type: 'integer', minimum: 0 },
+          method: { type: 'string', enum: ['cash', 'bank_transfer', 'other'] },
+          proofAssetIds: { type: 'array', items: { type: 'string' } },
+          reference: { type: 'string' },
+        },
+      },
+    },
+  },
+  AvailabilityConfirmRequest: {
+    type: 'object',
+    required: ['status', 'version'],
+    properties: {
+      status: { type: 'string', enum: ['available', 'limited'] },
+      note: { type: 'string' },
+      version: { type: 'integer', minimum: 1 },
+    },
+  },
+  AvailabilityReportRequest: {
+    type: 'object',
+    required: ['note', 'version'],
+    properties: {
+      note: { type: 'string', minLength: 3 },
+      version: { type: 'integer', minimum: 1 },
+    },
+  },
+  VendorReconcileRequest: {
+    type: 'object',
+    required: ['status', 'reason'],
+    properties: {
+      status: { type: 'string', enum: ['reconciled', 'disputed'] },
+      notes: { type: 'string' },
+      reason: { type: 'string', minLength: 3 },
+    },
+  },
 });
 function add(method, path, operation) {
   paths[path] = paths[path] || {};
@@ -621,7 +690,7 @@ add('post', `${apiPrefix}/auth/signup/start`, op('Authentication', 'Start staged
 add('post', `${apiPrefix}/auth/signup/verify`, op('Authentication', 'Verify staged signup OTP', { public: true, requestBody: body('SignupVerifyRequest') }));
 add('post', `${apiPrefix}/auth/signup/complete`, op('Authentication', 'Complete staged signup and issue tokens', { public: true, requestBody: body('SignupCompleteRequest') }));
 add('post', `${apiPrefix}/auth/register`, op('Authentication', 'Register shopper account', { public: true, requestBody: body('RegisterRequest') }));
-add('post', `${apiPrefix}/auth/login`, op('Authentication', 'Login shopper/mobile user', { public: true, requestBody: body('LoginRequest') }));
+add('post', `${apiPrefix}/auth/login`, op('Authentication', 'Sign in a customer, staff, Runner, or Hook Partner account', { public: true, requestBody: body('LoginRequest') }));
 add('post', `${apiPrefix}/auth/google`, op('Authentication', 'Login or create shopper account with a verified Google ID token', { public: true, requestBody: body('GoogleAuthRequest') }));
 add('post', `${apiPrefix}/auth/invitations/accept`, op('Authentication', 'Activate an invited Staff, Runner, or Partner account and create its password', { public: true, requestBody: body('AccountInvitationAcceptRequest') }));
 add('post', `${apiPrefix}/auth/verify-otp`, op('Authentication', 'Verify email OTP', { public: true, requestBody: body('OtpRequest') }));
@@ -703,7 +772,6 @@ add('post', `${apiPrefix}/upload/images`, op('Uploads', 'Upload multiple images'
 add('post', `${apiPrefix}/webhooks/paystack`, op('Webhooks', 'Receive a raw, signed Paystack event with replay and amount verification.', { public: true, requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } } } }));
 
 // Admin
-add('post', `${apiPrefix}/admin/auth/login`, op('Admin Auth', 'Login admin or super-admin', { public: true, requestBody: body('LoginRequest') }));
 add('get', `${apiPrefix}/admin/dashboard`, op('Admin Dashboard', 'Get admin dashboard summary'));
 add('get', `${apiPrefix}/admin/analytics`, op('Admin Dashboard', 'Get admin analytics series'));
 add('get', `${apiPrefix}/admin/health`, op('Admin Dashboard', 'Check admin API health'));
@@ -816,9 +884,19 @@ for (const resource of ['staff', 'runners', 'partners']) {
   }));
 }
 add('get', `${apiPrefix}/runner/profile`, op('Runner Foundation', 'Get the authenticated Runner profile and scope'));
-add('post', `${apiPrefix}/runner/auth/login`, op('Runner Foundation', 'Sign in to the Runner portal with server-enforced Runner account type', { requestBody: body('LoginRequest') }));
 add('get', `${apiPrefix}/runner/markets`, op('Runner Foundation', 'List only Markets assigned to the authenticated Runner'));
-add('post', `${apiPrefix}/partner/auth/login`, op('Partner Foundation', 'Sign in to the Hook Partner portal with server-enforced Partner account type', { requestBody: body('LoginRequest') }));
+add('get', `${apiPrefix}/runner/markets/{id}`, op('Market Supplier Operations', 'Get an assigned Market with suppliers, Products, submissions, and collections.', { parameters: [param('id', 'MAR public ID')] }));
+add('get', `${apiPrefix}/runner/markets/{id}/vendors`, op('Market Supplier Operations', 'List suppliers in an assigned Market.', { parameters: [param('id', 'MAR public ID'), query('q')] }));
+add('post', `${apiPrefix}/runner/markets/{id}/vendors`, op('Market Supplier Operations', 'Create a Market supplier and issue a single-use invitation.', { parameters: [param('id', 'MAR public ID')], requestBody: body('MarketVendorRequest') }));
+add('get', `${apiPrefix}/runner/market-vendors/{id}`, op('Market Supplier Operations', 'Get one supplier within the Runner Market scope.', { parameters: [param('id', 'MVD public ID')] }));
+add('patch', `${apiPrefix}/runner/market-vendors/{id}`, op('Market Supplier Operations', 'Update a supplier within the Runner Market scope.', { parameters: [param('id', 'MVD public ID')], requestBody: body('MarketVendorRequest', false) }));
+add('post', `${apiPrefix}/runner/market-vendors/{id}/invite`, op('Market Supplier Operations', 'Revoke pending invitations and issue a new single-use supplier invitation.', { parameters: [param('id', 'MVD public ID')] }));
+add('post', `${apiPrefix}/runner/product-submissions/{id}/collection`, op('Market Supplier Operations', 'Record collected quantity, procurement cost, and optional supplier payment.', { parameters: [param('id', 'SUB public ID')], requestBody: body('VendorCollectionRequest') }));
+add('get', `${apiPrefix}/runner/vendor-collections`, op('Market Supplier Operations', 'List collections recorded by the authenticated Runner.', { parameters: [query('marketId')] }));
+add('get', `${apiPrefix}/runner/availability-checks`, op('Catalog Availability', 'List source-owned or eligible fallback Market availability checks.'));
+add('post', `${apiPrefix}/runner/products/{id}/availability/confirm`, op('Catalog Availability', 'Confirm available or limited supplier availability with optimistic versioning.', { parameters: [param('id', 'PRD public ID')], requestBody: body('AvailabilityConfirmRequest') }));
+add('post', `${apiPrefix}/runner/products/{id}/availability/report`, op('Catalog Availability', 'Report a Product unavailable and keep it paused.', { parameters: [param('id', 'PRD public ID')], requestBody: body('AvailabilityReportRequest') }));
+add('post', `${apiPrefix}/public/vendor-invitations/{token}/accept`, op('Market Supplier Operations', 'Accept a single-use supplier consent invitation without creating a login.', { public: true, parameters: [param('token', 'Single-use invitation token')] }));
 add('get', `${apiPrefix}/partner/profile`, op('Partner Foundation', 'Get the authenticated Hook Partner profile'));
 add('get', `${apiPrefix}/partner/location`, op('Partner Foundation', 'Get only the authenticated Hook Partner location'));
 
@@ -848,6 +926,14 @@ add('patch', `${apiPrefix}/admin/commercial/products/{id}/pricing`, op('Commerci
 for (const action of ['publish', 'pause', 'availability-unconfirmed', 'unpublish']) {
   add('post', `${apiPrefix}/admin/commercial/products/{id}/${action}`, op('Commercial Catalog', `${action.replaceAll('-', ' ')} a Commercial Product through the audited lifecycle.`, { parameters: [param('id', 'PRD public ID')] }));
 }
+add('get', `${apiPrefix}/admin/markets/{id}/vendors`, op('Market Supplier Operations', 'List Market suppliers in the authenticated Staff State scope.', { parameters: [param('id', 'MAR public ID')] }));
+add('get', `${apiPrefix}/admin/market-vendors/{id}`, op('Market Supplier Operations', 'Get a masked supplier operations record.', { parameters: [param('id', 'MVD public ID')] }));
+add('patch', `${apiPrefix}/admin/market-vendors/{id}`, op('Market Supplier Operations', 'Update a supplier with an audited reason.', { parameters: [param('id', 'MVD public ID')], requestBody: body('MarketVendorRequest', false) }));
+add('get', `${apiPrefix}/admin/market-vendors/{id}/payment-details`, op('Market Supplier Finance', 'View decrypted supplier bank details. Finance or Super Admin only; requires an audit reason.', { parameters: [param('id', 'MVD public ID'), query('reason')] }));
+add('get', `${apiPrefix}/admin/vendor-collections`, op('Market Supplier Operations', 'List State-scoped supplier collections.', { parameters: [query('marketId'), query('vendorId'), query('runnerId'), query('status')] }));
+add('post', `${apiPrefix}/admin/vendor-collections/{id}/reconcile`, op('Market Supplier Finance', 'Reconcile or dispute a supplier payment with an audited reason.', { parameters: [param('id', 'VCL public ID')], requestBody: body('VendorReconcileRequest') }));
+add('get', `${apiPrefix}/admin/settings/catalog-availability`, op('Catalog Availability', 'Get the universal availability-check window and overdue count.'));
+add('patch', `${apiPrefix}/admin/settings/catalog-availability`, op('Catalog Availability', 'Update the universal availability-check window with an audited reason.'));
 add('get', `${apiPrefix}/public/home`, op('Public Catalog', 'Get safe published catalog foundations for Home.', { public: true }));
 add('get', `${apiPrefix}/public/categories`, op('Public Catalog', 'List safe active categories.', { public: true }));
 add('get', `${apiPrefix}/public/products`, op('Public Catalog', 'List safe published products using cursor pagination.', { public: true, parameters: [query('cursor'), query('limit', { type: 'integer' }), query('stateId'), query('marketId'), query('categoryId'), query('q')] }));
@@ -985,6 +1071,9 @@ const spec = {
     { name: 'Runner Foundation', description: 'Self-scoped Runner account foundation.' },
     { name: 'Partner Foundation', description: 'Self-scoped Hook Partner account foundation.' },
     { name: 'Runner Catalog Capture', description: 'Self-scoped Runner Market catalog capture and submission workflow.' },
+    { name: 'Market Supplier Operations', description: 'Market-scoped supplier invitations, sourcing collections, and masked operational records.' },
+    { name: 'Market Supplier Finance', description: 'Finance-restricted supplier payment reconciliation and audited bank-detail access.' },
+    { name: 'Catalog Availability', description: 'Universal Product availability checks, Runner confirmation, and overdue escalation.' },
     { name: 'Catalog Media', description: 'Signed private catalog media upload and verification.' },
     { name: 'Catalog Review', description: 'Scoped submission review and approval workflow.' },
     { name: 'Commercial Catalog', description: 'Commercial content, pricing, negotiation rules, and publication lifecycle.' },

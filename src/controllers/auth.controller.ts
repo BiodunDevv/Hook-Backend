@@ -9,7 +9,6 @@ import { Order } from '@models/orders/order.model';
 import { User } from '@models/users/user.model';
 import { AuthService } from '@services/auth.service';
 import { sendCreated, sendSuccess } from '@utils/http';
-import { AccountType } from '@lib/constants';
 
 export class AuthController {
   private readonly auth = new AuthService(
@@ -40,25 +39,6 @@ export class AuthController {
     sendSuccess(res, await this.auth.loginWithGoogle({
       idToken: req.body.idToken,
       guestId: req.guestSessionId,
-    }));
-  };
-
-  adminLogin = async (req: Request, res: Response) => {
-    sendSuccess(
-      res,
-      await this.auth.login(req.body.email, req.body.password, { adminOnly: true }),
-    );
-  };
-
-  runnerLogin = async (req: Request, res: Response) => {
-    sendSuccess(res, await this.auth.login(req.body.email, req.body.password, {
-      expectedAccountType: AccountType.RUNNER,
-    }));
-  };
-
-  partnerLogin = async (req: Request, res: Response) => {
-    sendSuccess(res, await this.auth.login(req.body.email, req.body.password, {
-      expectedAccountType: AccountType.PARTNER,
     }));
   };
 

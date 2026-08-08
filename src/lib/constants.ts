@@ -3,11 +3,9 @@
 // ============================================================
 export enum UserRole {
   SHOPPER = 'shopper',
-  // Persisted compatibility values. Active product code uses Runner and
-  // external Logistics Provider terminology.
+  RUNNER = 'runner',
+  PARTNER = 'partner',
   VENDOR = 'vendor',
-  FIELD_AGENT = 'field_agent',
-  EV_DRIVER = 'ev_driver',
   SUPPORT = 'support',
   ADMIN = 'admin',
   SUPER_ADMIN = 'super_admin',

@@ -5,6 +5,8 @@ import { normalizeProductColors } from '@lib/product-color';
 export interface Product extends BaseEntity {
   publicId?: string;
   sourceSubmissionId?: string;
+  sourceMarketVendorId?: string;
+  sourceRunnerId?: string;
   marketId?: string;
   sourceStateId?: string;
   title: string;
@@ -32,6 +34,12 @@ export interface Product extends BaseEntity {
   lastMarketVerifiedAt?: Date;
   lastPriceVerifiedAt?: Date;
   lastAvailabilityConfirmedAt?: Date;
+  availabilityCheckRequestedAt?: Date;
+  availabilityCheckDueAt?: Date;
+  availabilityCheckRequestedBy?: string;
+  availabilityEscalatedAt?: Date;
+  availabilityPreviousStatus?: ProductStatus;
+  availabilityCheckNote?: string;
   publishedAt?: Date;
   publishedBy?: string;
   commercialApproval?: {
@@ -64,6 +72,8 @@ export interface Product extends BaseEntity {
 const ProductSchema = createSchema<Product>({
   publicId: { type: String, unique: true, sparse: true, index: true },
   sourceSubmissionId: { type: String, unique: true, sparse: true, index: true },
+  sourceMarketVendorId: { type: String, index: true, sparse: true },
+  sourceRunnerId: { type: String, index: true, sparse: true },
   marketId: { type: String, index: true, sparse: true },
   sourceStateId: { type: String, index: true, sparse: true },
   title: { type: String, required: true, trim: true },
@@ -97,6 +107,12 @@ const ProductSchema = createSchema<Product>({
   lastMarketVerifiedAt: { type: Date },
   lastPriceVerifiedAt: { type: Date },
   lastAvailabilityConfirmedAt: { type: Date },
+  availabilityCheckRequestedAt: { type: Date, index: true },
+  availabilityCheckDueAt: { type: Date, index: true },
+  availabilityCheckRequestedBy: { type: String },
+  availabilityEscalatedAt: { type: Date, index: true },
+  availabilityPreviousStatus: { type: String, enum: Object.values(ProductStatus) },
+  availabilityCheckNote: { type: String, maxlength: 1000 },
   publishedAt: { type: Date, index: true },
   publishedBy: { type: String },
   commercialApproval: { type: Object, default: { approved: false } },

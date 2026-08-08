@@ -5,6 +5,8 @@ import { AdminFieldAgentsController } from '@controllers/admin/field-agents.cont
 import { requirePermission } from '@middleware/permissions';
 import { validateBody } from '@middleware/validate';
 import { asyncHandler } from '@utils/http';
+import { AdminMarketVendorController } from '@controllers/market-vendor.controller';
+import { marketVendorUpdateSchema, vendorReconcileSchema } from '@validations/vendor.schemas';
 
 const idList = z.array(z.string().min(1)).default([]);
 const reason = z.string().trim().min(3).max(500).optional();
@@ -154,6 +156,7 @@ export function createPlatformAdminRouter() {
   const router = Router();
   const controller = new PlatformController();
   const legacyRunners = new AdminFieldAgentsController();
+  const marketVendors = new AdminMarketVendorController();
 
   router.get('/permissions', asyncHandler(controller.permissions));
   router.get('/roles', asyncHandler(controller.roles));
@@ -200,6 +203,12 @@ export function createPlatformAdminRouter() {
     list: controller.listMarkets, create: controller.createMarket, detail: controller.marketDetail,
     update: controller.updateMarket, status: controller.marketStatus,
   }, marketSchema);
+  router.get('/markets/:id/vendors', requirePermission('market.vendors.view'), asyncHandler(marketVendors.vendors));
+  router.get('/market-vendors/:id', requirePermission('market.vendors.view'), asyncHandler(marketVendors.detail));
+  router.get('/market-vendors/:id/payment-details', requirePermission('market.payments.view'), asyncHandler(marketVendors.paymentDetails));
+  router.patch('/market-vendors/:id', requirePermission('market.vendors.manage'), validateBody(marketVendorUpdateSchema), asyncHandler(marketVendors.update));
+  router.get('/vendor-collections', requirePermission('market.collections.view'), asyncHandler(marketVendors.collections));
+  router.post('/vendor-collections/:id/reconcile', requirePermission('market.payments.reconcile'), validateBody(vendorReconcileSchema), asyncHandler(marketVendors.reconcile));
   router.post('/markets/:id/assign-hub', validateBody(z.object({ hubId: z.string().min(1), reason: z.string().min(3) })), asyncHandler(controller.assignMarketHub));
   crud(router, '/hubs', {
     list: controller.listHubs, create: controller.createHub, detail: controller.hubDetail,
@@ -244,6 +253,7 @@ export function createPlatformAdminRouter() {
     domain: z.enum([
       'state', 'city', 'zone', 'market', 'hub', 'partner', 'runner', 'customer', 'staff', 'audit',
       'category', 'submission', 'product', 'variant', 'negotiation', 'quote',
+      'marketVendor', 'vendorInvitation', 'vendorCollection', 'vendorPayment',
     ]),
     year: z.number().int().min(2020).optional(), sequence: z.number().int().nonnegative(), reason: z.string().min(5),
   })), asyncHandler(controller.repairCounter));

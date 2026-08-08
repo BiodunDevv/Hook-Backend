@@ -7,6 +7,7 @@ import { ensurePlatformAccessCatalog } from './services/platform-bootstrap.servi
 import { expireNegotiationsAndQuotes } from './services/negotiation.service';
 import { startFulfilmentWorker, stopFulfilmentWorker } from './services/fulfilment-worker.service';
 import { realtime } from './services/realtime.service';
+import { escalateOverdueAvailabilityChecks } from './services/catalog-availability.service';
 
 dotenv.config({ quiet: true });
 
@@ -49,7 +50,6 @@ ${rows.map(([label, value]) => line(`${label.padEnd(8)}${value}`)).join('\n')}
   Routes
     GET   /health
     POST  /${apiPrefix}/auth/login
-    POST  /${apiPrefix}/admin/auth/login
     GET   /${apiPrefix}/products
     GET   /${apiPrefix}/cart
     GET   /${apiPrefix}/orders
@@ -87,14 +87,14 @@ async function bootstrap() {
   await initializeDatabase();
   await ensurePlatformAccessCatalog();
   expiryTimer = setInterval(() => {
-    void expireNegotiationsAndQuotes().catch((error) => {
-      console.error('[catalog-expiry] Failed to expire negotiation records', error);
+    void Promise.all([expireNegotiationsAndQuotes(), escalateOverdueAvailabilityChecks()]).catch((error) => {
+      console.error('[catalog-expiry] Failed to process catalog deadlines', error);
     });
   }, 60_000);
   expiryTimer.unref();
   startFulfilmentWorker();
   console.log('🕒 Catalog expiry scheduler started');
-  console.log('   Checking negotiation and quote expiry every 60 seconds');
+  console.log('   Checking negotiation, quote, and availability deadlines every 60 seconds');
   console.log('⚙️ Fulfilment worker started');
   console.log('   Polling the durable outbox every 5 seconds');
 

@@ -12,6 +12,7 @@ import {
   SubmissionVariant,
 } from '@models/catalog/catalog.model';
 import { Product } from '@models/products/product.model';
+import { MarketVendor } from '@models/catalog/market-vendor.model';
 import { Market } from '@models/platform/network.model';
 import { RunnerMarketAssignment, RunnerProfile } from '@models/platform/operations-accounts.model';
 import { nextPublicId } from './public-id.service';
@@ -21,6 +22,7 @@ import { adminReviewCache } from '@lib/ttl-cache';
 
 type SubmissionInput = {
   marketId: string;
+  marketVendorId: string;
   categorySuggestionId: string;
   basicTitle: string;
   notes?: string;
@@ -69,6 +71,22 @@ async function runnerContext(accountId: string, marketIdentifier?: string) {
     throw new HttpError(403, 'An active Market assignment is required', undefined, 'RUNNER_MARKET_ASSIGNMENT_REQUIRED');
   }
   return { runner, market, assignment };
+}
+
+async function ensureMarketVendor(identifier: string, marketId: string) {
+  const filter = /^[a-f\d]{24}$/i.test(identifier)
+    ? { $or: [{ _id: identifier }, { publicId: identifier }] }
+    : { publicId: identifier };
+  const vendor = await MarketVendor.findOne({
+    ...filter,
+    marketId,
+    status: { $in: ['pending', 'active'] },
+    deletedAt: { $exists: false },
+  }).lean({ virtuals: true });
+  if (!vendor) {
+    throw new HttpError(409, 'Select an active vendor from this Market', undefined, 'MARKET_VENDOR_INVALID');
+  }
+  return vendor;
 }
 
 async function category(identifier: string) {
@@ -166,11 +184,13 @@ export class RunnerCatalogService {
       runnerContext(accountId, input.marketId),
       category(input.categorySuggestionId),
     ]);
+    const vendor = await ensureMarketVendor(input.marketVendorId, market._id.toString());
     const publicId = await nextPublicId('submission');
     const submission = await ProductSubmission.create({
       publicId,
       runnerId: runner._id.toString(),
       marketId: market._id.toString(),
+      marketVendorId: vendor._id.toString(),
       sourceStateId: market.stateId,
       categorySuggestionId: (await category(input.categorySuggestionId))._id.toString(),
       basicTitle: input.basicTitle,
@@ -199,11 +219,13 @@ export class RunnerCatalogService {
       runnerContext(accountId, input.marketId),
       category(input.categorySuggestionId),
     ]);
+    const vendor = await ensureMarketVendor(input.marketVendorId, market._id.toString());
     const updated = await ProductSubmission.findOneAndUpdate(
       { _id: current._id, version: current.version },
       {
         $set: {
           marketId: market._id.toString(),
+          marketVendorId: vendor._id.toString(),
           sourceStateId: market.stateId,
           categorySuggestionId: (await category(input.categorySuggestionId))._id.toString(),
           basicTitle: input.basicTitle,
@@ -424,6 +446,8 @@ export class CatalogReviewService {
           publicId: productPublicId,
           hookId: productPublicId,
           sourceSubmissionId: current._id.toString(),
+          sourceMarketVendorId: current.marketVendorId,
+          sourceRunnerId: current.runnerId,
           marketId: current.marketId,
           sourceStateId: current.sourceStateId,
           categoryId: current.categorySuggestionId,

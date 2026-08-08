@@ -67,6 +67,14 @@ function recordId(record: { _id?: unknown; id?: string }) {
   return String(record._id || record.id);
 }
 
+function storedStateIdentifiers(state: { _id?: unknown; publicId?: string }, fallback?: string) {
+  return [...new Set(
+    [state._id, state.publicId, fallback]
+      .filter((value) => value != null && String(value).length > 0)
+      .map(String),
+  )];
+}
+
 export class CheckoutService {
   private addresses = new AddressService();
 
@@ -99,6 +107,7 @@ export class CheckoutService {
         "CHECKOUT_STATE_UNAVAILABLE",
       );
     const stateId = recordId(state);
+    const stateIdentifiers = storedStateIdentifiers(state, stateIdentifier);
     const partner = actor.partnerId
       ? await HookPartner.findOne({
           _id: actor.partnerId,
@@ -155,7 +164,7 @@ export class CheckoutService {
     const cartId = recordId(cart);
     const cartItems = await CartItem.find({
       cartId,
-      stateId,
+      stateId: { $in: stateIdentifiers },
     }).lean({ virtuals: true });
     if (!cartItems.length)
       throw new HttpError(
@@ -402,9 +411,16 @@ export class CheckoutService {
         undefined,
         "CART_VERSION_CHANGED",
       );
+    const previewState = await OperationState.findOne({
+      ...idFilter(preview.stateId),
+      status: "active",
+    })
+      .select("_id publicId")
+      .lean();
+    const stateIdentifiers = storedStateIdentifiers(previewState || {}, preview.stateId);
     const cartItems = await CartItem.find({
       cartId: cart.id,
-      stateId: preview.stateId,
+      stateId: { $in: stateIdentifiers },
     }).lean({ virtuals: true });
     const currentLines = await this.revalidateLines(
       actor.customerId,
@@ -572,7 +588,7 @@ export class CheckoutService {
               );
           }
         await CartItem.deleteMany(
-          { cartId: cart.id, stateId: preview.stateId },
+          { cartId: cart.id, stateId: { $in: stateIdentifiers } },
           { session },
         );
         await Cart.updateOne(

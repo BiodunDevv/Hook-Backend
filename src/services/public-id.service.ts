@@ -37,6 +37,10 @@ export const PUBLIC_ID_PREFIXES = {
   refund: 'RFD',
   partnerCustody: 'PCU',
   deliveryRule: 'DPR',
+  marketVendor: 'MVD',
+  vendorInvitation: 'VNI',
+  vendorCollection: 'VCL',
+  vendorPayment: 'VPM',
 } as const;
 
 export type PublicIdDomain = keyof typeof PUBLIC_ID_PREFIXES;

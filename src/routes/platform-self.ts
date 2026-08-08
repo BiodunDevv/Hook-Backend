@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
-import { AccountType } from "@lib/constants";
-import { AuthController } from "@controllers/auth.controller";
+import { AccountType, ProductAvailabilityStatus } from "@lib/constants";
+import { routeParam } from "@lib/api-utils";
 import { requireAccountType, requireAuth } from "@middleware/auth";
 import { validateBody } from "@middleware/validate";
 import {
@@ -12,7 +12,6 @@ import {
 import { Market } from "@models/platform/network.model";
 import { User } from "@models/users/user.model";
 import { asyncHandler, HttpError, sendSuccess } from "@utils/http";
-import { loginSchema } from "@validations/common.schemas";
 import { RunnerCatalogController } from "@controllers/runner/catalog.controller";
 import { runnerSubmissionDraftSchema } from "@validations/catalog.schemas";
 import { PartnerCommerceController } from "@controllers/partner-commerce.controller";
@@ -22,17 +21,16 @@ import {
   checkoutPreviewSchema,
   commerceCartItemSchema,
 } from "@validations/commerce.schemas";
+import { RunnerMarketVendorController } from '@controllers/market-vendor.controller';
+import { availabilityConfirmSchema, availabilityReportSchema, marketVendorSchema, marketVendorUpdateSchema, vendorCollectionSchema } from '@validations/vendor.schemas';
+import { Product } from '@models/products/product.model';
+import { CatalogAvailabilityService } from '@services/catalog-availability.service';
 
 export function createRunnerRouter() {
   const router = Router();
-  const auth = new AuthController();
   const catalog = new RunnerCatalogController();
   const fulfilment = new FulfilmentController();
-  router.post(
-    "/auth/login",
-    validateBody(loginSchema),
-    asyncHandler(auth.runnerLogin),
-  );
+  const marketVendors = new RunnerMarketVendorController();
   router.use(requireAuth, requireAccountType(AccountType.RUNNER));
   router.get(
     "/profile",
@@ -97,6 +95,32 @@ export function createRunnerRouter() {
       sendSuccess(res, { assignments, markets });
     }),
   );
+  router.get('/markets/:id', asyncHandler(marketVendors.market));
+  router.get('/markets/:id/vendors', asyncHandler(marketVendors.vendors));
+  router.post('/markets/:id/vendors', validateBody(marketVendorSchema), asyncHandler(marketVendors.create));
+  router.get('/market-vendors/:id', asyncHandler(marketVendors.detail));
+  router.patch('/market-vendors/:id', validateBody(marketVendorUpdateSchema), asyncHandler(marketVendors.update));
+  router.post('/market-vendors/:id/invite', asyncHandler(marketVendors.invite));
+  router.get('/vendor-collections', asyncHandler(marketVendors.collections));
+  router.post('/product-submissions/:id/collection', validateBody(vendorCollectionSchema), asyncHandler(marketVendors.collection));
+  router.get('/availability-checks', asyncHandler(async (req, res) => {
+    const profile = await RunnerProfile.findOne({ accountId: req.user!.sub, status: 'active' }).lean();
+    if (!profile) throw new HttpError(403, 'Active Runner profile required', undefined, 'ACCESS_DENIED');
+    const assignments = await RunnerMarketAssignment.find({ runnerId: profile._id.toString(), status: 'active', activeFrom: { $lte: new Date() }, $or: [{ activeTo: { $exists: false } }, { activeTo: null }, { activeTo: { $gt: new Date() } }] }).select('marketId').lean();
+    const products = await Product.find({ marketId: { $in: assignments.map((assignment) => assignment.marketId) }, availabilityStatus: ProductAvailabilityStatus.UNCONFIRMED, deletedAt: { $exists: false } })
+      .select('publicId title marketId sourceRunnerId status availabilityStatus availabilityCheckDueAt availabilityCheckNote catalogVersion images')
+      .sort({ availabilityCheckDueAt: 1 }).limit(100).lean({ virtuals: true });
+    const sourceRunnerIds = [...new Set(products.map((product) => product.sourceRunnerId).filter(Boolean))];
+    const activeSources = await RunnerProfile.find({ _id: { $in: sourceRunnerIds }, status: 'active' }).select('_id').lean();
+    const activeSourceIds = new Set(activeSources.map((runner) => runner._id.toString()));
+    sendSuccess(res, products.filter((product) => product.sourceRunnerId === profile._id.toString() || !product.sourceRunnerId || !activeSourceIds.has(product.sourceRunnerId)));
+  }));
+  router.post('/products/:id/availability/confirm', validateBody(availabilityConfirmSchema), asyncHandler(async (req, res) => {
+    sendSuccess(res, await new CatalogAvailabilityService().confirm(req.user!.sub, routeParam(req.params.id), req.body));
+  }));
+  router.post('/products/:id/availability/report', validateBody(availabilityReportSchema), asyncHandler(async (req, res) => {
+    sendSuccess(res, await new CatalogAvailabilityService().report(req.user!.sub, routeParam(req.params.id), req.body));
+  }));
   router.get("/dashboard", asyncHandler(catalog.dashboard));
   router.get("/fulfilments/dashboard", asyncHandler(fulfilment.runnerDashboard));
   router.get("/fulfilments", asyncHandler(fulfilment.runnerTasks));
@@ -135,14 +159,8 @@ export function createRunnerRouter() {
 
 export function createPartnerRouter() {
   const router = Router();
-  const auth = new AuthController();
   const commerce = new PartnerCommerceController();
   const fulfilment = new FulfilmentController();
-  router.post(
-    "/auth/login",
-    validateBody(loginSchema),
-    asyncHandler(auth.partnerLogin),
-  );
   router.use(requireAuth, requireAccountType(AccountType.PARTNER));
   router.get(
     "/profile",

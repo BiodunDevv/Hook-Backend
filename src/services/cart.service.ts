@@ -426,12 +426,17 @@ export class CartService {
   ) {
     const cart = await this.getOrCreateCart(owner);
     const cartId = String(cart._id || cart.id);
-    let storedStateId = stateId;
+    const storedStateId = stateId;
     if (stateId && !Types.ObjectId.isValid(stateId)) {
       const state = await OperationState.findOne({ publicId: stateId })
-        .select("_id")
+        .select("_id publicId")
         .lean();
-      storedStateId = state?._id?.toString();
+      const stateIdentifiers = [state?._id?.toString(), state?.publicId, stateId].filter(Boolean) as string[];
+      await CartItem.deleteMany({
+        cartId,
+        stateId: { $in: stateIdentifiers },
+      });
+      return this.finishMutation(owner, cartId, undefined, options?.deferRecalculation === true);
     }
     await CartItem.deleteMany({
       cartId,
@@ -454,7 +459,8 @@ export class CartService {
     ]);
     if (!cart) throw new HttpError(404, "Cart not found");
     const productIds = [...new Set(items.map((item) => item.productId))];
-    const stateIds = [...new Set(items.map((item) => item.stateId).filter(Boolean))];
+    const stateIds = [...new Set(items.map((item) => String(item.stateId || "")).filter(Boolean))];
+    const objectStateIds = stateIds.filter((stateId) => Types.ObjectId.isValid(stateId));
     const [products, states] = await Promise.all([
       productIds.length
         ? Product.find({ _id: { $in: productIds } })
@@ -464,18 +470,23 @@ export class CartService {
             .lean({ virtuals: true })
         : [],
       stateIds.length
-        ? OperationState.find({ _id: { $in: stateIds } })
+        ? OperationState.find({
+            $or: [
+              { publicId: { $in: stateIds } },
+              ...(objectStateIds.length ? [{ _id: { $in: objectStateIds } }] : []),
+            ],
+          } as any)
             .select("_id publicId name code")
             .lean({ virtuals: true })
         : [],
     ]);
     const productMap = new Map(products.map((product) => [product._id.toString(), product]));
-    const stateMap = new Map(
-      states.map((state) => [
-        state._id.toString(),
-        { publicId: state.publicId, name: state.name, code: state.code },
-      ]),
-    );
+    const stateMap = new Map<string, { publicId: string; name: string; code: string }>();
+    for (const state of states) {
+      const value = { publicId: state.publicId, name: state.name, code: state.code };
+      stateMap.set(state._id.toString(), value);
+      stateMap.set(state.publicId, value);
+    }
     const groupsByState = new Map<string, any[]>();
     const enriched = items.map((item) => {
       const product = productMap.get(item.productId);

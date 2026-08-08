@@ -572,6 +572,8 @@ export function createAdminRouter() {
     validateBody(settingsSchema),
     asyncHandler(settings.update),
   );
+  router.get('/settings/catalog-availability', requirePermission('catalog.availability.view'), asyncHandler(settings.catalogAvailability));
+  router.patch('/settings/catalog-availability', requirePermission('catalog.availability.manage'), validateBody(z.object({ catalogAvailabilityCheckDays: z.coerce.number().int().min(1).max(30), reason: z.string().trim().min(3).max(500) }).strict()), asyncHandler(settings.updateCatalogAvailability));
 
   // ── Delivery coverage and fee rules ────────────────────────────────────
   router.get('/delivery', requirePermission('delivery.coverage.view'), asyncHandler(delivery.settings));

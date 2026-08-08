@@ -25,6 +25,7 @@ export interface ProductSubmission extends BaseEntity {
   publicId: string;
   runnerId: string;
   marketId: string;
+  marketVendorId?: string;
   sourceStateId: string;
   categorySuggestionId: string;
   basicTitle: string;
@@ -101,6 +102,7 @@ const submissionSchema = createSchema<ProductSubmission>({
   publicId: { type: String, required: true, unique: true, index: true },
   runnerId: { type: String, required: true, index: true },
   marketId: { type: String, required: true, index: true },
+  marketVendorId: { type: String, index: true },
   sourceStateId: { type: String, required: true, index: true },
   categorySuggestionId: { type: String, required: true, index: true },
   basicTitle: { type: String, required: true, trim: true, maxlength: 180 },

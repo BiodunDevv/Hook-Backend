@@ -1,11 +1,10 @@
 import { Request, Response } from 'express';
-import { UserRole } from '@lib/constants';
+import { AccountType, UserRole } from '@lib/constants';
 import { hashPassword } from '@lib/security';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
 import { adminRepos, getPagination, paginated, routeParam } from './admin.helpers';
 import { User } from '@models/users/user.model';
 
-const STAFF_ROLES = [UserRole.SUPPORT, UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.FIELD_AGENT, UserRole.EV_DRIVER];
 const USER_LIST_FIELDS = 'publicId email phone firstName lastName role accountType accountStatus scopeType assignedStateIds assignedHubIds assignedCategoryIds isEmailVerified isPhoneVerified isActive lastLoginAt createdAt updatedAt';
 
 function searchRegex(value: string) {
@@ -26,10 +25,22 @@ export class AdminUsersController {
     const search = typeof req.query.search === 'string' ? req.query.search.toLowerCase() : undefined;
     const where: Record<string, any> = {};
     if (role) where.role = role;
-    if (!role) where.role = { $nin: STAFF_ROLES };
+    if (!role) {
+      where.$and = [{
+        $or: [
+          { accountType: AccountType.CUSTOMER },
+          { accountType: { $exists: false }, role: UserRole.SHOPPER },
+        ],
+      }];
+    }
     if (search) {
       const expression = searchRegex(search);
-      where.$or = [{ email: expression }, { firstName: expression }, { lastName: expression }];
+      const searchClause = { $or: [{ email: expression }, { firstName: expression }, { lastName: expression }] };
+      if (where.$and) {
+        where.$and.push(searchClause);
+      } else {
+        where.$and = [searchClause];
+      }
     }
     const [data, total] = await Promise.all([
       User.find(where).select(USER_LIST_FIELDS).sort({ createdAt: -1 }).skip(skip).limit(limit).lean({ virtuals: true }),
@@ -41,10 +52,17 @@ export class AdminUsersController {
   customers = async (req: Request, res: Response) => {
     const { page, limit, skip } = getPagination(req.query);
     const search = typeof req.query.search === 'string' ? req.query.search.toLowerCase() : undefined;
-    const where: Record<string, any> = { role: UserRole.SHOPPER };
+    const where: Record<string, any> = {
+      $and: [{
+        $or: [
+          { accountType: AccountType.CUSTOMER },
+          { accountType: { $exists: false }, role: UserRole.SHOPPER },
+        ],
+      }],
+    };
     if (search) {
       const expression = searchRegex(search);
-      where.$or = [{ email: expression }, { firstName: expression }, { lastName: expression }];
+      where.$and.push({ $or: [{ email: expression }, { firstName: expression }, { lastName: expression }] });
     }
     const [data, total] = await Promise.all([
       User.find(where).select(USER_LIST_FIELDS).sort({ createdAt: -1 }).skip(skip).limit(limit).lean({ virtuals: true }),

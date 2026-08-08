@@ -85,9 +85,7 @@ export class AuthService {
   }
 
   async login(email: string, password: string, options?: {
-    adminOnly?: boolean;
     guestId?: string;
-    expectedAccountType?: AccountType;
   }) {
     const user = await this.userRepo.findOne({
       where: { email },
@@ -119,34 +117,6 @@ export class AuthService {
     }
     if (user.accountStatus && user.accountStatus !== AccountStatus.ACTIVE) {
       throw new HttpError(403, 'This account is not available for sign in', undefined, 'ACCESS_DENIED');
-    }
-
-    if (
-      options?.adminOnly &&
-      ![UserRole.SUPPORT, UserRole.ADMIN, UserRole.SUPER_ADMIN].includes(user.role)
-    ) {
-      throw new HttpError(403, 'Admin access required');
-    }
-
-    // Older seeded/admin records predate the typed account fields. Normalize
-    // only an already-active legacy admin during its next successful login;
-    // explicit suspended/disabled records are rejected above.
-    if (
-      options?.adminOnly &&
-      user.isActive &&
-      [UserRole.SUPPORT, UserRole.ADMIN, UserRole.SUPER_ADMIN].includes(user.role) &&
-      (!user.accountType || !user.accountStatus)
-    ) {
-      user.accountType = AccountType.STAFF;
-      user.accountStatus = AccountStatus.ACTIVE;
-      await this.userRepo.update(user.id, {
-        accountType: AccountType.STAFF,
-        accountStatus: AccountStatus.ACTIVE,
-      });
-    }
-
-    if (options?.expectedAccountType && user.accountType !== options.expectedAccountType) {
-      throw new HttpError(403, 'This account cannot access the requested portal', undefined, 'ACCESS_DENIED');
     }
 
     user.lastLoginAt = new Date();

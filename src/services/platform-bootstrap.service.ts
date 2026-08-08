@@ -41,12 +41,16 @@ const domains: Record<string, string[]> = {
   returns: ['view', 'review', 'manage'],
   custody: ['view', 'manage'],
   'finance.refunds': ['view', 'process'],
+  'market.vendors': ['view', 'manage', 'invite'],
+  'market.collections': ['view', 'manage'],
+  'market.payments': ['view', 'reconcile'],
+  'catalog.availability': ['view', 'manage', 'confirm'],
 };
 
 export const PLATFORM_PERMISSION_KEYS = Object.entries(domains)
   .flatMap(([domain, actions]) => actions.map((action) => `${domain}.${action}`));
 
-const readPermissions = PLATFORM_PERMISSION_KEYS.filter((key) => key.endsWith('.view'));
+const readPermissions = PLATFORM_PERMISSION_KEYS.filter((key) => key.endsWith('.view') && key !== 'market.payments.view');
 const operationsPermissions = PLATFORM_PERMISSION_KEYS.filter((key) =>
   /^(states|cities|zones|markets|hubs|runners|partners|audit|delivery\.)/.test(key),
 );
@@ -58,6 +62,11 @@ const commerceOperations = [
   'fulfilment.hub.view', 'fulfilment.hub.receive', 'fulfilment.hub.qc', 'fulfilment.consolidate',
   'logistics.view', 'logistics.book', 'logistics.manage', 'logistics.track',
   'returns.view', 'returns.review', 'custody.view', 'custody.manage',
+];
+const marketVendorOperations = [
+  'market.vendors.view', 'market.vendors.manage', 'market.vendors.invite',
+  'market.collections.view', 'market.collections.manage',
+  'catalog.availability.view', 'catalog.availability.manage',
 ];
 const catalogRead = [
   'products.view',
@@ -107,19 +116,19 @@ const financePermissions = [
 
 const roles = [
   { key: 'SUPER_ADMIN', name: 'Super Admin', scope: ScopeType.GLOBAL, permissions: PLATFORM_PERMISSION_KEYS },
-  { key: 'OPERATIONS_LEAD', name: 'Operations Lead', scope: ScopeType.MULTI_STATE, permissions: [...operationsPermissions, ...orderOperations, ...commerceOperations, 'staff.view'] },
-  { key: 'STATE_OPERATIONS_MANAGER', name: 'State Operations Manager', scope: ScopeType.SINGLE_STATE, permissions: [...operationsPermissions, ...orderOperations, ...commerceOperations] },
+  { key: 'OPERATIONS_LEAD', name: 'Operations Lead', scope: ScopeType.MULTI_STATE, permissions: [...operationsPermissions, ...orderOperations, ...commerceOperations, ...marketVendorOperations, 'staff.view'] },
+  { key: 'STATE_OPERATIONS_MANAGER', name: 'State Operations Manager', scope: ScopeType.SINGLE_STATE, permissions: [...operationsPermissions, ...orderOperations, ...commerceOperations, ...marketVendorOperations] },
   {
     key: 'COMMERCIAL_MANAGER',
     name: 'Commercial Manager',
     scope: ScopeType.MULTI_STATE,
-    permissions: [...commercialManage, 'products.review', 'products.edit', 'audit.view'],
+    permissions: [...commercialManage, 'products.review', 'products.edit', 'catalog.availability.view', 'catalog.availability.manage', 'audit.view'],
   },
   {
     key: 'COMMERCIAL_OFFICER',
     name: 'Commercial Officer',
     scope: ScopeType.SINGLE_STATE,
-    permissions: [...catalogRead, 'catalog.product.edit', 'catalog.pricing.view_internal', 'catalog.pricing.edit'],
+    permissions: [...catalogRead, 'catalog.product.edit', 'catalog.pricing.view_internal', 'catalog.pricing.edit', 'catalog.availability.view', 'catalog.availability.manage'],
   },
   {
     key: 'CATALOG_REVIEWER',
@@ -133,13 +142,14 @@ const roles = [
       'catalog.submission.reject',
       'products.review',
       'catalog.media.review',
+      'catalog.availability.view',
     ],
   },
   { key: 'DISPATCH_HUB_MANAGER', name: 'Dispatch Hub Manager', scope: ScopeType.HUB, permissions: ['hubs.view', 'markets.view', 'runners.view', 'runners.assign', ...orderOperations] },
   { key: 'DISPATCH_HUB_OFFICER', name: 'Dispatch Hub Officer', scope: ScopeType.HUB, permissions: ['hubs.view', 'markets.view', 'runners.view', 'orders.view', 'orders.edit'] },
   { key: 'LOGISTICS_OFFICER', name: 'Logistics Officer', scope: ScopeType.MULTI_STATE, permissions: ['hubs.view', 'markets.view', 'runners.view', 'orders.view', 'orders.edit'] },
   { key: 'CUSTOMER_SUPPORT_OFFICER', name: 'Customer Support Officer', scope: ScopeType.MULTI_STATE, permissions: supportPermissions },
-  { key: 'FINANCE_OFFICER', name: 'Finance Officer', scope: ScopeType.MULTI_STATE, permissions: financePermissions },
+  { key: 'FINANCE_OFFICER', name: 'Finance Officer', scope: ScopeType.MULTI_STATE, permissions: [...financePermissions, 'market.payments.view', 'market.payments.reconcile'] },
   { key: 'MANAGEMENT_VIEWER', name: 'Management Viewer', scope: ScopeType.GLOBAL, permissions: [...readPermissions, 'analytics.checkout'] },
 ];
 

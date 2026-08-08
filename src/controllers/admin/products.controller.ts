@@ -7,6 +7,8 @@ import { publicProduct } from '@lib/public-resource';
 import { Product } from '@models/products/product.model';
 import { Category } from '@models/categories/category.model';
 import { User } from '@models/users/user.model';
+import { Market } from '@models/platform/network.model';
+import { MarketVendor } from '@models/catalog/market-vendor.model';
 import { adminCategoryManagersCache, adminProductStatsCache } from '@lib/ttl-cache';
 
 function slugify(value: string) {
@@ -14,6 +16,12 @@ function slugify(value: string) {
 }
 
 const MANAGER_ROLES: UserRole[] = [UserRole.SUPPORT, UserRole.ADMIN];
+
+function referenceFilter(value: unknown) {
+  const reference = String(value || '');
+  if (!reference) return null;
+  return /^[a-f\d]{24}$/i.test(reference) ? { _id: reference } : { publicId: reference };
+}
 
 function adminProductSummary(product: any) {
   const { _id, ...safeProduct } = product;
@@ -133,8 +141,25 @@ export class AdminProductsController {
       relations: { category: true, orderItems: true, negotiations: true },
     });
     if (!product) throw new HttpError(404, 'Product not found');
-    const managers = await categoryManagersMap();
-    sendSuccess(res, publicProduct({ ...product, categoryManagers: managers.get(product.categoryId) || [] }));
+    const [managers, sourceMarket, sourceMarketVendor] = await Promise.all([
+      categoryManagersMap(),
+      referenceFilter(product.marketId)
+        ? Market.findOne(referenceFilter(product.marketId) as any).select('publicId name address').lean({ virtuals: true })
+        : null,
+      referenceFilter(product.sourceMarketVendorId)
+        ? MarketVendor.findOne(referenceFilter(product.sourceMarketVendorId) as any).select('publicId businessName status').lean({ virtuals: true })
+        : null,
+    ]);
+    sendSuccess(res, publicProduct({
+      ...product,
+      categoryManagers: managers.get(product.categoryId) || [],
+      sourceMarket: sourceMarket
+        ? { publicId: sourceMarket.publicId, name: sourceMarket.name, address: sourceMarket.address }
+        : null,
+      sourceMarketVendor: sourceMarketVendor
+        ? { publicId: sourceMarketVendor.publicId, businessName: sourceMarketVendor.businessName, status: sourceMarketVendor.status }
+        : null,
+    }));
   };
 
   create = async (req: Request, res: Response) => {

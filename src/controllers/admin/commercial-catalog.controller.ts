@@ -7,6 +7,7 @@ import { recordAudit } from '@services/platform-audit.service';
 import { sendSuccess } from '@utils/http';
 import { presentCommercialList, presentCommercialSummary } from '@services/catalog-presentation.service';
 import { adminCatalogCache } from '@lib/ttl-cache';
+import { CatalogAvailabilityService } from '@services/catalog-availability.service';
 
 function stateScope(req: Request) {
   if (req.platformContext?.stateId) return [req.platformContext.stateId];
@@ -15,6 +16,7 @@ function stateScope(req: Request) {
 
 export class AdminCommercialCatalogController {
   private readonly catalog = new CommercialCatalogService();
+  private readonly availability = new CatalogAvailabilityService();
 
   dashboard = async (req: Request, res: Response) => {
     const scope = stateScope(req);
@@ -67,7 +69,12 @@ export class AdminCommercialCatalogController {
   publish = async (req: Request, res: Response) => this.lifecycle(req, res, 'publish');
   pause = async (req: Request, res: Response) => this.lifecycle(req, res, 'pause');
   unpublish = async (req: Request, res: Response) => this.lifecycle(req, res, 'unpublish');
-  availabilityUnconfirmed = async (req: Request, res: Response) => this.lifecycle(req, res, 'availability_unconfirmed');
+  availabilityUnconfirmed = async (req: Request, res: Response) => {
+    const before = await this.catalog.detail(routeParam(req.params.id), stateScope(req));
+    const updated = await this.availability.request(routeParam(req.params.id), req.body, req.user!.sub, stateScope(req));
+    await this.audit(req, 'catalog.product.availability_unconfirmed', { status: before.status }, { status: updated.status, dueAt: updated.availabilityCheckDueAt }, req.body.reason, updated);
+    sendSuccess(res, presentCommercialSummary(updated));
+  };
 
   private lifecycle = async (
     req: Request,

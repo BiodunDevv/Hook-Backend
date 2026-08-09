@@ -88,7 +88,7 @@ export function createAdminRouter() {
   router.use(platformContext);
   router.use("/", createPlatformAdminRouter());
 
-  // The customer notification route is intentionally customer/guest scoped.
+  // Customer notifications stay outside the staff route group.
   // Keep staff notifications on an explicit admin path so the Admin shell
   // never presents a customer identity to the API.
   router.get("/notifications", asyncHandler(notifications.list));
@@ -585,7 +585,7 @@ export function createAdminRouter() {
   router.get('/delivery/rules', requirePermission('delivery.pricing.view'), asyncHandler(delivery.listRules));
   router.post('/delivery/rules', requirePermission('delivery.pricing.manage'), validateBody(z.object({
     name: z.string().trim().min(2).max(120),
-    scope: z.enum(['global', 'state', 'zone']),
+    scope: z.enum(['global', 'state']),
     scopeId: z.string().min(1).optional(),
     mode: z.enum(['flat', 'per_km', 'distance_bands']),
     flatFeeMinor: z.number().int().nonnegative().optional(),
@@ -601,7 +601,7 @@ export function createAdminRouter() {
   }).strict()), asyncHandler(delivery.createRule));
   router.patch('/delivery/rules/:id', requirePermission('delivery.pricing.manage'), validateBody(z.object({
     name: z.string().trim().min(2).max(120).optional(),
-    scope: z.enum(['global', 'state', 'zone']).optional(),
+    scope: z.enum(['global', 'state']).optional(),
     scopeId: z.string().min(1).optional(),
     mode: z.enum(['flat', 'per_km', 'distance_bands']).optional(),
     flatFeeMinor: z.number().int().nonnegative().optional(),
@@ -624,7 +624,6 @@ export function createAdminRouter() {
   }).strict()), asyncHandler(delivery.refreshLocations));
   router.post('/delivery/preview', requirePermission('delivery.pricing.preview'), validateBody(z.object({
     stateId: z.string().min(1),
-    zoneId: z.string().min(1).optional(),
     coordinates: z.object({ latitude: z.number(), longitude: z.number() }).optional(),
   }).strict()), asyncHandler(delivery.preview));
 

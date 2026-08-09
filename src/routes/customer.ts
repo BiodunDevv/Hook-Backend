@@ -20,6 +20,7 @@ import {
   checkoutConfirmSchema,
   checkoutPreviewSchema,
   commerceCartItemSchema,
+  commerceImportSchema,
   paymentInitializeV4Schema,
 } from "@validations/commerce.schemas";
 import { requireAuth, requireAccountType } from "@middleware/auth";
@@ -36,6 +37,14 @@ export function createCustomerRouter() {
   const likes = new ProductLikesController();
 
   router.use(requireCustomerIdentity);
+
+  router.post(
+    "/commerce/import",
+    requireAuth,
+    requireAccountType(AccountType.CUSTOMER),
+    validateBody(commerceImportSchema),
+    asyncHandler(controller.importCommerce),
+  );
 
   router.get("/cart", asyncHandler(controller.getCart));
   router.post(
@@ -106,6 +115,20 @@ export function createCustomerRouter() {
     requireAuth,
     requireAccountType(AccountType.CUSTOMER),
     asyncHandler(controller.defaultAddress),
+  );
+  router.post(
+    "/checkout/preview",
+    requireAuth,
+    requireAccountType(AccountType.CUSTOMER),
+    validateBody(checkoutPreviewSchema),
+    asyncHandler(controller.checkoutCombinedPreview),
+  );
+  router.post(
+    "/checkout/confirm",
+    requireAuth,
+    requireAccountType(AccountType.CUSTOMER),
+    validateBody(checkoutConfirmSchema),
+    asyncHandler(controller.checkoutCombinedConfirm),
   );
   router.post(
     "/checkout/states/:stateId/preview",

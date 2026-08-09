@@ -9,6 +9,7 @@ import { OrderItem } from '@models/orders/order-item.model';
 import { Order } from '@models/orders/order.model';
 import { Product } from '@models/products/product.model';
 import { Payment } from '@models/payments/payment.model';
+import { OrderFulfilmentGroup } from '@models/orders/order-fulfilment-group.model';
 import { User } from '@models/users/user.model';
 import { CustomerOwner } from './cart.service';
 import { HttpError } from '@utils/http';
@@ -168,25 +169,33 @@ export class OrderService {
       .limit(100)
       .lean({ virtuals: true });
     const orderIds = orders.map((order) => order.id);
-    const [items, payments] = await Promise.all([
+    const [items, payments, groups] = await Promise.all([
       orderIds.length ? OrderItem.find({ orderId: { $in: orderIds } }).lean({ virtuals: true }) : [],
       orderIds.length ? Payment.find({ orderId: { $in: orderIds } }).select('-gatewayResponse -authorizationUrl -accessCode').lean({ virtuals: true }) : [],
+      orderIds.length ? OrderFulfilmentGroup.find({ orderId: { $in: orderIds } }).sort({ createdAt: 1 }).lean({ virtuals: true }) : [],
     ]);
     const itemMap = new Map<string, any[]>();
     (items as any[]).forEach((item) => itemMap.set(String(item.orderId), [...(itemMap.get(String(item.orderId)) || []), item]));
-    const paymentMap = new Map((payments as any[]).map((payment) => [String(payment.orderId), payment]));
-    return orders.map((order) => ({ ...order, items: itemMap.get(order.id) || [], payment: paymentMap.get(order.id) })) as any;
+    const paymentMap = new Map<string, any[]>();
+    (payments as any[]).forEach((payment) => paymentMap.set(String(payment.orderId), [...(paymentMap.get(String(payment.orderId)) || []), payment]));
+    const groupMap = new Map<string, any[]>();
+    (groups as any[]).forEach((group) => groupMap.set(String(group.orderId), [...(groupMap.get(String(group.orderId)) || []), group]));
+    return orders.map((order) => {
+      const orderPayments = paymentMap.get(order.id) || [];
+      return { ...order, items: itemMap.get(order.id) || [], payment: orderPayments[0], payments: orderPayments, fulfilmentGroups: groupMap.get(order.id) || [] };
+    }) as any;
   }
 
   async getCustomerOrder(owner: CustomerOwner, id: string) {
     const identifier = id.match(/^[a-f\d]{24}$/i) ? { $or: [{ _id: id }, { publicId: id }, { orderCode: id }] } : { $or: [{ publicId: id }, { orderCode: id }] };
     const order = await Order.findOne({ ...identifier, ...this.ownerWhere(owner) }).lean({ virtuals: true });
     if (!order) throw new HttpError(404, 'Order not found');
-    const [items, payment] = await Promise.all([
+    const [items, payments, fulfilmentGroups] = await Promise.all([
       OrderItem.find({ orderId: order.id }).lean({ virtuals: true }),
-      Payment.findOne({ orderId: order.id }).select('-gatewayResponse -authorizationUrl -accessCode').lean({ virtuals: true }),
+      Payment.find({ orderId: order.id }).select('-gatewayResponse -authorizationUrl -accessCode').lean({ virtuals: true }),
+      OrderFulfilmentGroup.find({ orderId: order.id }).sort({ createdAt: 1 }).lean({ virtuals: true }),
     ]);
-    return { ...order, items, payment } as any;
+    return { ...order, items, payment: payments[0], payments, fulfilmentGroups } as any;
   }
 
   async cancelCustomerOrder(owner: CustomerOwner, id: string, reason?: string) {
@@ -204,8 +213,7 @@ export class OrderService {
 
   private ownerWhere(owner: CustomerOwner) {
     if (owner.userId) return { userId: owner.userId };
-    if (owner.guestId) return { guestId: owner.guestId };
-    throw new HttpError(401, 'Authentication or guest session required');
+    throw new HttpError(401, 'Customer authentication required');
   }
 
   private async ensureGuestAccount(email: string, name: string, guestId?: string) {

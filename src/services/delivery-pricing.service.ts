@@ -1,7 +1,7 @@
 import { DEFAULT_DELIVERY_FEE_MINOR } from '@lib/constants';
 import { DeliveryPricingRule } from '@models/platform/delivery-pricing.model';
 import { DispatchHub } from '@models/platform/network.model';
-import { OperationCity, OperationState, ServiceZone } from '@models/platform/geography.model';
+import { OperationCity, OperationState } from '@models/platform/geography.model';
 import { isValidObjectId } from 'mongoose';
 
 type Coordinates = { latitude: number; longitude: number };
@@ -59,17 +59,12 @@ async function resolveOrigin(state: any, rule: any) {
 
 export async function calculateDeliveryPricing(input: {
   state: any;
-  zone?: any;
   coordinates?: Coordinates;
   defaultFeeMinor?: number;
 }) {
   const now = new Date();
   const stateId = String(input.state?.id || input.state?._id || '');
-  const rule = input.zone
-    ? await firstRule('zone', [String(input.zone.id || input.zone._id), String(input.zone.publicId || '')].filter(Boolean), now)
-    : undefined;
-  const selectedRule = rule
-    || await firstRule('state', [stateId, String(input.state.publicId || '')].filter(Boolean), now)
+  const selectedRule = await firstRule('state', [stateId, String(input.state.publicId || '')].filter(Boolean), now)
     || await firstRule('global', undefined, now);
   const fallbackFee = Number(input.defaultFeeMinor ?? DEFAULT_DELIVERY_FEE_MINOR);
   if (!selectedRule) {
@@ -126,16 +121,6 @@ export async function resolveDeliveryState(identifier: string) {
   return OperationState.findOne({
     countryCode: 'NG',
     status: 'active',
-    $or: alternatives,
-  }).lean({ virtuals: true });
-}
-
-export async function resolveDeliveryZone(identifier: string | undefined, stateId: string) {
-  if (!identifier) return undefined;
-  const alternatives: Array<Record<string, string>> = [{ publicId: identifier }];
-  if (isValidObjectId(identifier)) alternatives.push({ _id: identifier });
-  return ServiceZone.findOne({
-    status: 'active', deliveryEligible: true, stateId,
     $or: alternatives,
   }).lean({ virtuals: true });
 }

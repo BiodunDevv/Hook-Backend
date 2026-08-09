@@ -11,7 +11,6 @@ export interface CustomerAddress extends BaseEntity {
   landmark?: string;
   stateId: string;
   cityId?: string;
-  zoneId?: string;
   localGovernmentAreaId?: string;
   postalCode?: string;
   coordinates?: { latitude: number; longitude: number };
@@ -34,6 +33,8 @@ export interface CheckoutPreview extends BaseEntity {
   customerId: string;
   partnerId?: string;
   stateId: string;
+  sourceStateIds?: string[];
+  fulfilmentGroups?: Array<Record<string, unknown>>;
   cartId: string;
   cartVersion: number;
   channel: "SHOPPER_APP" | "PARTNER_ASSISTED";
@@ -151,7 +152,6 @@ const addressSchema = createSchema<CustomerAddress>({
   landmark: { type: String, maxlength: 240 },
   stateId: { type: String, required: true, index: true },
   cityId: { type: String, index: true, sparse: true },
-  zoneId: { type: String, index: true, sparse: true },
   localGovernmentAreaId: { type: String, index: true, sparse: true },
   postalCode: { type: String, maxlength: 20 },
   coordinates: { type: Object },
@@ -181,6 +181,8 @@ const previewSchema = createSchema<CheckoutPreview>({
   customerId: { type: String, required: true, index: true },
   partnerId: { type: String, index: true },
   stateId: { type: String, required: true, index: true },
+  sourceStateIds: { type: [String], default: [] },
+  fulfilmentGroups: { type: [Object], default: [] },
   cartId: { type: String, required: true, index: true },
   cartVersion: { type: Number, required: true },
   channel: {

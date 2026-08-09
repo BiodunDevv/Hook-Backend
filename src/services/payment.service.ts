@@ -38,7 +38,7 @@ export class PaymentService {
     _ledger?: Repository<EscrowLedger>,
   ) {}
 
-  async initialize(customerId: string, orderIdentifier: string) {
+  async initialize(customerId: string, orderIdentifier: string, fulfilmentGroupIdentifier?: string) {
     const order = await Order.findOne({
       ...identity(orderIdentifier),
       userId: customerId,
@@ -48,7 +48,7 @@ export class PaymentService {
       const shipment = await Shipment.findOne({ orderId: order.id, status: ShipmentStatus.AWAITING_HANDOVER_PAYMENT, releaseStatus: "AWAITING_HANDOVER_PAYMENT" }).lean();
       if (!shipment) throw new HttpError(409, "Pay-at-Handover payment is not due for this Order yet", undefined, "PAYMENT_INITIALIZATION_NOT_ALLOWED");
     }
-    return this.initializeOrder(order, customerId);
+    return this.initializeOrder(order, customerId, fulfilmentGroupIdentifier);
   }
 
   async initializeForPartner(partnerId: string, orderIdentifier: string) {
@@ -69,7 +69,7 @@ export class PaymentService {
     return this.initializeOrder(order, order.userId);
   }
 
-  private async initializeOrder(order: any, customerId: string) {
+  private async initializeOrder(order: any, customerId: string, fulfilmentGroupIdentifier?: string) {
     if (order.commercePaymentStatus === CommercePaymentStatus.CONFIRMED)
       return this.status(customerId, order.publicId || order.id);
     if (order.commerceStatus === CommerceOrderStatus.CANCELLED)
@@ -82,7 +82,10 @@ export class PaymentService {
     const customer = await User.findById(customerId).lean();
     if (!customer?.email)
       throw new HttpError(409, "Customer email is required for payment");
-    const payment = await Payment.findOne({ orderId: order.id });
+    const payment = await Payment.findOne({
+      orderId: order.id,
+      ...(fulfilmentGroupIdentifier ? { fulfilmentGroupId: fulfilmentGroupIdentifier } : { fulfilmentGroupId: { $exists: false } }),
+    });
     if (!payment)
       throw new HttpError(
         409,
@@ -97,7 +100,7 @@ export class PaymentService {
       return this.publicPayment(payment);
     const initialized = await this.provider.initialize({
       reference: payment.transactionRef,
-      amountMinor: Number(order.totalMinor),
+      amountMinor: Number(payment.amountMinor),
       currency: order.currency || "NGN",
       email: customer.email,
       callbackUrl:
@@ -106,6 +109,7 @@ export class PaymentService {
       metadata: {
         orderId: order.publicId,
         paymentId: payment.publicId,
+        fulfilmentGroupId: payment.fulfilmentGroupId,
         customerId: customer.publicId,
         channel: order.channel,
       },

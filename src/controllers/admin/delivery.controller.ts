@@ -187,16 +187,14 @@ export class AdminDeliveryController {
   preview = async (req: Request, res: Response) => {
     const state = await OperationState.findOne({ $or: identity(String(req.body.stateId)), status: 'active', deliveryEnabled: { $ne: false } }).lean({ virtuals: true });
     if (!state) throw new HttpError(409, 'Selected State is not delivery-enabled', undefined, 'ADDRESS_OUTSIDE_COVERAGE');
-    const zone = req.body.zoneId ? await import('@services/delivery-pricing.service').then(({ resolveDeliveryZone }) => resolveDeliveryZone(req.body.zoneId, String(state.id))) : undefined;
-    const pricing = await calculateDeliveryPricing({ state, zone, coordinates: req.body.coordinates, defaultFeeMinor: (await CommerceSettings.findOne({ key: 'commerce' }).lean())?.defaultDeliveryFeeMinor });
+    const pricing = await calculateDeliveryPricing({ state, coordinates: req.body.coordinates, defaultFeeMinor: (await CommerceSettings.findOne({ key: 'commerce' }).lean())?.defaultDeliveryFeeMinor });
     sendSuccess(res, pricing);
   };
 
   private async assertScopeTarget(scope: string, scopeId?: string) {
     if (scope === 'global') return;
-    if (!scopeId) throw new HttpError(400, 'A State or Zone is required for this pricing scope');
-    const model = scope === 'state' ? OperationState : (await import('@models/platform/geography.model')).ServiceZone;
-    const exists = await (model as any).exists({
+    if (!scopeId) throw new HttpError(400, 'A State is required for this pricing scope');
+    const exists = await OperationState.exists({
       $or: identity(String(scopeId)),
     });
     if (!exists) throw new HttpError(404, 'Pricing scope target not found');

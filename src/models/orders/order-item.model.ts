@@ -1,6 +1,11 @@
 import { BaseEntity, createModel, createSchema } from "@models/base.model";
 
 export interface OrderItem extends BaseEntity {
+  fulfilmentGroupId?: string;
+  shipmentId?: string;
+  deliveryStatus?: "PENDING" | "IN_FULFILMENT" | "IN_TRANSIT" | "DELIVERED" | "COLLECTED" | "RESOLVED";
+  inTransitAt?: Date;
+  deliveredAt?: Date;
   publicId?: string;
   orderId: string;
   productId: string;
@@ -36,6 +41,11 @@ export interface OrderItem extends BaseEntity {
 }
 
 const OrderItemSchema = createSchema<OrderItem>({
+  fulfilmentGroupId: { type: String, index: true, sparse: true },
+  shipmentId: { type: String, index: true, sparse: true },
+  deliveryStatus: { type: String, enum: ["PENDING", "IN_FULFILMENT", "IN_TRANSIT", "DELIVERED", "COLLECTED", "RESOLVED"], default: "PENDING", index: true },
+  inTransitAt: { type: Date },
+  deliveredAt: { type: Date },
   publicId: { type: String, unique: true, sparse: true, index: true },
   orderId: { type: String, required: true, index: true },
   productId: { type: String, required: true, index: true },

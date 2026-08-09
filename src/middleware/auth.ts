@@ -6,7 +6,6 @@ import { isActiveAccount } from '@lib/account-state';
 import { AccountSession } from '@models/platform/session.model';
 import { User } from '@models/users/user.model';
 import { resolveAccessContext } from '@services/access-control.service';
-import { resolveGuestSession } from '@services/guest-session.service';
 import { HttpError } from '@utils/http';
 
 interface TokenPayload {
@@ -90,31 +89,10 @@ export async function optionalAuth(req: Request, _res: Response, next: NextFunct
   next();
 }
 
-export function optionalCustomerIdentity(req: Request, res: Response, next: NextFunction) {
-  return optionalAuth(req, res, () => {
-    // A valid customer access token is authoritative. This avoids resolving
-    // a stale guest token that the app may still retain for basket conversion.
-    if (req.user) return next();
-
-    const guestToken = req.header('x-guest-session')?.trim();
-    if (!guestToken) return next();
-
-    resolveGuestSession(guestToken)
-      .then((guest) => {
-        req.guestId = guest.publicId;
-        // Lean Mongoose documents do not always expose the virtual `id` field.
-        // Keep the persisted Mongo identifier as the internal cart owner key.
-        req.guestSessionId = String(guest.id || guest._id);
-        next();
-      })
-      .catch(next);
-  });
-}
-
 export function requireCustomerIdentity(req: Request, res: Response, next: NextFunction) {
-  optionalCustomerIdentity(req, res, () => {
-    if (req.user?.accountType === AccountType.CUSTOMER || req.guestSessionId) return next();
-    return next(new HttpError(401, 'Customer or guest session required', undefined, 'AUTHENTICATION_REQUIRED'));
+  requireAuth(req, res, () => {
+    if (req.user?.accountType === AccountType.CUSTOMER) return next();
+    return next(new HttpError(403, 'Customer account required', undefined, 'ACCESS_DENIED'));
   });
 }
 

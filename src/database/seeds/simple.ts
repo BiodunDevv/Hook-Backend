@@ -16,9 +16,11 @@ import { NIGERIAN_STATES } from '@lib/nigeria-states';
 import { hashPassword } from '@lib/security';
 import { Category } from '@models/categories/category.model';
 import { CommercePolicyVersion, CommerceSettings } from '@models/commerce/commerce.model';
+import { Cart } from '@models/cart/cart.model';
+import { CartItem } from '@models/cart/cart-item.model';
 import { ProductSubmission, ProductVariant } from '@models/catalog/catalog.model';
 import { MarketVendor, VendorCollection, VendorInvitation, VendorPaymentRecord } from '@models/catalog/market-vendor.model';
-import { OperationCity, OperationState, ServiceZone } from '@models/platform/geography.model';
+import { OperationCity, OperationState } from '@models/platform/geography.model';
 import { DeliveryPricingRule } from '@models/platform/delivery-pricing.model';
 import { DispatchHub, Market } from '@models/platform/network.model';
 import { Role } from '@models/platform/access.model';
@@ -119,6 +121,7 @@ async function seedStates() {
     countryCode: 'NG',
     status: 'active' as const,
     deliveryEnabled: true,
+    operationsEnabled: false,
     timezone: 'Africa/Lagos',
     currency: 'NGN',
     deliveryPromiseHours: 48,
@@ -337,7 +340,6 @@ async function seedNonStaffAccounts(adminId: string, markets: any[], password: s
     name: 'Hook Partner Lagos Island',
     stateId: String(market.stateId),
     cityId: String(market.cityId),
-    zoneId: market.zoneId ? String(market.zoneId) : undefined,
     address: market.address,
     coordinates: market.coordinates,
     contact: { email: partner.email, phone: partner.phone },
@@ -374,7 +376,7 @@ async function seedCategories() {
 async function seedNetwork(states: any[]) {
   const stateByCode = new Map(states.map((state) => [state.code, state]));
   const markets: any[] = [];
-  const networkByCity = new Map<string, { city: any; zone: any; hub: any }>();
+  const networkByCity = new Map<string, { city: any; hub: any }>();
   for (const entry of MARKET_SEEDS) {
     const state = stateByCode.get(entry.stateCode);
     if (!state) continue;
@@ -384,20 +386,17 @@ async function seedNetwork(states: any[]) {
       const city = await OperationCity.create({
         publicId: await nextPublicId('city'), stateId: idOf(state), name: entry.city, code: entry.cityCode, status: 'active',
       });
-      const zone = await ServiceZone.create({
-        publicId: await nextPublicId('zone'), stateId: idOf(state), cityId: idOf(city), name: `${entry.city} Central`, code: `${entry.cityCode}-CENTRAL`, status: 'active', deliveryEligible: true,
-      });
       const hub = await DispatchHub.create({
-        publicId: await nextPublicId('hub'), stateId: idOf(state), cityId: idOf(city), zoneIds: [idOf(zone)], name: `${entry.city} Dispatch Hub`, address: entry.address, coordinates: entry.stateCode === 'LA' ? { lat: 6.45, lng: 3.39 } : undefined, marketIds: [], staffIds: [], status: 'active',
+        publicId: await nextPublicId('hub'), stateId: idOf(state), cityId: idOf(city), zoneIds: [], name: `${entry.city} Dispatch Hub`, address: entry.address, coordinates: entry.stateCode === 'LA' ? { lat: 6.45, lng: 3.39 } : undefined, marketIds: [], staffIds: [], status: 'active',
       });
       city.defaultHubId = idOf(hub);
       await city.save();
-      network = { city, zone, hub };
+      network = { city, hub };
       networkByCity.set(networkKey, network);
     }
-    const { city, zone, hub } = network;
+    const { city, hub } = network;
     const market = await Market.create({
-      publicId: await nextPublicId('market'), name: entry.market, normalizedName: entry.market.toLowerCase(), stateId: idOf(state), cityId: idOf(city), zoneId: idOf(zone), hubId: idOf(hub), address: entry.address, imageUrl: entry.image, shortDisplayName: entry.market.replace(' Market', '\nMarket'), discoveryColor: entry.color, isFeatured: entry.priority < 10, displayPriority: entry.priority, status: 'active',
+      publicId: await nextPublicId('market'), name: entry.market, normalizedName: entry.market.toLowerCase(), stateId: idOf(state), cityId: idOf(city), hubId: idOf(hub), address: entry.address, imageUrl: entry.image, shortDisplayName: entry.market.replace(' Market', '\nMarket'), discoveryColor: entry.color, isFeatured: entry.priority < 10, displayPriority: entry.priority, status: 'active',
     });
     hub.marketIds = [...new Set([...(hub.marketIds || []), idOf(market)])];
     await hub.save();
@@ -601,6 +600,51 @@ async function seedCommerceDefaults(adminId: string) {
   });
 }
 
+async function seedCustomerCart(customer: any, products: any[]) {
+  const selected: any[] = [];
+  for (const product of products) {
+    if (!selected.some((item) => String(item.sourceStateId) === String(product.sourceStateId))) {
+      selected.push(product);
+    }
+    if (selected.length === 2) break;
+  }
+  if (!selected.length) return;
+  const subtotalMinor = selected.reduce((sum, product) => sum + Number(product.effectivePriceMinor || product.sellingPriceMinor || 0), 0);
+  const cart = await Cart.create({
+    publicId: await nextPublicId('cart'),
+    ownerType: 'customer',
+    customerId: idOf(customer),
+    userId: idOf(customer),
+    version: 1,
+    status: 'active',
+    subtotal: subtotalMinor / 100,
+    deliveryFee: 0,
+    total: subtotalMinor / 100,
+    isCheckedOut: false,
+  });
+  for (const product of selected) {
+    const variant = await ProductVariant.findOne({ productId: idOf(product), active: true }).lean();
+    const unitPriceMinor = Number(product.effectivePriceMinor || product.sellingPriceMinor || 0);
+    await CartItem.create({
+      publicId: await nextPublicId('cartItem'),
+      cartId: idOf(cart),
+      productId: idOf(product),
+      quantity: 1,
+      unitPrice: unitPriceMinor / 100,
+      totalPrice: unitPriceMinor / 100,
+      selectedVariants: { color: '#111111', size: '42' },
+      variantKey: variant ? idOf(variant) : 'default',
+      variantId: variant ? idOf(variant) : undefined,
+      marketId: String(product.marketId),
+      stateId: String(product.sourceStateId),
+      unitPriceMinor,
+      totalPriceMinor: unitPriceMinor,
+      currency: 'NGN',
+      productVersion: Number(product.catalogVersion || 1),
+    });
+  }
+}
+
 export async function runSimpleSeed() {
   assertSeedResetAllowed();
   await connectDatabase();
@@ -614,11 +658,19 @@ export async function runSimpleSeed() {
   const locationResult = await refreshNigerianLocationCatalog();
   const categories = await seedCategories();
   const markets = await seedNetwork(states);
+  const operatingStateIds = [...new Set(markets.map((market) => String(market.stateId)))];
+  if (operatingStateIds.length) {
+    await OperationState.updateMany(
+      { _id: { $in: operatingStateIds } },
+      { $set: { operationsEnabled: true } },
+    );
+  }
   const staff = await seedStaffAccounts(states, markets, password);
   const accounts = await seedNonStaffAccounts(idOf(admin), markets, password);
   const vendors = await seedMarketVendors(markets, accounts.runnerProfile);
   const products = await seedProducts(categories, markets, states, idOf(admin), vendors, accounts.runnerProfile);
   await seedCommerceDefaults(idOf(admin));
+  await seedCustomerCart(accounts.customer, products);
 
   console.log('Hook seed completed');
   console.log(`  Admin: ${admin.email}`);
@@ -633,6 +685,7 @@ export async function runSimpleSeed() {
   console.log(`  Market vendors: ${vendors.length}`);
   console.log(`  Categories: ${categories.length}`);
   console.log(`  Published products: ${products.length}`);
+  console.log('  Customer cart: multi-state sample ready');
 }
 
 if (require.main === module) {

@@ -1,11 +1,10 @@
 import type { Server as HttpServer } from 'http';
-import { createHash } from 'crypto';
 import jwt from 'jsonwebtoken';
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import { parseOrigins, jwtSecret } from '@config/env';
 import { AccountType } from '@lib/constants';
 import { isActiveAccount } from '@lib/account-state';
-import { AccountSession, GuestSession } from '@models/platform/session.model';
+import { AccountSession } from '@models/platform/session.model';
 import { User } from '@models/users/user.model';
 import { resolveAccessContext } from '@services/access-control.service';
 import {
@@ -44,7 +43,6 @@ export interface RealtimeEvent {
 
 export interface RealtimeTargets {
   accountId?: string;
-  guestId?: string;
   stateId?: string;
   hubId?: string;
   public?: boolean;
@@ -52,9 +50,8 @@ export interface RealtimeTargets {
 }
 
 type SocketIdentity = {
-  kind: 'customer' | 'staff' | 'guest' | 'public';
+  kind: 'customer' | 'staff' | 'public';
   accountId?: string;
-  guestId?: string;
   stateIds?: string[];
   hubIds?: string[];
   isSuperAdmin?: boolean;
@@ -77,12 +74,6 @@ function tokenFromSocket(socket: Socket) {
     ? header.slice(7)
     : '';
   return authToken || headerToken;
-}
-
-function guestTokenFromSocket(socket: Socket) {
-  const auth = socket.handshake.auth as Record<string, unknown>;
-  const token = typeof auth?.guestSessionToken === 'string' ? auth.guestSessionToken : '';
-  return token || String(socket.handshake.headers['x-guest-session'] || '');
 }
 
 async function authenticateSocket(socket: Socket): Promise<SocketIdentity> {
@@ -118,18 +109,6 @@ async function authenticateSocket(socket: Socket): Promise<SocketIdentity> {
     return { kind: user.accountType === AccountType.CUSTOMER ? 'customer' : 'staff', accountId: user._id.toString() };
   }
 
-  const guestToken = guestTokenFromSocket(socket);
-  if (guestToken) {
-    const guest = await GuestSession.findOne({
-      tokenHash: createHash('sha256').update(guestToken).digest('hex'),
-      revokedAt: { $exists: false },
-      expiresAt: { $gt: new Date() },
-    }).lean();
-    if (!guest) throw new Error('Guest session is invalid or expired');
-    void GuestSession.updateOne({ _id: guest._id }, { $set: { lastSeenAt: new Date() } });
-    return { kind: 'guest', guestId: guest.publicId };
-  }
-
   return { kind: 'public' };
 }
 
@@ -154,7 +133,7 @@ class RealtimeService {
       } catch (error) {
         // Public sockets are useful for catalog invalidation, but an invalid
         // credential must never be downgraded to a private identity.
-        if (tokenFromSocket(socket) || guestTokenFromSocket(socket)) {
+        if (tokenFromSocket(socket)) {
           next(error instanceof Error ? error : new Error('Socket authentication failed'));
           return;
         }
@@ -165,6 +144,10 @@ class RealtimeService {
 
     this.io.on('connection', (socket) => {
       const identity = socket.data.identity as SocketIdentity;
+      const accessToken = tokenFromSocket(socket);
+      if (accessToken) {
+        try { socket.data.sessionId = (jwt.decode(accessToken) as AccessTokenPayload | null)?.sid; } catch { /* authenticated above */ }
+      }
       socket.join('public');
       if (identity.accountId) {
         socket.join(room('account', identity.accountId));
@@ -176,7 +159,6 @@ class RealtimeService {
           identity.hubIds?.forEach((id) => socket.join(room('hub', id)));
         }
       }
-      if (identity.guestId) socket.join(room('guest', identity.guestId));
       socket.emit('realtime.ready', { version: 1, occurredAt: new Date().toISOString() });
     });
 
@@ -222,7 +204,6 @@ class RealtimeService {
       else rooms.add('super_admin');
     }
     if (targets.accountId) rooms.add(room('account', targets.accountId));
-    if (targets.guestId) rooms.add(room('guest', targets.guestId));
     if (targets.stateId) rooms.add(room('state', targets.stateId));
     if (targets.hubId) rooms.add(room('hub', targets.hubId));
     if (payload.scope?.stateId) rooms.add(room('state', payload.scope.stateId));
@@ -234,6 +215,13 @@ class RealtimeService {
   close() {
     this.io?.close();
     this.io = undefined;
+  }
+
+  disconnectSession(sessionId: string) {
+    if (!this.io) return;
+    for (const socket of this.io.sockets.sockets.values()) {
+      if (socket.data.sessionId === sessionId) socket.disconnect(true);
+    }
   }
 }
 

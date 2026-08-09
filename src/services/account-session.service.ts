@@ -31,6 +31,7 @@ export async function presentAccountUser(user: User) {
     email: user.email,
     firstName: user.firstName,
     lastName: user.lastName,
+    phone: user.phone,
     role: user.role,
     accountType: user.accountType,
     accountStatus: user.accountStatus,

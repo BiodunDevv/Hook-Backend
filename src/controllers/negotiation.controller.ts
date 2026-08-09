@@ -5,10 +5,7 @@ import { sendCreated, sendSuccess } from '@utils/http';
 import { recordAudit } from '@services/platform-audit.service';
 
 function identity(req: Request) {
-  return {
-    customerId: req.user?.sub,
-    guestSessionId: req.guestSessionId,
-  };
+  return { customerId: req.user!.sub };
 }
 
 export class NegotiationController {

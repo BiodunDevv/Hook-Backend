@@ -100,7 +100,9 @@ export function publicCart<T extends Record<string, any> | null | undefined>(car
     deliveryFeeMinor,
     totalMinor,
     items: lines,
-    stateGroups,
+    sourceStateCount: new Set(
+      lines.map((item: Record<string, any>) => item.stateId).filter(Boolean),
+    ).size,
   } as unknown as T;
 }
 

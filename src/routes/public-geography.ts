@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { isValidObjectId } from 'mongoose';
-import { OperationCity, OperationLocalGovernment, OperationState, ServiceZone } from '@models/platform/geography.model';
+import { OperationCity, OperationLocalGovernment, OperationState } from '@models/platform/geography.model';
 import { Market } from '@models/platform/network.model';
 import { Category } from '@models/categories/category.model';
 import { Product } from '@models/products/product.model';
@@ -8,6 +8,7 @@ import { ProductStatus } from '@lib/constants';
 import { presentMarketRecords } from '@services/platform-presentation.service';
 import { asyncHandler, HttpError, sendSuccess } from '@utils/http';
 import { PublicCatalogController } from '@controllers/public-catalog.controller';
+import { PublicController } from '@controllers/public.controller';
 import { publicCatalogCache } from '@lib/ttl-cache';
 
 async function resolveId(model: any, identifier: unknown, extraField?: string) {
@@ -42,12 +43,14 @@ function safeMarket(market: any) {
 export function createPublicGeographyRouter() {
   const router = Router();
   const catalog = new PublicCatalogController();
+  const publicController = new PublicController();
   router.get('/home', asyncHandler(catalog.home));
   router.get('/products', asyncHandler(catalog.products));
   router.get('/products/:id', asyncHandler(catalog.product));
   router.get('/categories', asyncHandler(catalog.categories));
   router.get('/search', asyncHandler(catalog.search));
-  router.get('/states', asyncHandler(async (_req, res) => {
+  router.get('/operating-states', asyncHandler(publicController.getOperatingStates));
+  const deliveryStates = asyncHandler(async (_req, res) => {
     const cacheKey = 'public:states';
     const cached = publicCatalogCache.get(cacheKey);
     if (cached) {
@@ -70,8 +73,10 @@ export function createPublicGeographyRouter() {
     }));
     publicCatalogCache.set(cacheKey, response);
     sendSuccess(res, response);
-  }));
-  router.get('/states/:stateId/lgas', asyncHandler(async (req, res) => {
+  });
+  router.get('/delivery-states', deliveryStates);
+  router.get('/states', deliveryStates);
+  const deliveryLgas = asyncHandler(async (req, res) => {
     const cacheKey = `public:lgas:${req.params.stateId}`;
     const cached = publicCatalogCache.get(cacheKey);
     if (cached) {
@@ -95,17 +100,13 @@ export function createPublicGeographyRouter() {
     };
     publicCatalogCache.set(cacheKey, response);
     sendSuccess(res, response);
-  }));
+  });
+  router.get('/delivery-states/:stateId/lgas', deliveryLgas);
+  router.get('/states/:stateId/lgas', deliveryLgas);
   router.get('/cities', asyncHandler(async (req, res) => {
     const filter: Record<string, unknown> = { status: 'active' };
     if (req.query.stateId) filter.stateId = req.query.stateId;
     sendSuccess(res, await OperationCity.find(filter).select('publicId stateId name code').sort({ name: 1 }).lean({ virtuals: true }));
-  }));
-  router.get('/zones', asyncHandler(async (req, res) => {
-    const filter: Record<string, unknown> = { status: 'active', deliveryEligible: true };
-    if (req.query.stateId) filter.stateId = req.query.stateId;
-    if (req.query.cityId) filter.cityId = req.query.cityId;
-    sendSuccess(res, await ServiceZone.find(filter).select('publicId stateId cityId name code deliveryEligible').sort({ name: 1 }).lean({ virtuals: true }));
   }));
   router.get('/markets', asyncHandler(async (req, res) => {
     const cacheKey = `public:markets:${String(req.query.stateCode || req.query.stateId || 'all')}:${String(req.query.cityId || 'all')}`;

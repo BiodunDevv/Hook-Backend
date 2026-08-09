@@ -4,6 +4,7 @@ import { BaseEntity, createModel, createSchema } from "@models/base.model";
 export interface Payment extends BaseEntity {
   publicId?: string;
   orderId?: string;
+  fulfilmentGroupId?: string;
   giftId?: string;
   resourceType: "order" | "gift";
   transactionRef: string;
@@ -44,7 +45,8 @@ export interface Payment extends BaseEntity {
 
 const PaymentSchema = createSchema<Payment>({
   publicId: { type: String, unique: true, sparse: true, index: true },
-  orderId: { type: String, unique: true, sparse: true, index: true },
+  orderId: { type: String, sparse: true, index: true },
+  fulfilmentGroupId: { type: String, unique: true, sparse: true, index: true },
   giftId: { type: String, unique: true, sparse: true, index: true },
   resourceType: {
     type: String,

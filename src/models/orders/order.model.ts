@@ -10,6 +10,8 @@ export interface Order extends BaseEntity {
   publicId?: string;
   channel?: "SHOPPER_APP" | "PARTNER_ASSISTED";
   sourceStateId?: string;
+  sourceStateIds?: string[];
+  fulfilmentGroupIds?: string[];
   initiatingPartnerId?: string;
   deliveryMethod?: "HOME_DELIVERY" | "PARTNER_PICKUP";
   commercePaymentMethod?: "PREPAID" | "PAY_AT_HANDOVER";
@@ -23,6 +25,8 @@ export interface Order extends BaseEntity {
     | "READY_FOR_CONSOLIDATION"
     | "READY_FOR_DISPATCH"
     | "IN_TRANSIT"
+    | "PARTIALLY_IN_TRANSIT"
+    | "PARTIALLY_DELIVERED"
     | "DELIVERED"
     | "COLLECTED"
     | "COMPLETED"
@@ -119,6 +123,8 @@ const OrderSchema = createSchema<Order>({
     index: true,
   },
   sourceStateId: { type: String, index: true, sparse: true },
+  sourceStateIds: { type: [String], default: [], index: true },
+  fulfilmentGroupIds: { type: [String], default: [] },
   initiatingPartnerId: { type: String, index: true, sparse: true },
   deliveryMethod: { type: String, enum: ["HOME_DELIVERY", "PARTNER_PICKUP"] },
   commercePaymentMethod: {
@@ -138,6 +144,8 @@ const OrderSchema = createSchema<Order>({
       "READY_FOR_CONSOLIDATION",
       "READY_FOR_DISPATCH",
       "IN_TRANSIT",
+      "PARTIALLY_IN_TRANSIT",
+      "PARTIALLY_DELIVERED",
       "DELIVERED",
       "COLLECTED",
       "COMPLETED",

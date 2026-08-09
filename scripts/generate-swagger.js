@@ -13,7 +13,7 @@ const tags = [
   ['Negotiations', 'Customer AI negotiation sessions.'],
   ['Payments', 'Customer payment initialization, verification, and status checks.'],
   ['Notifications', 'Authenticated customer notifications.'],
-  ['Devices', 'Customer and guest device token registration for push notifications.'],
+  ['Devices', 'Authenticated customer device token registration for push notifications.'],
   ['Vendor Portal', 'Vendor profile, catalog, order, settlement, and bank detail endpoints.'],
   ['Logistics', 'Driver, field-agent, and admin assignment workflows.'],
   ['Uploads', 'Authenticated image uploads.'],
@@ -82,7 +82,6 @@ const schemas = {
     properties: {
       email: { type: 'string', format: 'email', example: 'admin@gmail.com' },
       password: { type: 'string', example: '123456' },
-      guestId: { type: 'string', description: 'Optional guest id to merge guest cart/orders after login.' },
     },
   },
   GoogleAuthRequest: {
@@ -93,7 +92,6 @@ const schemas = {
         type: 'string',
         description: 'Google ID token returned by the iOS or Android Google OAuth client.',
       },
-      guestId: { type: 'string', description: 'Optional guest id to merge guest cart/orders after Google sign-in.' },
     },
   },
   AccountInvitationAcceptRequest: {
@@ -115,7 +113,6 @@ const schemas = {
     properties: {
       email: { type: 'string', format: 'email', example: 'shopper@example.com' },
       password: { type: 'string', minLength: 6, example: '123456789' },
-      guestId: { type: 'string' },
     },
   },
   SignupVerifyRequest: {
@@ -134,7 +131,6 @@ const schemas = {
       firstName: { type: 'string', example: 'Hook' },
       lastName: { type: 'string', example: 'Shopper' },
       phone: { type: 'string', example: '+2348012345678' },
-      guestId: { type: 'string' },
     },
   },
   RegisterRequest: {
@@ -492,16 +488,6 @@ function query(name, schema = { type: 'string' }, description = `${name} filter`
   return { name, in: 'query', required: false, schema, description };
 }
 
-function guestHeader() {
-  return {
-    name: 'X-Guest-Id',
-    in: 'header',
-    required: false,
-    schema: { type: 'string' },
-    description: 'Guest session id. Use this instead of Bearer auth for guest cart, checkout, orders, notifications, and device registration.',
-  };
-}
-
 function boothSessionHeader(required = true) {
   return {
     name: 'X-Booth-Session',
@@ -719,35 +705,29 @@ add('get', `${apiPrefix}/search`, op('Public Marketplace', 'Search products and 
 add('get', `${apiPrefix}/search/suggestions`, op('Public Marketplace', 'Get search suggestions', { public: true, parameters: [query('q')] }));
 
 // Customer
-add('get', `${apiPrefix}/cart`, op('Customer Cart', 'Get the backend-priced basket grouped by source State.', { parameters: [guestHeader()] }));
-add('post', `${apiPrefix}/cart/items`, op('Customer Cart', 'Add item to cart', { parameters: [guestHeader()], requestBody: body('CartItemRequest') }));
-add('patch', `${apiPrefix}/cart/items/{itemId}`, op('Customer Cart', 'Update cart item quantity', { parameters: [guestHeader(), param('itemId', 'Cart item id')], requestBody: body('QuantityRequest') }));
-add('delete', `${apiPrefix}/cart/items/{itemId}`, op('Customer Cart', 'Remove item from cart', { parameters: [guestHeader(), param('itemId', 'Cart item id')] }));
-add('delete', `${apiPrefix}/cart`, op('Customer Cart', 'Clear current cart', { parameters: [guestHeader()] }));
-add('delete', `${apiPrefix}/cart/states/{stateId}`, op('Customer Cart', 'Clear one State group from the current basket.', { parameters: [guestHeader(), param('stateId', 'STA public ID')] }));
+add('get', `${apiPrefix}/cart`, op('Customer Cart', 'Get the authenticated customer cart.'));
+add('post', `${apiPrefix}/cart/items`, op('Customer Cart', 'Add an authenticated customer cart item.', { requestBody: body('CartItemRequest') }));
+add('patch', `${apiPrefix}/cart/items/{itemId}`, op('Customer Cart', 'Update cart item quantity.', { parameters: [param('itemId', 'Cart item id')], requestBody: body('QuantityRequest') }));
+add('delete', `${apiPrefix}/cart/items/{itemId}`, op('Customer Cart', 'Remove a cart item.', { parameters: [param('itemId', 'Cart item id')] }));
+add('delete', `${apiPrefix}/cart`, op('Customer Cart', 'Clear the authenticated customer cart.'));
 add('get', `${apiPrefix}/commerce/config`, op('Customer Commerce', 'Get active policy versions and checkout capabilities.'));
-add('get', `${apiPrefix}/orders`, op('Customer Orders', 'List current shopper or guest orders', { parameters: [guestHeader()] }));
-add('get', `${apiPrefix}/orders/{id}`, op('Customer Orders', 'Get current shopper or guest order detail', { parameters: [guestHeader(), param('id', 'Order id')] }));
-add('post', `${apiPrefix}/orders/{id}/cancel`, op('Customer Orders', 'Cancel current shopper or guest order', { parameters: [guestHeader(), param('id', 'Order id')], requestBody: { required: false, content: { 'application/json': { schema: { type: 'object', properties: { reason: { type: 'string' } } } } } } }));
-add('get', `${apiPrefix}/negotiations`, op('Negotiations', 'List current shopper or guest negotiations', { parameters: [guestHeader()] }));
-add('post', `${apiPrefix}/negotiations`, op('Negotiations', 'Start negotiation', { parameters: [guestHeader()], requestBody: body('NegotiationRequest') }));
-add('get', `${apiPrefix}/negotiations/{id}`, op('Negotiations', 'Get negotiation detail', { parameters: [guestHeader(), param('id', 'Negotiation id')] }));
-add('post', `${apiPrefix}/negotiations/{id}/offers`, op('Negotiations', 'Submit a deterministic negotiation offer', { parameters: [guestHeader(), param('id', 'NEG public ID')], requestBody: body('NegotiationCounterRequest') }));
-add('post', `${apiPrefix}/negotiations/{id}/accept`, op('Negotiations', 'Accept negotiation counter', { parameters: [guestHeader(), param('id', 'Negotiation id')] }));
+add('get', `${apiPrefix}/orders`, op('Customer Orders', 'List authenticated customer orders.'));
+add('get', `${apiPrefix}/orders/{id}`, op('Customer Orders', 'Get an owned customer order.', { parameters: [param('id', 'Order id')] }));
+add('post', `${apiPrefix}/orders/{id}/cancel`, op('Customer Orders', 'Cancel an eligible owned order.', { parameters: [param('id', 'Order id')], requestBody: { required: false, content: { 'application/json': { schema: { type: 'object', properties: { reason: { type: 'string' } } } } } } }));
 add('post', `${apiPrefix}/payments/initialize`, op('Payments', 'Initialize Paystack Hosted Checkout from an immutable Order amount.', { requestBody: body('PaymentInitializeRequest') }));
 add('get', `${apiPrefix}/payments/{orderId}`, op('Payments', 'Poll safe payment status; this endpoint never confirms payment.', { parameters: [param('orderId', 'ORD public ID')] }));
 add('get', `${apiPrefix}/payments/orders/{orderId}/status`, op('Payments', 'Compatibility alias for safe Order payment polling.', { parameters: [param('orderId', 'ORD public ID')] }));
-add('post', `${apiPrefix}/orders/{id}/refunds`, op('Customer Orders', 'Request a support-reviewed refund against captured funds', { parameters: [guestHeader(), param('id', 'Order id')] }));
+add('post', `${apiPrefix}/orders/{id}/refunds`, op('Customer Orders', 'Request a support-reviewed refund against captured funds', { parameters: [param('id', 'Order id')] }));
 add('post', `${apiPrefix}/support/account-deletion`, op('Authentication', 'Open a support-managed deletion request with a cooling-off period'));
-add('post', `${apiPrefix}/analytics/checkout-events`, op('Payments', 'Record a non-sensitive checkout funnel event', { parameters: [guestHeader()] }));
-add('get', `${apiPrefix}/notifications`, op('Notifications', 'List notifications', { parameters: [guestHeader()] }));
-add('patch', `${apiPrefix}/notifications/read-all`, op('Notifications', 'Mark all notifications as read', { parameters: [guestHeader()] }));
-add('delete', `${apiPrefix}/notifications/clear`, op('Notifications', 'Clear all notifications', { parameters: [guestHeader()] }));
-add('get', `${apiPrefix}/notifications/{id}`, op('Notifications', 'Get notification detail', { parameters: [guestHeader(), param('id', 'Notification id')] }));
-add('patch', `${apiPrefix}/notifications/{id}/read`, op('Notifications', 'Mark notification as read', { parameters: [guestHeader(), param('id', 'Notification id')] }));
-add('delete', `${apiPrefix}/notifications/{id}`, op('Notifications', 'Delete notification', { parameters: [guestHeader(), param('id', 'Notification id')] }));
-add('post', `${apiPrefix}/devices/register`, op('Devices', 'Register Expo push device token', { parameters: [guestHeader()], requestBody: body('DeviceRegisterRequest') }));
-add('post', `${apiPrefix}/devices/unregister`, op('Devices', 'Unregister Expo push device token', { parameters: [guestHeader()], requestBody: body('DeviceUnregisterRequest', false) }));
+add('post', `${apiPrefix}/analytics/checkout-events`, op('Payments', 'Record an authenticated non-sensitive checkout event.'));
+add('get', `${apiPrefix}/notifications`, op('Notifications', 'List customer notifications.'));
+add('patch', `${apiPrefix}/notifications/read-all`, op('Notifications', 'Mark all notifications as read.'));
+add('delete', `${apiPrefix}/notifications/clear`, op('Notifications', 'Clear all notifications.'));
+add('get', `${apiPrefix}/notifications/{id}`, op('Notifications', 'Get notification detail.', { parameters: [param('id', 'Notification id')] }));
+add('patch', `${apiPrefix}/notifications/{id}/read`, op('Notifications', 'Mark notification as read.', { parameters: [param('id', 'Notification id')] }));
+add('delete', `${apiPrefix}/notifications/{id}`, op('Notifications', 'Delete notification.', { parameters: [param('id', 'Notification id')] }));
+add('post', `${apiPrefix}/devices/register`, op('Devices', 'Register an authenticated customer push token.', { requestBody: body('DeviceRegisterRequest') }));
+add('post', `${apiPrefix}/devices/unregister`, op('Devices', 'Unregister an authenticated customer push token.', { requestBody: body('DeviceUnregisterRequest', false) }));
 
 // Vendor
 add('post', `${apiPrefix}/vendors/me/register`, op('Vendor Portal', 'Register current user as vendor', { requestBody: body('VendorRegistrationRequest') }));
@@ -843,13 +823,6 @@ add('patch', `${apiPrefix}/admin/delivery/states/{id}`, op('Delivery Coverage', 
 add('post', `${apiPrefix}/admin/delivery/locations/refresh`, op('Delivery Coverage', 'Refresh the cached Nigerian State, capital, and Local Government catalog.', { requestBody: body('AuditReasonRequest', false) }));
 add('post', `${apiPrefix}/admin/delivery/preview`, op('Delivery Coverage', 'Preview the effective delivery fee for a destination.'));
 
-add('post', `${apiPrefix}/guest-sessions`, op('Guest Sessions', 'Issue an opaque backend-managed guest session'));
-add('get', `${apiPrefix}/guest-sessions/current`, op('Guest Sessions', 'Restore the current guest session', {
-  parameters: [{ in: 'header', name: 'X-Guest-Session', required: true, schema: { type: 'string' } }],
-}));
-add('delete', `${apiPrefix}/guest-sessions/current`, op('Guest Sessions', 'Revoke the current guest session', {
-  parameters: [{ in: 'header', name: 'X-Guest-Session', required: true, schema: { type: 'string' } }],
-}));
 for (const resource of ['states', 'cities', 'zones', 'markets']) {
   add('get', `${apiPrefix}/public/${resource}`, op('Public Geography', `List active public ${resource}`));
   add('get', `${apiPrefix}/public/${resource}/{id}`, op('Public Geography', `Get active public ${resource.slice(0, -1)}`, {
@@ -949,13 +922,9 @@ add('post', `${apiPrefix}/negotiations/{id}/close`, op('AI Negotiation', 'Close 
 for (const method of ['get', 'post']) add(method, `${apiPrefix}/addresses`, op('Customer Commerce', `${method === 'get' ? 'List' : 'Create'} customer-owned delivery addresses.`));
 for (const method of ['patch', 'delete']) add(method, `${apiPrefix}/addresses/{id}`, op('Customer Commerce', `${method === 'patch' ? 'Update' : 'Archive'} an owned address.`, { parameters: [param('id', 'ADR public ID')] }));
 add('post', `${apiPrefix}/addresses/{id}/default`, op('Customer Commerce', 'Set the customer default address.', { parameters: [param('id', 'ADR public ID')] }));
-add('get', `${apiPrefix}/cart`, op('Customer Commerce', 'Get the backend-owned basket grouped by source State. Guests use X-Guest-Session.'));
-add('post', `${apiPrefix}/cart/items`, op('Customer Commerce', 'Add a backend-priced catalog line to the basket.'));
-add('patch', `${apiPrefix}/cart/items/{id}`, op('Customer Commerce', 'Update a basket line and invalidate incompatible quotes.', { parameters: [param('id', 'CTI public ID')] }));
-add('delete', `${apiPrefix}/cart/items/{id}`, op('Customer Commerce', 'Remove a basket line.', { parameters: [param('id', 'CTI public ID')] }));
-add('delete', `${apiPrefix}/cart/states/{stateId}`, op('Customer Commerce', 'Clear exactly one State group.', { parameters: [param('stateId', 'STA public ID')] }));
-add('post', `${apiPrefix}/checkout/states/{stateId}/preview`, op('Customer Commerce', 'Create a short-lived server-priced State checkout preview.', { parameters: [param('stateId', 'STA public ID')] }));
-add('post', `${apiPrefix}/checkout/states/{stateId}/confirm`, op('Customer Commerce', 'Confirm one State checkout. Requires Idempotency-Key.', { parameters: [param('stateId', 'STA public ID')] }));
+add('post', `${apiPrefix}/commerce/import`, op('Customer Commerce', 'Idempotently import a device-local cart and saved products after authentication.'));
+add('post', `${apiPrefix}/checkout/preview`, op('Customer Commerce', 'Create one checkout preview for the complete customer cart.'));
+add('post', `${apiPrefix}/checkout/confirm`, op('Customer Commerce', 'Confirm one combined customer order. Requires Idempotency-Key.'));
 add('post', `${apiPrefix}/payments/initialize`, op('Payments', 'Initialize Paystack Hosted Checkout from an owned ORD public ID.'));
 add('get', `${apiPrefix}/payments/{id}`, op('Payments', 'Poll safe payment and Order status; this never confirms payment.', { parameters: [param('id', 'PAY or ORD public ID')] }));
 add('post', `${apiPrefix}/webhooks/paystack`, op('Payments', 'Raw-body Paystack webhook with HMAC evidence validation.', { public: true }));
@@ -1060,7 +1029,6 @@ const spec = {
   ],
   tags: tags.filter((tag) => !inactiveTags.has(tag.name)).concat([
     { name: 'Admin Runners', description: 'Admin Runner identity, scope, and assignment controls.' },
-    { name: 'Guest Sessions', description: 'Backend-issued anonymous Shopper sessions.' },
     { name: 'Public Geography', description: 'Safe public State, City, Zone, and Market configuration.' },
     { name: 'Staff Accounts', description: 'Staff identity, role, scope, and session controls.' },
     { name: 'Roles and Permissions', description: 'Live RBAC configuration.' },

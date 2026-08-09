@@ -36,6 +36,7 @@ export const PUBLIC_ID_PREFIXES = {
   returnRequest: 'RET',
   refund: 'RFD',
   partnerCustody: 'PCU',
+  orderFulfilmentGroup: 'OFG',
   deliveryRule: 'DPR',
   marketVendor: 'MVD',
   vendorInvitation: 'VNI',

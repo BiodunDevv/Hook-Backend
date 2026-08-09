@@ -5,8 +5,9 @@ export interface User extends BaseEntity {
   email: string;
   phone?: string;
   password?: string;
-  authProvider?: 'password' | 'google';
+  authProvider?: 'password' | 'google' | 'apple';
   googleId?: string;
+  appleId?: string;
   firstName: string;
   lastName: string;
   role: UserRole;
@@ -43,8 +44,9 @@ const UserSchema = createSchema<User>({
   email: { type: String, required: true, unique: true, trim: true, lowercase: true },
   phone: { type: String, sparse: true, trim: true },
   password: { type: String },
-  authProvider: { type: String, enum: ['password', 'google'], default: 'password', index: true },
+  authProvider: { type: String, enum: ['password', 'google', 'apple'], default: 'password', index: true },
   googleId: { type: String, sparse: true, unique: true, index: true },
+  appleId: { type: String, sparse: true, unique: true, index: true },
   firstName: { type: String, default: '' },
   lastName: { type: String, default: '' },
   role: { type: String, enum: Object.values(UserRole), default: UserRole.SHOPPER, index: true },

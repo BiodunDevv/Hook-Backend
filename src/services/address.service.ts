@@ -4,7 +4,6 @@ import {
   OperationCity,
   OperationLocalGovernment,
   OperationState,
-  ServiceZone,
 } from "@models/platform/geography.model";
 import { nextPublicId } from "@services/public-id.service";
 import { HttpError } from "@utils/http";
@@ -18,7 +17,6 @@ export type AddressInput = {
   landmark?: string;
   stateId: string;
   cityId?: string;
-  zoneId?: string;
   localGovernmentAreaId?: string;
   postalCode?: string;
   coordinates?: { latitude: number; longitude: number };
@@ -212,22 +210,9 @@ export class AddressService {
         }).lean({ virtuals: true });
     if (input.cityId && !city)
       throw new HttpError(409, "Selected city is not available in this State", undefined, "ADDRESS_OUTSIDE_COVERAGE");
-    const cityDbId = persistedId(city);
-    const zone = input.zoneId
-      ? await ServiceZone.findOne({
-          ...identity(input.zoneId),
-          stateId: { $in: stateIds },
-          ...(cityDbId ? { cityId: cityDbId } : {}),
-          status: "active",
-          deliveryEligible: true,
-        }).lean({ virtuals: true })
-      : undefined;
-    if (input.zoneId && !zone)
-      throw new HttpError(409, "This address is outside Hook delivery coverage", undefined, "ADDRESS_OUTSIDE_COVERAGE");
     return {
       stateId: stateDbId,
       cityId: persistedId(city),
-      zoneId: persistedId(zone),
       localGovernmentAreaId: persistedId(localGovernmentArea) || input.localGovernmentAreaId,
       formattedAddress: input.formattedAddress || [input.line1, input.line2, input.landmark].filter(Boolean).join(', '),
       stateCode: state.code,

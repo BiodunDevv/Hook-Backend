@@ -17,7 +17,6 @@ export const addressCreateSchema = z
     landmark: z.string().trim().max(240).optional(),
     stateId: publicId,
     cityId: publicId.optional(),
-    zoneId: publicId.optional(),
     localGovernmentAreaId: publicId,
     formattedAddress: z.string().trim().min(4).max(500).optional(),
     stateCode: z.string().trim().regex(/^[A-Za-z]{2,3}$/),
@@ -57,6 +56,21 @@ export const commerceCartItemSchema = z
   })
   .strict();
 
+export const commerceImportSchema = z.object({
+  schemaVersion: z.literal(1),
+  cartItems: z.array(z.object({
+    clientLineId: z.string().trim().min(1).max(120),
+    productId: publicId,
+    variantId: publicId.optional(),
+    selectedVariants: z.object({
+      color: z.string().trim().max(80).optional(),
+      size: z.string().trim().max(80).optional(),
+    }).strict().optional(),
+    quantity: z.number().int().min(1).max(99),
+  }).strict()).max(100),
+  likedProductIds: z.array(publicId).max(500),
+}).strict();
+
 export const checkoutPreviewSchema = z
   .object({
     addressId: publicId.optional(),
@@ -76,7 +90,7 @@ export const checkoutConfirmSchema = z
   .object({ previewToken: z.string().min(40).max(300) })
   .strict();
 export const paymentInitializeV4Schema = z
-  .object({ orderId: publicId })
+  .object({ orderId: publicId, fulfilmentGroupId: publicId.optional() })
   .strict();
 
 export const podCallSchema = z

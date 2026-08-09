@@ -22,6 +22,7 @@ const stateSchema = z.object({
   timezone: z.string().default('Africa/Lagos'),
   currency: z.string().length(3).default('NGN'),
   deliveryPromiseHours: z.number().int().positive().default(24),
+  operationsEnabled: z.boolean().default(false),
   payAtHubEnabled: z.boolean().default(false),
   payAtHubLimitMinor: z.number().int().nonnegative().default(10000000),
   configuration: z.record(z.string(), z.unknown()).optional(),
@@ -33,17 +34,6 @@ const citySchema = z.object({
   code: z.string().trim().min(2).max(12),
   status,
   defaultHubId: z.string().optional(),
-  reason,
-});
-const zoneSchema = z.object({
-  stateId: z.string().min(1),
-  cityId: z.string().min(1),
-  name: z.string().trim().min(2).max(100),
-  code: z.string().trim().min(2).max(16),
-  status,
-  areaRules: z.record(z.string(), z.unknown()).optional(),
-  geometry: z.record(z.string(), z.unknown()).optional(),
-  deliveryEligible: z.boolean().default(false),
   reason,
 });
 const marketSchema = z.object({
@@ -175,6 +165,7 @@ export function createPlatformAdminRouter() {
     isActive: z.boolean().optional(),
     reason,
   }).strict()), asyncHandler(controller.updateRole));
+  router.delete('/roles/:id', validateBody(lifecycleSchema), asyncHandler(controller.archiveRole));
 
   router.get('/staff', asyncHandler(controller.listStaff));
   router.post('/staff', validateBody(staffSchema), asyncHandler(controller.createStaff));
@@ -182,6 +173,7 @@ export function createPlatformAdminRouter() {
   router.patch('/staff/:id', validateBody(staffUpdateSchema), asyncHandler(controller.updateStaff));
   router.post('/staff/:id/suspend', validateBody(lifecycleSchema), asyncHandler(controller.staffStatus));
   router.post('/staff/:id/reactivate', validateBody(lifecycleSchema), asyncHandler(controller.staffStatus));
+  router.post('/staff/:id/restore', validateBody(lifecycleSchema), asyncHandler(controller.staffStatus));
   router.post('/staff/:id/archive', validateBody(lifecycleSchema), asyncHandler(controller.archiveStaff));
   router.post('/staff/:id/revoke-sessions', validateBody(lifecycleSchema), asyncHandler(controller.revokeStaffSessions));
   router.post('/staff/:id/resend-invitation', asyncHandler(controller.resendStaffInvitation));
@@ -195,10 +187,6 @@ export function createPlatformAdminRouter() {
     list: controller.listCities, create: controller.createCity, detail: controller.cityDetail,
     update: controller.updateCity, status: controller.cityStatus,
   }, citySchema);
-  crud(router, '/zones', {
-    list: controller.listZones, create: controller.createZone, detail: controller.zoneDetail,
-    update: controller.updateZone, status: controller.zoneStatus,
-  }, zoneSchema);
   crud(router, '/markets', {
     list: controller.listMarkets, create: controller.createMarket, detail: controller.marketDetail,
     update: controller.updateMarket, status: controller.marketStatus,

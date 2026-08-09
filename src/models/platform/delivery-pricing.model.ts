@@ -1,7 +1,7 @@
 import { Schema } from 'mongoose';
 import { BaseEntity, createModel, createSchema } from '@models/base.model';
 
-export type DeliveryPricingScope = 'global' | 'state' | 'zone';
+export type DeliveryPricingScope = 'global' | 'state';
 export type DeliveryPricingMode = 'flat' | 'per_km' | 'distance_bands';
 
 export interface DeliveryPricingBand {
@@ -37,7 +37,7 @@ const bandSchema = new Schema<DeliveryPricingBand>({
 const schema = createSchema<DeliveryPricingRule>({
   publicId: { type: String, required: true, unique: true, index: true },
   name: { type: String, required: true, trim: true, maxlength: 120 },
-  scope: { type: String, enum: ['global', 'state', 'zone'], required: true, index: true },
+  scope: { type: String, enum: ['global', 'state'], required: true, index: true },
   scopeId: { type: String, index: true, sparse: true },
   mode: { type: String, enum: ['flat', 'per_km', 'distance_bands'], required: true },
   flatFeeMinor: { type: Number, min: 0 },

@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { ProductStatus } from '@lib/constants';
 import { getPagination, paginated } from '@lib/api-utils';
 import { Category } from '@models/categories/category.model';
-import { OperationalState } from '@models/operations/operational-state.model';
+import { OperationState } from '@models/platform/geography.model';
 import { Product } from '@models/products/product.model';
 import { sendSuccess } from '@utils/http';
 import { publicProduct } from '@lib/public-resource';
@@ -122,8 +122,21 @@ export class PublicController {
   };
 
   getOperatingStates = async (_req: Request, res: Response) => {
-    const states = await OperationalState.find({ isEnabled: true }).select('code name').sort({ sortOrder: 1 }).lean();
-    sendSuccess(res, (states as any[]).map((state) => ({ code: state.code, name: state.name })));
+    const states = await OperationState.find({
+      countryCode: 'NG',
+      status: 'active',
+      operationsEnabled: true,
+    })
+      .select('publicId code name capitalName operationsEnabled')
+      .sort({ name: 1 })
+      .lean({ virtuals: true });
+    sendSuccess(res, (states as any[]).map((state) => ({
+      publicId: state.publicId,
+      code: state.code,
+      name: state.name,
+      capitalName: state.capitalName,
+      operationsEnabled: true,
+    })));
   };
 
   search = async (req: Request, res: Response) => {

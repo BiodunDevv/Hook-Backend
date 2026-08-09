@@ -25,10 +25,8 @@ function identifierFilter(identifier: string) {
 
 export type CustomerOwner = {
   userId?: string;
-  guestSessionId?: string;
   partnerId?: string;
   assistedCustomerId?: string;
-  // Legacy compatibility field.
   guestId?: string;
 };
 
@@ -64,7 +62,7 @@ export class CartService {
         ? "partner_assisted"
         : owner.userId
           ? "customer"
-          : "guest",
+          : "customer",
       subtotal: 0,
       deliveryFee: 0,
       total: 0,
@@ -321,11 +319,7 @@ export class CartService {
           entityId: publicCartId,
           version: nextVersion,
         },
-        owner.userId
-          ? { accountId: owner.userId }
-          : owner.guestId
-            ? { guestId: owner.guestId }
-            : undefined,
+        owner.userId ? { accountId: owner.userId } : undefined,
       );
       // Refresh legacy totals without hydrating the cart.
       setImmediate(() => {
@@ -607,7 +601,7 @@ export class CartService {
       type: "cart.updated",
       entityId: cart.publicId || cart.id,
       version: Number(cart.version || 1),
-    }, owner.userId ? { accountId: owner.userId } : owner.guestId ? { guestId: owner.guestId } : undefined);
+    }, owner.userId ? { accountId: owner.userId } : undefined);
     return cart;
   }
 
@@ -643,11 +637,7 @@ export class CartService {
         entityId: receipt.cartId,
         version: receipt.version,
       },
-      owner.userId
-        ? { accountId: owner.userId }
-        : owner.guestId
-          ? { guestId: owner.guestId }
-          : undefined,
+      owner.userId ? { accountId: owner.userId } : undefined,
     );
     if (deferRecalculation) {
       setImmediate(() => {
@@ -667,10 +657,9 @@ export class CartService {
         assistedCustomerId: owner.assistedCustomerId,
       };
     if (owner.userId) return { customerId: owner.userId };
-    if (owner.guestSessionId) return { guestSessionId: owner.guestSessionId };
     throw new HttpError(
       401,
-      "Customer or guest session required",
+      "Customer authentication required",
       undefined,
       "AUTHENTICATION_REQUIRED",
     );

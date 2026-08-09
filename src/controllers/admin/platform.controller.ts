@@ -134,7 +134,11 @@ async function ensureCity(id: string, stateId: string, active = false) {
 
 async function ensureHub(id: string, stateId: string) {
   const hub = await byIdentifier(DispatchHub, id);
-  if (hub.stateId !== stateId) throw new HttpError(409, 'Dispatch Hub does not belong to the selected state', undefined, 'CONFLICT');
+  const state = await ensureState(stateId);
+  const selectedStateIds = new Set([state._id.toString(), state.publicId]);
+  if (!selectedStateIds.has(String(hub.stateId))) {
+    throw new HttpError(409, 'Dispatch Hub does not belong to the selected state', undefined, 'CONFLICT');
+  }
   return hub;
 }
 
@@ -184,6 +188,17 @@ async function validatePermissionKeys(permissionKeys: string[]) {
   return normalized;
 }
 
+async function countStaffAssignedToRole(roleId: string) {
+  const [profiles, accounts] = await Promise.all([
+    StaffProfile.find({ roleIds: roleId }).select('accountId').lean(),
+    User.find({ accountType: AccountType.STAFF, roleIds: roleId }).select('_id').lean(),
+  ]);
+  return new Set([
+    ...profiles.map((profile) => String(profile.accountId || profile._id)),
+    ...accounts.map((account) => account._id.toString()),
+  ]).size;
+}
+
 async function resolveStaffScope(input: {
   roleIds: string[];
   stateIds?: string[];
@@ -195,14 +210,17 @@ async function resolveStaffScope(input: {
   if (roles.length !== roleIds.length) {
     throw new HttpError(409, 'Every selected role must be active', undefined, 'CONFLICT');
   }
-  const states = await Promise.all((input.stateIds || []).map((id) => ensureState(id, true)));
+  const requestedStateIds = input.scopeType === ScopeType.GLOBAL ? [] : input.stateIds || [];
+  const requestedHubIds = input.scopeType === ScopeType.HUB ? input.hubIds || [] : [];
+  const states = await Promise.all(requestedStateIds.map((id) => ensureState(id, true)));
   const stateIds = states.map((state) => state._id.toString());
-  const hubs = await Promise.all((input.hubIds || []).map(async (id) => {
+  const selectedStateIds = new Set(states.flatMap((state) => [state._id.toString(), state.publicId]));
+  const hubs = await Promise.all(requestedHubIds.map(async (id) => {
     const hub = await byIdentifier(DispatchHub, id);
     if (hub.status !== 'active') {
       throw new HttpError(409, 'Every selected Dispatch Hub must be active', undefined, 'CONFLICT');
     }
-    if (!stateIds.includes(hub.stateId)) {
+    if (!selectedStateIds.has(String(hub.stateId))) {
       throw new HttpError(409, 'Every selected Dispatch Hub must belong to a selected state', undefined, 'CONFLICT');
     }
     return hub;
@@ -227,9 +245,10 @@ async function resolveStaffScope(input: {
 async function resolveRunnerScope(stateIdentifiers: string[], hubIdentifiers: string[] = []) {
   const states = await Promise.all(stateIdentifiers.map((id) => ensureState(id, true)));
   const stateIds = states.map((state) => state._id.toString());
+  const selectedStateIds = new Set(states.flatMap((state) => [state._id.toString(), state.publicId]));
   const hubs = await Promise.all(hubIdentifiers.map(async (id) => {
     const hub = await byIdentifier(DispatchHub, id);
-    if (hub.status !== 'active' || !stateIds.includes(hub.stateId)) {
+    if (hub.status !== 'active' || !selectedStateIds.has(String(hub.stateId))) {
       throw new HttpError(409, 'Every selected Dispatch Hub must be active and belong to a Runner state', undefined, 'CONFLICT');
     }
     return hub;
@@ -297,9 +316,32 @@ export class PlatformController {
     const rows = await Role.find()
       .select('key name description permissionKeys defaultScopeType isSystem isActive')
       .sort({ name: 1 })
-      .lean();
-    adminAccessCatalogCache.set('roles', rows);
-    sendSuccess(res, rows);
+      .lean({ virtuals: true });
+    const roleIds = rows.map((row) => row._id.toString());
+    const [staffProfiles, staffAccounts] = await Promise.all([
+      StaffProfile.find({ roleIds: { $in: roleIds } }).select('accountId roleIds').lean(),
+      User.find({ accountType: AccountType.STAFF, roleIds: { $in: roleIds } }).select('_id roleIds').lean(),
+    ]);
+    const assignmentCounts = new Map<string, Set<string>>();
+    for (const row of rows) assignmentCounts.set(row._id.toString(), new Set());
+    for (const profile of staffProfiles) {
+      const accountId = String(profile.accountId || profile._id);
+      for (const roleId of profile.roleIds || []) {
+        assignmentCounts.get(String(roleId))?.add(accountId);
+      }
+    }
+    for (const account of staffAccounts) {
+      const accountId = account._id.toString();
+      for (const roleId of account.roleIds || []) {
+        assignmentCounts.get(String(roleId))?.add(accountId);
+      }
+    }
+    const data = rows.map((row) => ({
+      ...row,
+      assignedStaffCount: assignmentCounts.get(row._id.toString())?.size || 0,
+    }));
+    adminAccessCatalogCache.set('roles', data);
+    sendSuccess(res, data);
   };
 
   roleDetail = async (req: Request, res: Response) => {
@@ -330,6 +372,10 @@ export class PlatformController {
     if (role.isSystem) {
       throw new HttpError(409, 'System roles are protected and cannot be edited', undefined, 'CONFLICT');
     }
+    const assignedStaff = await countStaffAssignedToRole(role._id.toString());
+    if (assignedStaff > 0) {
+      throw new HttpError(409, `This role is assigned to ${assignedStaff} staff member${assignedStaff === 1 ? '' : 's'}. Reassign them before editing the role.`, { assignedStaffCount: assignedStaff }, 'CONFLICT');
+    }
     const patch: Record<string, unknown> = {};
     if (req.body.key !== undefined) patch.key = String(req.body.key).trim().toUpperCase();
     if (req.body.name !== undefined) patch.name = req.body.name;
@@ -345,6 +391,33 @@ export class PlatformController {
     await recordAudit(req, { action: 'role.updated', entityType: 'role', entityId: role._id.toString(), before: role, after: updated, reason: req.body.reason });
     adminAccessCatalogCache.clear();
     sendSuccess(res, updated);
+  };
+
+  archiveRole = async (req: Request, res: Response) => {
+    await access(req, 'roles.manage');
+    const role = await byIdentifier(Role, routeParam(req.params.id));
+    if (role.isSystem) {
+      throw new HttpError(409, 'System roles are protected and cannot be deleted', undefined, 'CONFLICT');
+    }
+    const assignedStaff = await countStaffAssignedToRole(role._id.toString());
+    if (assignedStaff > 0) {
+      throw new HttpError(409, `This role is assigned to ${assignedStaff} staff member${assignedStaff === 1 ? '' : 's'}. Reassign them before deleting the role.`, { assignedStaffCount: assignedStaff }, 'CONFLICT');
+    }
+    const updated = await Role.findByIdAndUpdate(
+      role._id,
+      { $set: { isActive: false } },
+      { returnDocument: 'after' },
+    ).lean({ virtuals: true });
+    await recordAudit(req, {
+      action: 'role.archived',
+      entityType: 'role',
+      entityId: role._id.toString(),
+      before: role,
+      after: updated,
+      reason: req.body.reason,
+    });
+    adminAccessCatalogCache.clear();
+    sendSuccess(res, { id: role.id, key: role.key, isActive: false });
   };
 
   listStaff = async (req: Request, res: Response) => {
@@ -652,16 +725,23 @@ export class PlatformController {
     if (targetRoles.some((role) => role.key === 'SUPER_ADMIN')) {
       throw new HttpError(409, 'Super Admin accounts are protected', undefined, 'CONFLICT');
     }
-    const status = req.path.endsWith('/reactivate') ? AccountStatus.ACTIVE : AccountStatus.SUSPENDED;
+    const restoring = req.path.endsWith('/restore');
+    const status = req.path.endsWith('/reactivate') || restoring ? AccountStatus.ACTIVE : AccountStatus.SUSPENDED;
     const active = status === AccountStatus.ACTIVE;
+    const profileUpdate = active
+      ? { $set: { status }, $unset: { deletedAt: 1 } }
+      : { $set: { status } };
+    const accountUpdate = active
+      ? { $set: { accountStatus: status, isActive: true }, $unset: { deletedAt: 1 } }
+      : { $set: { accountStatus: status, isActive: false } };
     await Promise.all([
-      StaffProfile.updateOne({ _id: profile._id }, { $set: { status } }),
-      User.updateOne({ _id: profile.accountId }, { $set: { accountStatus: status, isActive: active } }),
+      StaffProfile.updateOne({ _id: profile._id }, profileUpdate),
+      User.updateOne({ _id: profile.accountId }, accountUpdate),
       active ? Promise.resolve() : revokeAccountSessions(profile.accountId, 'staff_suspended', req.user!.sub),
     ]);
-    await recordAudit(req, { action: `staff.${status}`, entityType: 'staff', entityId: profile._id.toString(), entityPublicId: profile.publicId, before: { status: profile.status }, after: { status }, reason: req.body.reason });
+    await recordAudit(req, { action: restoring ? 'staff.restored' : `staff.${status}`, entityType: 'staff', entityId: profile._id.toString(), entityPublicId: profile.publicId, before: { status: profile.status }, after: { status }, reason: req.body.reason });
     adminStaffCache.clear();
-    sendSuccess(res, { status });
+    sendSuccess(res, { status, restored: restoring });
   };
 
   archiveStaff = async (req: Request, res: Response) => {
@@ -755,9 +835,25 @@ export class PlatformController {
   listStates = async (req: Request, res: Response) => {
     const context = await access(req, 'states.view');
     const { page, limit, skip } = getPagination(req.query);
-    const filter = context.scopeType === ScopeType.GLOBAL ? {} : { _id: { $in: context.stateIds } };
+    const filter: Record<string, unknown> = context.scopeType === ScopeType.GLOBAL ? {} : { _id: { $in: context.stateIds } };
+    if (String(req.query.operationsEnabled || '') === 'true') filter.operationsEnabled = true;
     const [data, total] = await Promise.all([OperationState.find(filter).sort({ name: 1 }).skip(skip).limit(limit).lean({ virtuals: true }), OperationState.countDocuments(filter)]);
-    sendSuccess(res, paginated(await presentPlatformRecords(data), total, page, limit));
+    const stateIds = data.map((state: any) => String(state._id));
+    const marketCounts = await Market.aggregate([
+      { $match: { stateId: { $in: stateIds }, status: 'active' } },
+      { $group: { _id: '$stateId', count: { $sum: 1 } } },
+    ]);
+    const counts = new Map(marketCounts.map((row: any) => [String(row._id), Number(row.count)]));
+    const presented = await presentPlatformRecords(data);
+    sendSuccess(res, paginated(
+      presented.map((state: any, index: number) => ({
+        ...state,
+        marketCount: counts.get(String(data[index]._id)) || 0,
+      })),
+      total,
+      page,
+      limit,
+    ));
   };
   stateDetail = async (req: Request, res: Response) => {
     const context = await access(req, 'states.view');
@@ -877,6 +973,8 @@ export class PlatformController {
   createMarket = async (req: Request, res: Response) => {
     const context = await access(req, 'markets.manage');
     const location = await resolveLocation(req.body);
+    const operatingState = await OperationState.findById(location.ids.stateId).select('operationsEnabled').lean();
+    if (!operatingState?.operationsEnabled) throw new HttpError(409, 'Hook operations are not enabled in this State', undefined, 'INVALID_STATE_TRANSITION');
     assertScope(context, location.ids.stateId);
     const hub = req.body.hubId ? await ensureHub(req.body.hubId, location.ids.stateId) : undefined;
     const market = await Market.create({
@@ -899,6 +997,8 @@ export class PlatformController {
       cityId: req.body.cityId || market.cityId,
       zoneId: req.body.zoneId || market.zoneId,
     });
+    const operatingState = await OperationState.findById(location.ids.stateId).select('operationsEnabled').lean();
+    if (!operatingState?.operationsEnabled) throw new HttpError(409, 'Hook operations are not enabled in this State', undefined, 'INVALID_STATE_TRANSITION');
     assertScope(context, location.ids.stateId);
     const hub = req.body.hubId
       ? await ensureHub(req.body.hubId, location.ids.stateId)

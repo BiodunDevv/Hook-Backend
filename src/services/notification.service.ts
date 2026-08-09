@@ -4,7 +4,7 @@ import { Notification } from '@models/notifications/notification.model';
 import { publishRealtime } from '@services/realtime.service';
 import { HttpError } from '@utils/http';
 
-type NotificationOwner = { userId?: string; guestId?: string };
+type NotificationOwner = { userId: string };
 
 const NOTIFICATION_LIST_FIELDS = 'title body type isRead readAt createdAt';
 const NOTIFICATION_DETAIL_FIELDS = `${NOTIFICATION_LIST_FIELDS} data`;
@@ -16,7 +16,6 @@ export class NotificationService {
   ) {}
 
   async registerDevice(owner: NotificationOwner, body: Partial<DeviceToken>) {
-    if (!owner.userId && !owner.guestId) throw new HttpError(400, 'A user or guest session is required');
     if (!body.expoPushToken?.startsWith('ExponentPushToken[') && !body.expoPushToken?.startsWith('ExpoPushToken[')) {
       throw new HttpError(400, 'Invalid Expo push token');
     }
@@ -24,10 +23,11 @@ export class NotificationService {
     const existing = await this.devices.findOne({ where: { expoPushToken: body.expoPushToken } });
     const payload = {
       userId: owner.userId,
-      guestId: owner.guestId,
       expoPushToken: body.expoPushToken,
       platform: body.platform || 'unknown',
       deviceName: body.deviceName,
+      deviceId: body.deviceId,
+      sessionId: body.sessionId,
       isActive: true,
       lastSeenAt: new Date(),
     };
@@ -42,7 +42,7 @@ export class NotificationService {
 
   async unregisterDevice(owner: NotificationOwner, expoPushToken?: string) {
     if (expoPushToken) {
-      const existing = await this.devices.findOne({ where: { expoPushToken } });
+      const existing = await this.devices.findOne({ where: { expoPushToken, userId: owner.userId } });
       if (existing) await this.devices.update(existing.id, { isActive: false });
       return { message: 'Device unregistered.' };
     }
@@ -53,7 +53,6 @@ export class NotificationService {
   }
 
   async create(owner: NotificationOwner, title: string, body: string, type = 'general', data?: Record<string, unknown>) {
-    if (!owner.userId && !owner.guestId) return undefined;
     const notification = await this.notifications.save(this.notifications.create({
       ...owner,
       title,
@@ -62,9 +61,10 @@ export class NotificationService {
       data,
       isRead: false,
     }));
-    publishRealtime({ type: 'notification.created', entityId: notification?.id, version: 1 }, owner.userId
-      ? { accountId: owner.userId }
-      : { guestId: owner.guestId });
+    publishRealtime(
+      { type: 'notification.created', entityId: notification?.id, version: 1 },
+      { accountId: owner.userId },
+    );
     return notification;
   }
 
@@ -138,23 +138,23 @@ export class NotificationService {
     await Promise.all(devices.map((device) => this.sendExpoPush(device.expoPushToken, title, body, data)));
   }
 
+  async sendPushToDevice(expoPushToken: string, title: string, body: string, data?: Record<string, unknown>) {
+    await this.sendExpoPush(expoPushToken, title, body, data);
+  }
+
   private ownerWhere(owner: NotificationOwner) {
-    if (owner.userId) return { userId: owner.userId };
-    if (owner.guestId) return { guestId: owner.guestId };
-    throw new HttpError(401, 'Authentication or guest session required');
+    return { userId: owner.userId };
   }
 
   private publishNotificationUpdate(owner: NotificationOwner, id?: string) {
     publishRealtime(
       { type: 'notification.updated', entityId: id, version: 1 },
-      owner.userId ? { accountId: owner.userId } : { guestId: owner.guestId },
+      { accountId: owner.userId },
     );
   }
 
   private findOwnerDevices(owner: NotificationOwner) {
-    if (owner.userId) return this.devices.find({ where: { userId: owner.userId, isActive: true } });
-    if (owner.guestId) return this.devices.find({ where: { guestId: owner.guestId, isActive: true } });
-    return Promise.resolve([]);
+    return this.devices.find({ where: { userId: owner.userId, isActive: true } });
   }
 
   private async sendExpoPush(expoPushToken: string, title: string, body: string, data?: Record<string, unknown>) {

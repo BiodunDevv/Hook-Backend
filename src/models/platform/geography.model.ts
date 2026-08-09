@@ -18,6 +18,7 @@ export interface OperationState extends BaseEntity {
   podEnabled?: boolean;
   podLimitMinor?: number;
   deliveryEnabled: boolean;
+  operationsEnabled: boolean;
   deliveryPricingRuleId?: string;
   configuration?: Record<string, unknown>;
   legacy?: Record<string, unknown>;
@@ -75,6 +76,7 @@ const stateSchema = createSchema<OperationState>({
   podEnabled: { type: Boolean, default: false },
   podLimitMinor: { type: Number, min: 0 },
   deliveryEnabled: { type: Boolean, default: true, index: true },
+  operationsEnabled: { type: Boolean, default: false, index: true },
   deliveryPricingRuleId: { type: String, index: true, sparse: true },
   configuration: { type: Object },
   legacy: { type: Object },

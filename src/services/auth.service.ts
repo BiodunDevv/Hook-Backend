@@ -13,6 +13,7 @@ import { User } from '@models/users/user.model';
 import { NotificationService } from '@services/notification.service';
 import { HttpError } from '@utils/http';
 import { verifyGoogleIdToken } from './google-auth.service';
+import { verifyAppleIdentityToken } from './apple-auth.service';
 import {
   issueAccountSession,
   presentAccountUser,
@@ -21,11 +22,6 @@ import {
   rotateAccountSession,
 } from './account-session.service';
 import { nextPublicId } from './public-id.service';
-import { CartItem } from '@models/cart/cart-item.model';
-import { Negotiation } from '@models/negotiations/negotiation.model';
-import { NegotiatedQuote } from '@models/catalog/catalog.model';
-import { NegotiatedQuoteStatus, NegotiationStatus } from '@lib/constants';
-import { GuestSession } from '@models/platform/session.model';
 
 function hashToken(token: string) {
   return createHash('sha256').update(token).digest('hex');
@@ -84,9 +80,7 @@ export class AuthService {
     };
   }
 
-  async login(email: string, password: string, options?: {
-    guestId?: string;
-  }) {
+  async login(email: string, password: string) {
     const user = await this.userRepo.findOne({
       where: { email },
       select: {
@@ -121,20 +115,14 @@ export class AuthService {
 
     user.lastLoginAt = new Date();
     const response = await this.buildAuthResponse(user);
-    if (options?.guestId) await this.mergeGuestIntoUser(options.guestId, user.id);
     await this.userRepo.update(user.id, {
       lastLoginAt: user.lastLoginAt,
       refreshToken: undefined,
     });
-    await this.notifications?.sendWelcome(
-      { userId: user.id },
-      `${user.firstName || ''} ${user.lastName || ''}`.trim() || undefined,
-    );
-
     return response;
   }
 
-  async loginWithGoogle(input: { idToken: string; guestId?: string }) {
+  async loginWithGoogle(input: { idToken: string }) {
     const payload = await verifyGoogleIdToken(input.idToken);
     const email = payload.email!.toLowerCase().trim();
     const firstName = payload.given_name || '';
@@ -183,15 +171,53 @@ export class AuthService {
     const response = await this.buildAuthResponse(authUser);
     await Promise.all([
       this.userRepo.update(authUser.id, { refreshToken: undefined, lastLoginAt: new Date() }),
-      this.mergeGuestIntoUser(input.guestId, authUser.id),
     ]);
 
     const name = `${authUser.firstName || ''} ${authUser.lastName || ''}`.trim();
     await Promise.allSettled([
       isNewUser ? this.email.sendWelcome({ email: authUser.email, name }) : Promise.resolve(),
-      this.notifications?.sendWelcome({ userId: authUser.id }, name || undefined),
+      isNewUser ? this.notifications?.create({ userId: authUser.id }, 'Welcome to Hook', `Welcome${name ? `, ${name}` : ''}. Your marketplace is ready.`, 'welcome') : Promise.resolve(),
     ]);
 
+    return response;
+  }
+
+  async loginWithApple(input: { identityToken: string; firstName?: string; lastName?: string }) {
+    const payload = await verifyAppleIdentityToken(input.identityToken);
+    let user = await this.userRepo.findOne({ where: payload.email ? [{ appleId: payload.sub }, { email: payload.email }] : { appleId: payload.sub } });
+    const isNewUser = !user;
+    if (!user) {
+      if (!payload.email) throw new HttpError(409, 'Apple did not share an email address. Remove Hook from Apple ID sign-in settings and try again.');
+      user = await this.userRepo.save(this.userRepo.create({
+        publicId: await nextPublicId('customer'),
+        accountType: AccountType.CUSTOMER,
+        accountStatus: AccountStatus.ACTIVE,
+        scopeType: ScopeType.SELF,
+        email: payload.email,
+        authProvider: 'apple',
+        appleId: payload.sub,
+        firstName: input.firstName || '',
+        lastName: input.lastName || '',
+        role: UserRole.SHOPPER,
+        isActive: true,
+        isEmailVerified: payload.emailVerified,
+        isPhoneVerified: false,
+        lastLoginAt: new Date(),
+      }));
+    } else {
+      if (!user.isActive || (user.accountStatus && user.accountStatus !== AccountStatus.ACTIVE)) {
+        throw new HttpError(403, 'This account is not available for sign in', undefined, 'ACCESS_DENIED');
+      }
+      user.appleId = user.appleId || payload.sub;
+      user.firstName = user.firstName || input.firstName || '';
+      user.lastName = user.lastName || input.lastName || '';
+      user.isEmailVerified = user.isEmailVerified || payload.emailVerified;
+      user.lastLoginAt = new Date();
+      await this.userRepo.save(user);
+    }
+    if (!user) throw new HttpError(401, 'Apple sign-in could not be completed');
+    const response = await this.buildAuthResponse(user);
+    if (isNewUser) await this.email.sendWelcome({ email: user.email, name: `${user.firstName} ${user.lastName}`.trim() });
     return response;
   }
 
@@ -226,7 +252,7 @@ export class AuthService {
     };
   }
 
-  async startSignup(email: string, password: string, guestId?: string) {
+  async startSignup(email: string, password: string) {
     if (!this.signupSessions) throw new HttpError(500, 'Signup sessions are not configured');
     const normalizedEmail = email.toLowerCase().trim();
     const existing = await this.userRepo.findOne({ where: { email: normalizedEmail } });
@@ -245,7 +271,6 @@ export class AuthService {
       sessionTokenHash: hashToken(rawToken),
       isEmailVerified: false,
       currentStep: 'password_created',
-      guestId,
       expiresAt,
     }));
 
@@ -298,7 +323,7 @@ export class AuthService {
     };
   }
 
-  async completeSignup(sessionToken: string, body: Partial<User> & { guestId?: string }) {
+  async completeSignup(sessionToken: string, body: Partial<User>) {
     const session = await this.findSignupSession(sessionToken);
     if (!session.isEmailVerified) throw new HttpError(400, 'Verify your email before completing signup');
     const existing = await this.userRepo.findOne({ where: { email: session.email } });
@@ -329,12 +354,11 @@ export class AuthService {
     await Promise.all([
       this.userRepo.update(user.id, { refreshToken: undefined }),
       this.signupSessions!.delete({ id: session.id }),
-      this.mergeGuestIntoUser(body.guestId || session.guestId, user.id),
     ]);
     const name = `${user.firstName || ''} ${user.lastName || ''}`.trim();
     await Promise.all([
       this.email.sendWelcome({ email: user.email, name }),
-      this.notifications?.sendWelcome({ userId: user.id }, name),
+      this.notifications?.create({ userId: user.id }, 'Welcome to Hook', `Welcome${name ? `, ${name}` : ''}. Your marketplace is ready.`, 'welcome'),
     ]);
 
     return response;
@@ -427,10 +451,6 @@ export class AuthService {
 
     await revokeAccountSessions(user.id, 'password_reset');
     const response = await this.buildAuthResponse(user);
-    await this.notifications?.sendWelcome(
-      { userId: user.id },
-      `${user.firstName || ''} ${user.lastName || ''}`.trim() || undefined,
-    );
     return { message: 'Password reset successfully.', ...response };
   }
 
@@ -497,38 +517,6 @@ export class AuthService {
       throw new HttpError(400, 'Signup session expired. Please start again.');
     }
     return session;
-  }
-
-  private async mergeGuestIntoUser(guestId: string | undefined, userId: string) {
-    if (!guestId) return;
-    const guestCart = await Cart.findOne({ guestSessionId: guestId, status: 'active', isCheckedOut: false });
-    const customerCart = await Cart.findOne({ customerId: userId, status: 'active', isCheckedOut: false });
-    if (guestCart && !customerCart) {
-      guestCart.ownerType = 'customer'; guestCart.customerId = userId; guestCart.guestSessionId = undefined; guestCart.version = Number(guestCart.version || 1) + 1; await guestCart.save();
-    } else if (guestCart && customerCart) {
-      const guestItems = await CartItem.find({ cartId: guestCart.id });
-      for (const item of guestItems) {
-        const existing = await CartItem.findOne({ cartId: customerCart.id, productId: item.productId, variantKey: item.variantKey });
-        if (existing) {
-          existing.quantity = Math.min(99, existing.quantity + item.quantity);
-          existing.quoteId = undefined; existing.quoteVersion = undefined;
-          existing.totalPriceMinor = existing.quantity * Number(existing.unitPriceMinor || 0);
-          existing.totalPrice = Number(existing.totalPriceMinor) / 100; await existing.save(); await item.deleteOne();
-        } else { item.cartId = customerCart.id; await item.save(); }
-      }
-      guestCart.status = 'converted'; guestCart.isCheckedOut = true; await guestCart.save();
-      customerCart.version = Number(customerCart.version || 1) + 1; await customerCart.save();
-    }
-    const negotiations = await Negotiation.find({ guestSessionId: guestId, status: { $in: [NegotiationStatus.ACTIVE, NegotiationStatus.AGREED, NegotiationStatus.ACCEPTED] } });
-    for (const negotiation of negotiations) {
-      negotiation.customerId = userId; negotiation.guestSessionId = undefined;
-      if ([NegotiationStatus.AGREED, NegotiationStatus.ACCEPTED].includes(negotiation.status) && negotiation.agreedPriceMinor && negotiation.variantId && negotiation.expiresAt && negotiation.expiresAt > new Date() && !negotiation.quoteId) {
-        const quote = await NegotiatedQuote.create({ publicId: await nextPublicId('quote'), negotiationId: negotiation.id, customerId: userId, productId: negotiation.productId, variantId: negotiation.variantId, quantity: negotiation.quantity, currency: negotiation.currency, originalPriceMinor: negotiation.rulesSnapshot?.sellingPriceMinor || negotiation.agreedPriceMinor, agreedPriceMinor: negotiation.agreedPriceMinor, expiresAt: negotiation.expiresAt, status: NegotiatedQuoteStatus.ACTIVE, version: 1 });
-        negotiation.quoteId = quote.id;
-      }
-      await negotiation.save();
-    }
-    await GuestSession.updateOne({ _id: guestId, revokedAt: null }, { $set: { convertedAccountId: userId, revokedAt: new Date() } });
   }
 
   private async findValidOtp(email: string, code: string, type: Otp['type']) {

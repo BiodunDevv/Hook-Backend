@@ -16,23 +16,26 @@ import { OrderItem } from "@models/orders/order-item.model";
 import { Logistics } from "@models/logistics/logistics.model";
 import { User } from "@models/users/user.model";
 import { adminOrderStatsCache } from "@lib/ttl-cache";
+import { OrderFulfilmentGroup } from "@models/orders/order-fulfilment-group.model";
+import { Payment } from "@models/payments/payment.model";
 
 export class AdminOrdersController {
   private readonly email = new EmailService();
 
   private async enrichOrder(order: any) {
     if (!order) return order;
-    const [items, payment, logistics, escrowLedger] = await Promise.all([
+    const [items, payments, fulfilmentGroups, logistics, escrowLedger] = await Promise.all([
       adminRepos
         .orderItems()
         .find({ where: { orderId: order.id }, relations: { product: true } }),
-      adminRepos.payments().findOne({ where: { orderId: order.id } }),
+      Payment.find({ orderId: order.id }).lean({ virtuals: true }),
+      OrderFulfilmentGroup.find({ orderId: order.id }).sort({ createdAt: 1 }).lean({ virtuals: true }),
       adminRepos.logistics().findOne({ where: { orderId: order.id } }),
       adminRepos
         .escrowLedger()
         .find({ where: { orderId: order.id }, order: { createdAt: "ASC" } }),
     ]);
-    return { ...order, items, payment, logistics, escrowLedger };
+    return { ...order, items, payment: payments[0], payments, fulfilmentGroups, logistics, escrowLedger };
   }
 
   list = async (req: Request, res: Response) => {
@@ -64,7 +67,10 @@ export class AdminOrdersController {
       where.orderType = req.query.orderType;
     const scope = req.user?.scopeType === "global"
       ? {}
-      : { sourceStateId: { $in: req.user?.assignedStateIds || [] } };
+      : { $or: [
+          { sourceStateId: { $in: req.user?.assignedStateIds || [] } },
+          { sourceStateIds: { $in: req.user?.assignedStateIds || [] } },
+        ] };
     Object.assign(where, scope);
     const expression = search
       ? new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i")
@@ -77,14 +83,12 @@ export class AdminOrdersController {
     if (search) {
       where.$or = [
         { orderCode: expression },
-        { guestEmail: expression },
-        { guestName: expression },
         ...((searchUsers as any[]).length
           ? [{ userId: { $in: (searchUsers as any[]).flatMap((user) => [String(user._id), user.publicId].filter(Boolean)) } }]
           : []),
       ];
     }
-    const orderFields = "publicId orderCode userId guestEmail guestName subtotal deliveryFee discount total status paymentStatus paymentMode orderType createdAt updatedAt commerceStatus commercePaymentStatus sourceStateId deliveryAddress deliverySubsidy";
+    const orderFields = "publicId orderCode userId subtotal deliveryFee discount total status paymentStatus paymentMode orderType createdAt updatedAt commerceStatus commercePaymentStatus sourceStateId sourceStateIds fulfilmentGroupIds deliveryAddress deliverySubsidy";
     const [orders, total, stats] = await Promise.all([
       Order.find(where).select(orderFields).sort({ createdAt: -1 }).skip(skip).limit(limit).lean({ virtuals: true }),
       Order.countDocuments(where),
@@ -146,7 +150,10 @@ export class AdminOrdersController {
     const scope =
       req.user?.scopeType === "global"
         ? {}
-        : { sourceStateId: { $in: req.user?.assignedStateIds || [] } };
+        : { $or: [
+            { sourceStateId: { $in: req.user?.assignedStateIds || [] } },
+            { sourceStateIds: { $in: req.user?.assignedStateIds || [] } },
+          ] };
     const order = await Order.findOne({ ...identity, ...scope }).lean({
       virtuals: true,
     });

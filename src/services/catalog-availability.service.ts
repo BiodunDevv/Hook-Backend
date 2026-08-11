@@ -17,8 +17,8 @@ function versionFilter(product: any, version: number) {
 
 function publishUpdate(product: any) {
   const event = { entityId: product.publicId || product._id?.toString(), version: Number(product.catalogVersion || 1), scope: product.sourceStateId ? { stateId: String(product.sourceStateId) } : undefined };
-  publishRealtime({ type: 'catalog.updated', ...event }, { public: true, admin: true });
-  publishRealtime({ type: 'home.updated', ...event }, { public: true, admin: true });
+  publishRealtime({ type: 'catalog.updated', entityType: 'product', ...event }, { public: true, admin: true });
+  publishRealtime({ type: 'home.updated', entityType: 'product', ...event }, { public: true, admin: true });
   publishRealtime({ type: 'admin.dashboard.updated', ...event }, { admin: true });
 }
 
@@ -56,9 +56,9 @@ export class CatalogAvailabilityService {
           availabilityCheckDueAt: new Date(now.getTime() + days * 24 * 60 * 60 * 1000),
           availabilityCheckRequestedBy: actorId,
           availabilityCheckNote: input.reason,
-          customerAvailabilityNote: input.reason,
+          customerAvailabilityNote: 'Temporarily unavailable while availability is being confirmed.',
         },
-        $unset: { availabilityEscalatedAt: 1 },
+        $unset: { availabilityEscalatedAt: 1, availabilityValidUntil: 1 },
         $inc: { catalogVersion: 1 },
       },
       { returnDocument: 'after' },
@@ -71,6 +71,9 @@ export class CatalogAvailabilityService {
 
   async confirm(accountId: string, identifier: string, input: { status: 'available' | 'limited'; note?: string; version: number }) {
     const { product } = await runnerForProduct(accountId, identifier);
+    const settings = await CommerceSettings.findOne({ key: 'commerce' }).select('catalogAvailabilityCheckDays').lean();
+    const days = Math.min(Math.max(Number(settings?.catalogAvailabilityCheckDays || 4), 1), 30);
+    const confirmedAt = new Date();
     const nextStatus = product.availabilityPreviousStatus === ProductStatus.PUBLISHED && product.commercialApproval?.approved === true ? ProductStatus.PUBLISHED : product.status === ProductStatus.AVAILABILITY_UNCONFIRMED ? ProductStatus.DRAFT : product.status;
     const updated = await Product.findOneAndUpdate(
       versionFilter(product, input.version),
@@ -79,11 +82,13 @@ export class CatalogAvailabilityService {
           status: nextStatus,
           availabilityStatus: input.status === 'available' ? ProductAvailabilityStatus.AVAILABLE : ProductAvailabilityStatus.LIMITED,
           availabilityCheckNote: input.note,
-          customerAvailabilityNote: input.note,
-          lastAvailabilityConfirmedAt: new Date(),
-          availabilityPreviousStatus: undefined,
-          availabilityCheckDueAt: undefined,
+          customerAvailabilityNote: input.status === 'limited'
+            ? 'Limited availability. Order while it is still available.'
+            : 'Available from a verified Hook Market.',
+          lastAvailabilityConfirmedAt: confirmedAt,
+          availabilityValidUntil: new Date(confirmedAt.getTime() + days * 24 * 60 * 60 * 1000),
         },
+        $unset: { availabilityPreviousStatus: 1, availabilityCheckDueAt: 1, availabilityEscalatedAt: 1 },
         $inc: { catalogVersion: 1 },
       },
       { returnDocument: 'after' },
@@ -102,9 +107,9 @@ export class CatalogAvailabilityService {
           status: ProductStatus.PAUSED,
           availabilityStatus: ProductAvailabilityStatus.UNAVAILABLE,
           availabilityCheckNote: input.note,
-          customerAvailabilityNote: input.note,
-          availabilityCheckDueAt: undefined,
+          customerAvailabilityNote: 'This Product is currently unavailable.',
         },
+        $unset: { availabilityCheckDueAt: 1, availabilityValidUntil: 1 },
         $inc: { catalogVersion: 1 },
       },
       { returnDocument: 'after' },
@@ -116,13 +121,47 @@ export class CatalogAvailabilityService {
 }
 
 export async function escalateOverdueAvailabilityChecks() {
+  const now = new Date();
+  const expired = await Product.find({
+    status: ProductStatus.PUBLISHED,
+    availabilityStatus: { $in: [ProductAvailabilityStatus.AVAILABLE, ProductAvailabilityStatus.LIMITED] },
+    availabilityValidUntil: { $lte: now },
+    deletedAt: { $exists: false },
+  }).select('_id publicId title marketId sourceStateId status catalogVersion').limit(100).lean({ virtuals: true });
+  const notifier = new MarketVendorService();
+  for (const product of expired) {
+    const updated = await Product.findOneAndUpdate(
+      {
+        _id: product._id,
+        status: ProductStatus.PUBLISHED,
+        availabilityValidUntil: { $lte: now },
+      },
+      {
+        $set: {
+          status: ProductStatus.AVAILABILITY_UNCONFIRMED,
+          availabilityStatus: ProductAvailabilityStatus.UNCONFIRMED,
+          availabilityPreviousStatus: ProductStatus.PUBLISHED,
+          availabilityCheckRequestedAt: now,
+          availabilityCheckDueAt: now,
+          availabilityEscalatedAt: now,
+          availabilityCheckNote: 'Runner confirmation required before this Product can return to sale.',
+          customerAvailabilityNote: 'Temporarily unavailable while availability is being confirmed.',
+        },
+        $unset: { availabilityValidUntil: 1 },
+        $inc: { catalogVersion: 1 },
+      },
+      { returnDocument: 'after' },
+    ).lean({ virtuals: true });
+    if (!updated) continue;
+    await notifier.notifyAvailability('system', updated);
+    publishUpdate(updated);
+  }
   const products = await Product.find({
     availabilityStatus: ProductAvailabilityStatus.UNCONFIRMED,
     availabilityCheckDueAt: { $lt: new Date() },
     availabilityEscalatedAt: { $exists: false },
     deletedAt: { $exists: false },
   }).select('publicId title marketId sourceStateId availabilityCheckDueAt').limit(100).lean({ virtuals: true });
-  const notifier = new MarketVendorService();
   let escalated = 0;
   for (const product of products) {
     const recipients = await notifier.notifyAvailabilityOverdue(product);

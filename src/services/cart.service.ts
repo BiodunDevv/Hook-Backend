@@ -352,9 +352,9 @@ export class CartService {
       .lean();
     if (!item) throw new HttpError(404, "Cart item not found");
     const product = await Product.findById(item.productId)
-      .select("status sellingPriceMinor discountMinor")
+      .select("status availabilityStatus sellingPriceMinor discountMinor")
       .lean();
-    if (!product || product.status !== ProductStatus.PUBLISHED)
+    if (!product || product.status !== ProductStatus.PUBLISHED || ![ProductAvailabilityStatus.AVAILABLE, ProductAvailabilityStatus.LIMITED].includes(product.availabilityStatus || ProductAvailabilityStatus.UNCONFIRMED))
       throw new HttpError(
         409,
         "Product is no longer available",
@@ -459,7 +459,7 @@ export class CartService {
       productIds.length
         ? Product.find({ _id: { $in: productIds } })
             .select(
-              "_id publicId hookId title slug images sellingPriceMinor discountMinor currency catalogVersion status",
+              "_id publicId hookId title slug images sellingPriceMinor discountMinor currency catalogVersion status availabilityStatus customerAvailabilityNote",
             )
             .lean({ virtuals: true })
         : [],
@@ -486,7 +486,9 @@ export class CartService {
       const product = productMap.get(item.productId);
       const blockingReasons: string[] = [];
       if (!product || product.status !== ProductStatus.PUBLISHED)
-        blockingReasons.push("PRODUCT_NOT_AVAILABLE");
+        blockingReasons.push("RUNNER_CONFIRMATION_REQUIRED");
+      else if (![ProductAvailabilityStatus.AVAILABLE, ProductAvailabilityStatus.LIMITED].includes(product.availabilityStatus || ProductAvailabilityStatus.UNCONFIRMED))
+        blockingReasons.push("RUNNER_CONFIRMATION_REQUIRED");
       if (product && product.catalogVersion !== item.productVersion)
         blockingReasons.push("PRODUCT_CHANGED");
       const enrichedItem = {

@@ -45,10 +45,13 @@ export function createPublicGeographyRouter() {
   const catalog = new PublicCatalogController();
   const publicController = new PublicController();
   router.get('/home', asyncHandler(catalog.home));
+  router.get('/discover', asyncHandler(catalog.discover));
   router.get('/products', asyncHandler(catalog.products));
+  router.get('/products/status', asyncHandler(catalog.statuses));
   router.get('/products/:id', asyncHandler(catalog.product));
   router.get('/categories', asyncHandler(catalog.categories));
   router.get('/search', asyncHandler(catalog.search));
+  router.get('/search/suggestions', asyncHandler(catalog.suggestions));
   router.get('/operating-states', asyncHandler(publicController.getOperatingStates));
   const deliveryStates = asyncHandler(async (_req, res) => {
     const cacheKey = 'public:states';

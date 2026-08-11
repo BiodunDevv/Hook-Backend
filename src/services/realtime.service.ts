@@ -35,6 +35,7 @@ export type RealtimeEventType =
 
 export interface RealtimeEvent {
   type: RealtimeEventType;
+  entityType?: 'product' | 'market' | 'category' | 'home' | 'cart' | 'order' | 'notification';
   entityId?: string;
   version?: number;
   scope?: { stateId?: string; hubId?: string };
@@ -221,6 +222,19 @@ class RealtimeService {
     if (!this.io) return;
     for (const socket of this.io.sockets.sockets.values()) {
       if (socket.data.sessionId === sessionId) socket.disconnect(true);
+    }
+  }
+
+  revokeSession(sessionId: string, reason: string) {
+    if (!this.io) return;
+    for (const socket of this.io.sockets.sockets.values()) {
+      if (socket.data.sessionId !== sessionId) continue;
+      socket.emit('session.revoked', {
+        type: 'session.revoked',
+        reason,
+        occurredAt: new Date().toISOString(),
+      });
+      socket.disconnect(true);
     }
   }
 }

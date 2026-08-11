@@ -34,7 +34,7 @@ export const profileSchema = z.object({
   firstName: z.string().min(1).optional(),
   lastName: z.string().min(1).optional(),
   phone: z.string().min(6).optional(),
-  avatarUrl: z.string().url().optional(),
+  avatarUrl: z.string().url().nullable().optional(),
   address: z.record(z.string(), z.unknown()).optional(),
   preferences: z.record(z.string(), z.unknown()).optional(),
 });

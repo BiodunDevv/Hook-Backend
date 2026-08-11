@@ -3,7 +3,7 @@ import { Types } from "mongoose";
 
 import { ProductLike } from "@models/products/product-like.model";
 import { Product } from "@models/products/product.model";
-import { ProductStatus } from "@lib/constants";
+import { ProductAvailabilityStatus, ProductStatus } from "@lib/constants";
 import { routeParam } from "@lib/api-utils";
 import { publicProductRepresentations } from "@services/commercial-catalog.service";
 import { HttpError, sendSuccess } from "@utils/http";
@@ -25,6 +25,7 @@ async function resolvePublishedProduct(identifier: string) {
     $and: [
       productFilter(identifier),
       { status: ProductStatus.PUBLISHED },
+      { availabilityStatus: { $in: [ProductAvailabilityStatus.AVAILABLE, ProductAvailabilityStatus.LIMITED] } },
       { deletedAt: { $exists: false } },
     ],
   })
@@ -55,11 +56,10 @@ export class ProductLikesController {
 
     const products = await Product.find({
       publicId: { $in: likes.map((like) => like.productPublicId) },
-      status: ProductStatus.PUBLISHED,
-      publishedAt: { $lte: new Date() },
+      publishedAt: { $exists: true, $lte: new Date() },
       deletedAt: { $exists: false },
     })
-      .select('publicId title slug description images mediaAssetIds marketId sourceStateId categoryId sellingPriceMinor discountMinor currency negotiationRules availabilityStatus publishedAt')
+      .select('publicId title slug description images mediaAssetIds marketId sourceStateId categoryId sellingPriceMinor discountMinor currency negotiationRules status availabilityStatus customerAvailabilityNote publishedAt')
       .lean({ virtuals: true });
     const presentations = await publicProductRepresentations(products as any[], { compact: true });
     const productMap = new Map(

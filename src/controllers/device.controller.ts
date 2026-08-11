@@ -80,7 +80,7 @@ export class DeviceController {
     );
     if (!session) throw new HttpError(404, 'Device not found');
     await DeviceToken.updateMany({ userId: req.user!.sub, sessionId: session.id }, { $set: { isActive: false } });
-    realtime.disconnectSession(session.id);
+    realtime.revokeSession(session.id, 'customer_device_removed');
     sendSuccess(res, { revoked: true });
   };
 
@@ -89,7 +89,7 @@ export class DeviceController {
     const ids = sessions.map((session) => session._id.toString());
     await AccountSession.updateMany({ _id: { $in: ids } }, { $set: { revokedAt: new Date(), revokedBy: req.user!.sub, revocationReason: 'customer_revoked_other_devices' } });
     await DeviceToken.updateMany({ userId: req.user!.sub, sessionId: { $in: ids } }, { $set: { isActive: false } });
-    ids.forEach((id) => realtime.disconnectSession(id));
+    ids.forEach((id) => realtime.revokeSession(id, 'customer_revoked_other_devices'));
     sendSuccess(res, { revokedCount: ids.length });
   };
 }

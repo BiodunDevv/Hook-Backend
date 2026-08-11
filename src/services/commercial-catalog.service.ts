@@ -8,6 +8,15 @@ import { CatalogMediaService } from './catalog-media.service';
 import { byIdentifier } from './catalog.service';
 import { HttpError } from '@utils/http';
 import { publishRealtime } from '@services/realtime.service';
+import { CommerceSettings } from '@models/commerce/commerce.model';
+
+async function nextAvailabilityDeadline(from = new Date()) {
+  const settings = await CommerceSettings.findOne({ key: 'commerce' })
+    .select('catalogAvailabilityCheckDays')
+    .lean();
+  const days = Math.min(Math.max(Number(settings?.catalogAvailabilityCheckDays || 4), 1), 30);
+  return new Date(from.getTime() + days * 24 * 60 * 60 * 1000);
+}
 
 function versionFilter(record: any, version: number) {
   if (Number(record.catalogVersion || record.__v || 1) !== version) {
@@ -272,8 +281,9 @@ export class CommercialCatalogService {
   ) {
     const current = await productRecord(identifier, stateIds);
     let nextStatus: ProductStatus;
+    let availabilityValidUntil: Date | undefined;
     if (action === 'publish') {
-      const [submission, market, category, variants, mediaCount] = await Promise.all([
+      const [submission, market, category, variants, mediaCount, nextDeadline] = await Promise.all([
         current.sourceSubmissionId ? ProductSubmission.findById(current.sourceSubmissionId).lean() : null,
         current.marketId ? Market.findById(current.marketId).lean() : null,
         current.categoryId ? Category.findById(current.categoryId).lean() : null,
@@ -285,7 +295,9 @@ export class CommercialCatalogService {
           ],
           status: 'ready',
         }),
+        nextAvailabilityDeadline(),
       ]);
+      availabilityValidUntil = nextDeadline;
       const missing: string[] = [];
       if (!submission || submission.status !== 'approved') missing.push('approvedSubmission');
       if (!market || market.status !== 'active') missing.push('activeMarket');
@@ -319,9 +331,12 @@ export class CommercialCatalogService {
           status: nextStatus,
           ...(nextStatus === ProductStatus.PUBLISHED
             ? {
-                publishedAt: new Date(),
-                publishedBy: actorId,
-                commercialApproval: { ...(current.commercialApproval || {}), approved: true, approvedBy: actorId, approvedAt: new Date() },
+              publishedAt: new Date(),
+              publishedBy: actorId,
+              availabilityStatus: ProductAvailabilityStatus.AVAILABLE,
+              lastAvailabilityConfirmedAt: new Date(),
+              availabilityValidUntil,
+              commercialApproval: { ...(current.commercialApproval || {}), approved: true, approvedBy: actorId, approvedAt: new Date() },
               }
             : {}),
           ...(nextStatus === ProductStatus.AVAILABILITY_UNCONFIRMED
@@ -344,8 +359,8 @@ export class CommercialCatalogService {
       version: Number(product.catalogVersion || 1),
       scope: product.sourceStateId ? { stateId: String(product.sourceStateId) } : undefined,
     };
-    publishRealtime({ type: 'catalog.updated', ...event }, { public: true, admin: true });
-    publishRealtime({ type: 'home.updated', ...event }, { public: true, admin: true });
+    publishRealtime({ type: 'catalog.updated', entityType: 'product', ...event }, { public: true, admin: true });
+    publishRealtime({ type: 'home.updated', entityType: 'product', ...event }, { public: true, admin: true });
     publishRealtime({ type: 'admin.dashboard.updated', ...event }, { admin: true });
   }
 }
@@ -462,6 +477,8 @@ export async function publicProductRepresentations(products: any[], options: Pub
       }));
     const mediaPresentation = productMedia.length ? productMedia : legacyMedia(product);
     const effectivePriceMinor = Number(product.sellingPriceMinor || 0) - Number(product.discountMinor || 0);
+    const isPurchasable = product.status === ProductStatus.PUBLISHED
+      && [ProductAvailabilityStatus.AVAILABLE, ProductAvailabilityStatus.LIMITED].includes(product.availabilityStatus);
     const productVariants = options.compact ? [] : (variantsMap.get(productId) || []).map((variant: any) => ({
       publicId: variant.publicId,
       size: variant.size || null,
@@ -486,8 +503,9 @@ export async function publicProductRepresentations(products: any[], options: Pub
       sellingPriceMinor: product.sellingPriceMinor,
       effectivePriceMinor,
       discountMinor: product.discountMinor || 0,
-      negotiationAvailable: Boolean(product.negotiationRules?.enabled),
+      negotiationAvailable: isPurchasable && Boolean(product.negotiationRules?.enabled),
       availabilityStatus: product.availabilityStatus,
+      isPurchasable,
     };
     return options.compact
       ? compact

@@ -1,4 +1,5 @@
 import { HttpError } from '@utils/http';
+import { v2 as cloudinary } from 'cloudinary';
 
 export interface MediaAsset {
   url: string;
@@ -31,6 +32,8 @@ const defaultAllowedImageHosts = [
   'images.unsplash.com',
   'plus.unsplash.com',
   'res.cloudinary.com',
+  'encrypted-tbn0.gstatic.com',
+  'images.gstatic.com',
 ];
 
 function allowedImageHosts() {
@@ -90,7 +93,7 @@ function assertImageUrl(value: string) {
   }
 }
 
-function parseCloudinaryAsset(payload: CloudinaryUploadResponse, file: Express.Multer.File): MediaAsset {
+function parseCloudinaryAsset(payload: CloudinaryUploadResponse, file?: Express.Multer.File): MediaAsset {
   if (payload.error?.message) throw new HttpError(502, payload.error.message);
   if (payload.resource_type && payload.resource_type !== 'image') throw new HttpError(400, 'Only image uploads are allowed');
   const secureUrl = payload.secure_url || payload.url;
@@ -103,14 +106,28 @@ function parseCloudinaryAsset(payload: CloudinaryUploadResponse, file: Express.M
     width: payload.width,
     height: payload.height,
     format: payload.format,
-    size: payload.bytes || file.size,
-    originalName: file.originalname,
-    mimetype: file.mimetype,
+    size: payload.bytes || file?.size,
+    originalName: file?.originalname,
+    mimetype: file?.mimetype,
   };
 }
 
 export class MediaService {
   async uploadImage(file: Express.Multer.File): Promise<MediaAsset> {
+    const cloud = cloudName();
+    const apiKey = process.env.CLOUDINARY_API_KEY;
+    const apiSecret = process.env.CLOUDINARY_API_SECRET;
+    if (cloud && apiKey && apiSecret) {
+      cloudinary.config({ cloud_name: cloud, api_key: apiKey, api_secret: apiSecret, secure: true });
+      const payload = await new Promise<CloudinaryUploadResponse>((resolve, reject) => {
+        const stream = cloudinary.uploader.upload_stream(
+          { folder: process.env.CLOUDINARY_UPLOAD_FOLDER || 'hook', resource_type: 'image' },
+          (error, result) => error || !result ? reject(error || new Error('Cloudinary upload failed')) : resolve(result),
+        );
+        stream.end(file.buffer);
+      });
+      return parseCloudinaryAsset(payload, file);
+    }
     assertCloudinaryConfig();
     const body = new FormData();
     const blob = new Blob([file.buffer as BlobPart], { type: file.mimetype });
@@ -129,6 +146,34 @@ export class MediaService {
     return parseCloudinaryAsset(payload, file);
   }
 
+  async uploadRemoteImage(url: string): Promise<MediaAsset> {
+    const cleanUrl = url.trim();
+    assertImageUrl(cleanUrl);
+    const cloud = cloudName();
+    const apiKey = process.env.CLOUDINARY_API_KEY;
+    const apiSecret = process.env.CLOUDINARY_API_SECRET;
+    if (cloud && apiKey && apiSecret) {
+      cloudinary.config({ cloud_name: cloud, api_key: apiKey, api_secret: apiSecret, secure: true });
+      const payload = await cloudinary.uploader.upload(cleanUrl, {
+        folder: process.env.CLOUDINARY_UPLOAD_FOLDER || 'hook',
+        resource_type: 'image',
+      }) as CloudinaryUploadResponse;
+      return parseCloudinaryAsset(payload);
+    }
+
+    assertCloudinaryConfig();
+    const body = new FormData();
+    body.append('file', cleanUrl);
+    body.append('upload_preset', uploadPreset() as string);
+    body.append('folder', process.env.CLOUDINARY_UPLOAD_FOLDER || 'hook');
+    const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName()}/image/upload`, { method: 'POST', body });
+    const payload = (await response.json()) as CloudinaryUploadResponse;
+    if (!response.ok) {
+      throw new HttpError(response.status >= 500 ? 502 : 400, payload.error?.message || 'Cloudinary could not import this image');
+    }
+    return parseCloudinaryAsset(payload);
+  }
+
   fromExternalUrl(url: string): MediaAsset {
     const cleanUrl = url.trim();
     assertImageUrl(cleanUrl);
@@ -140,8 +185,10 @@ export class MediaService {
   }
 
   async normalize(files: Express.Multer.File[], urls: string[] = []): Promise<MediaAsset[]> {
-    const uploaded = await Promise.all(files.map((file) => this.uploadImage(file)));
-    const external = urls.filter(Boolean).map((url) => this.fromExternalUrl(url));
-    return [...uploaded, ...external];
+    const [uploaded, imported] = await Promise.all([
+      Promise.all(files.map((file) => this.uploadImage(file))),
+      Promise.all(urls.filter(Boolean).map((url) => this.uploadRemoteImage(url))),
+    ]);
+    return [...uploaded, ...imported];
   }
 }

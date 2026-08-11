@@ -57,6 +57,8 @@ import { z } from "zod";
 import { FulfilmentController } from "@controllers/fulfilment.controller";
 import { AdminNotificationsController } from "@controllers/admin/notifications.controller";
 import { AdminDeliveryController } from "@controllers/admin/delivery.controller";
+import { UploadController } from "@controllers/upload.controller";
+import { upload } from "@middleware/upload";
 
 export function createAdminRouter() {
   const router = Router();
@@ -79,6 +81,7 @@ export function createAdminRouter() {
   const fulfilment = new FulfilmentController();
   const notifications = new AdminNotificationsController();
   const delivery = new AdminDeliveryController();
+  const uploads = new UploadController();
 
   // ── Public admin auth (no token required) ──────────────────────────────
   router.use("/auth", createAdminAuthRouter());
@@ -86,6 +89,12 @@ export function createAdminRouter() {
   // ── All routes below require a valid admin token ───────────────────────
   router.use(requireAuth, requireAdmin);
   router.use(platformContext);
+  router.post(
+    "/uploads/images",
+    requirePermission("markets.manage"),
+    upload.array("images", Number(process.env.UPLOAD_MAX_FILES || 8)),
+    asyncHandler(uploads.images),
+  );
   router.use("/", createPlatformAdminRouter());
 
   // Customer notifications stay outside the staff route group.

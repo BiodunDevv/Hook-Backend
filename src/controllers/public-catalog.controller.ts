@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { ProductStatus } from '@lib/constants';
+import { ProductAvailabilityStatus, ProductStatus } from '@lib/constants';
 import { Category } from '@models/categories/category.model';
 import { OperationState } from '@models/platform/geography.model';
 import { Market } from '@models/platform/network.model';
@@ -24,6 +24,8 @@ const PUBLIC_PRODUCT_CARD_FIELDS = [
   'currency',
   'negotiationRules.enabled',
   'availabilityStatus',
+  'status',
+  'availabilityValidUntil',
   'publishedAt',
 ].join(' ');
 const PUBLIC_PRODUCT_FIELDS = `${PUBLIC_PRODUCT_CARD_FIELDS} description customerAvailabilityNote`;
@@ -50,7 +52,68 @@ function queryKey(query: Record<string, unknown>) {
   return JSON.stringify(Object.keys(query).sort().map((key) => [key, query[key]]));
 }
 
+function escapeRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function searchClause(value: unknown) {
+  const query = String(value || '').normalize('NFKC').trim().slice(0, 80);
+  if (!query) return undefined;
+
+  const terms = [...new Set(query.toLowerCase().split(/\s+/).filter(Boolean))].slice(0, 6);
+  const clauses = terms.map((term) => {
+    const expression = { $regex: escapeRegex(term), $options: 'i' };
+    return {
+      $or: [
+        { title: expression },
+        { slug: expression },
+        { description: expression },
+      ],
+    };
+  });
+
+  return clauses.length === 1 ? clauses[0] : { $and: clauses };
+}
+
 export class PublicCatalogController {
+  discover = async (req: Request, res: Response) => {
+    const limit = Math.min(Math.max(Number(req.query.limit || 20), 1), 40);
+    const filter: Record<string, any> = baseFilter();
+    const [stateId, marketId, categoryId] = await Promise.all([
+      internalId(OperationState, String(req.query.stateId || req.query.stateCode || '') || undefined, ['code']),
+      internalId(Market, String(req.query.marketId || '') || undefined),
+      internalId(Category, String(req.query.categoryId || '') || undefined),
+    ]);
+    if (stateId) filter.sourceStateId = stateId;
+    if (marketId) filter.marketId = marketId;
+    if (categoryId) filter.categoryId = categoryId;
+    const search = searchClause(req.query.q);
+    if (search) filter.$and = [search];
+
+    const [products, categories] = await Promise.all([
+      Product.find(filter)
+        .select(PUBLIC_PRODUCT_CARD_FIELDS)
+        .sort({ publishedAt: -1, _id: -1 })
+        .limit(limit)
+        .lean({ virtuals: true }),
+      Category.find({ isActive: true, deletedAt: { $exists: false } })
+        .select('publicId name slug iconUrl')
+        .sort({ sortOrder: 1, name: 1 })
+        .lean({ virtuals: true }),
+    ]);
+
+    sendSuccess(res, {
+      categories: categories.map((item: any) => ({
+        publicId: item.publicId,
+        name: item.name,
+        slug: item.slug,
+        iconUrl: item.iconUrl || null,
+      })),
+      products: await publicProductRepresentations(products, { compact: true }),
+      resultCount: products.length,
+    });
+  };
+
   products = async (req: Request, res: Response) => {
     const cacheKey = `products:${queryKey(req.query as Record<string, unknown>)}`;
     const cached = publicCatalogCache.get(cacheKey);
@@ -80,7 +143,9 @@ export class PublicCatalogController {
         ],
       };
     }
-    if (req.query.q) filter.$text = { $search: String(req.query.q) };
+    const conditions: Record<string, unknown>[] = [];
+    const search = searchClause(req.query.q);
+    if (search) conditions.push(search);
     const sort: Record<string, 1 | -1> = req.query.sort === 'price_asc'
       ? { sellingPriceMinor: 1 as const, _id: -1 as const }
       : req.query.sort === 'price_desc'
@@ -95,11 +160,12 @@ export class PublicCatalogController {
     if (cursor) {
       const field = cursorMode === 'published' ? 'publishedAt' : 'sellingPriceMinor';
       const comparison = cursorMode === 'price_asc' ? '$gt' : '$lt';
-      filter.$or = [
+      conditions.push({ $or: [
         { [field]: { [comparison]: cursor.value } },
         { [field]: cursor.value, _id: { $lt: cursor.id } },
-      ];
+      ] });
     }
+    if (conditions.length) filter.$and = conditions;
     const rows = await Product.find(filter)
       .select(PUBLIC_PRODUCT_CARD_FIELDS)
       .sort(sort)
@@ -124,18 +190,45 @@ export class PublicCatalogController {
       sendSuccess(res, cached);
       return;
     }
+    const identifier = /^[a-f\d]{24}$/i.test(id)
+      ? { $or: [{ _id: id }, { publicId: id }, { slug: id }] }
+      : { $or: [{ publicId: id }, { slug: id }] };
     const product = await Product.findOne({
-      ...(/^[a-f\d]{24}$/i.test(id)
-        ? { $or: [{ _id: id }, { publicId: id }, { slug: id }] }
-        : { $or: [{ publicId: id }, { slug: id }] }),
-      ...baseFilter(),
-    })
+      $and: [
+        identifier,
+        { publishedAt: { $exists: true, $lte: new Date() } },
+        { deletedAt: { $exists: false } },
+        {
+          $or: [
+            { status: ProductStatus.PUBLISHED },
+            {
+              status: { $in: [ProductStatus.AVAILABILITY_UNCONFIRMED, ProductStatus.PAUSED] },
+              availabilityStatus: { $in: [ProductAvailabilityStatus.UNCONFIRMED, ProductAvailabilityStatus.UNAVAILABLE] },
+            },
+          ],
+        },
+      ],
+    } as any)
       .select(PUBLIC_PRODUCT_FIELDS)
       .lean({ virtuals: true });
     if (!product) throw new HttpError(404, 'Product not found', undefined, 'NOT_FOUND');
     const response = await publicProductRepresentation(product);
     publicCatalogCache.set(cacheKey, response, 30_000);
     sendSuccess(res, response);
+  };
+
+  statuses = async (req: Request, res: Response) => {
+    const ids = [...new Set(String(req.query.ids || '').split(',').map((id) => id.trim()).filter(Boolean))].slice(0, 50);
+    if (!ids.length) {
+      sendSuccess(res, []);
+      return;
+    }
+    const products = await Product.find({
+      publicId: { $in: ids },
+      publishedAt: { $exists: true, $lte: new Date() },
+      deletedAt: { $exists: false },
+    }).select(PUBLIC_PRODUCT_CARD_FIELDS).lean({ virtuals: true });
+    sendSuccess(res, await publicProductRepresentations(products, { compact: true }));
   };
 
   categories = async (_req: Request, res: Response) => {
@@ -163,6 +256,34 @@ export class PublicCatalogController {
   };
 
   search = async (req: Request, res: Response) => this.products(req, res);
+
+  suggestions = async (req: Request, res: Response) => {
+    const query = String(req.query.q || '').normalize('NFKC').trim().slice(0, 80);
+    if (!query) {
+      sendSuccess(res, []);
+      return;
+    }
+
+    const clause = searchClause(query);
+    if (!clause) {
+      sendSuccess(res, []);
+      return;
+    }
+    const filter: Record<string, any> = { ...baseFilter(), $and: [clause] };
+    const stateIdentifier = String(req.query.stateId || req.query.stateCode || '') || undefined;
+    const stateId = await internalId(OperationState, stateIdentifier, ['code']);
+    if (stateId) filter.sourceStateId = stateId;
+    const rows = await Product.find(filter)
+      .select('title')
+      .sort({ publishedAt: -1, _id: -1 })
+      .limit(8)
+      .lean();
+    const seen = new Set<string>();
+    const values = rows
+      .map((row: any) => String(row.title || '').trim())
+      .filter((title) => title && !seen.has(title.toLowerCase()) && seen.add(title.toLowerCase()));
+    sendSuccess(res, values);
+  };
 
   home = async (req: Request, res: Response) => {
     const stateIdentifier = String(req.query.stateId || req.query.stateCode || '') || undefined;

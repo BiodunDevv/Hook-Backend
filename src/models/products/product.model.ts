@@ -34,6 +34,7 @@ export interface Product extends BaseEntity {
   lastMarketVerifiedAt?: Date;
   lastPriceVerifiedAt?: Date;
   lastAvailabilityConfirmedAt?: Date;
+  availabilityValidUntil?: Date;
   availabilityCheckRequestedAt?: Date;
   availabilityCheckDueAt?: Date;
   availabilityCheckRequestedBy?: string;
@@ -107,6 +108,7 @@ const ProductSchema = createSchema<Product>({
   lastMarketVerifiedAt: { type: Date },
   lastPriceVerifiedAt: { type: Date },
   lastAvailabilityConfirmedAt: { type: Date },
+  availabilityValidUntil: { type: Date, index: true },
   availabilityCheckRequestedAt: { type: Date, index: true },
   availabilityCheckDueAt: { type: Date, index: true },
   availabilityCheckRequestedBy: { type: String },
@@ -140,6 +142,7 @@ ProductSchema.index({ vendorId: 1, status: 1 });
 ProductSchema.index({ title: 'text', description: 'text' });
 ProductSchema.index({ sourceStateId: 1, marketId: 1, status: 1, publishedAt: -1 });
 ProductSchema.index({ categoryId: 1, status: 1, publishedAt: -1 });
+ProductSchema.index({ status: 1, availabilityStatus: 1, availabilityValidUntil: 1 });
 
 ProductSchema.pre('validate', function normalizeColors() {
   this.colors = normalizeProductColors(this.colors);

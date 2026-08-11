@@ -1,6 +1,6 @@
 import { createHash } from 'crypto';
 import mongoose from 'mongoose';
-import { AccountType, NegotiatedQuoteStatus, NegotiationStatus, ProductStatus } from '@lib/constants';
+import { AccountType, NegotiatedQuoteStatus, NegotiationStatus, ProductAvailabilityStatus, ProductStatus } from '@lib/constants';
 import { NegotiatedQuote, ProductVariant } from '@models/catalog/catalog.model';
 import { Negotiation } from '@models/negotiations/negotiation.model';
 import { Product } from '@models/products/product.model';
@@ -53,6 +53,7 @@ export class NegotiationService {
     const product = await Product.findOne({
       ...identifier(input.productId),
       status: ProductStatus.PUBLISHED,
+      availabilityStatus: { $in: [ProductAvailabilityStatus.AVAILABLE, ProductAvailabilityStatus.LIMITED] },
       'negotiationRules.enabled': true,
       deletedAt: { $exists: false },
     }).lean({ virtuals: true });

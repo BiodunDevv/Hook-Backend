@@ -114,8 +114,8 @@ function publishMarketUpdate(market: any) {
     ...(market.stateId ? { stateId: String(market.stateId) } : {}),
     ...(market.hubId ? { hubId: String(market.hubId) } : {}),
   };
-  publishRealtime({ type: 'catalog.updated', ...event }, targets);
-  publishRealtime({ type: 'home.updated', ...event }, targets);
+  publishRealtime({ type: 'catalog.updated', entityType: 'market', ...event }, targets);
+  publishRealtime({ type: 'home.updated', entityType: 'market', ...event }, targets);
   publishRealtime({ type: 'admin.dashboard.updated', ...event }, targets);
 }
 

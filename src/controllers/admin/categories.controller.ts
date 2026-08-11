@@ -30,8 +30,8 @@ function publishCategoryUpdate(category: any) {
     entityId: category.publicId || category.id,
     version: Number(category.version || 1),
   };
-  publishRealtime({ type: 'catalog.updated', ...event }, { public: true, admin: true });
-  publishRealtime({ type: 'home.updated', ...event }, { public: true, admin: true });
+  publishRealtime({ type: 'catalog.updated', entityType: 'category', ...event }, { public: true, admin: true });
+  publishRealtime({ type: 'home.updated', entityType: 'category', ...event }, { public: true, admin: true });
   publishRealtime({ type: 'admin.dashboard.updated', ...event }, { admin: true });
 }
 

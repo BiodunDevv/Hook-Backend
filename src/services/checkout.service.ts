@@ -13,6 +13,7 @@ import {
   OrderType,
   PaymentMode,
   PaymentStatus,
+  ProductAvailabilityStatus,
   ProductStatus,
 } from "@lib/constants";
 import { Cart } from "@models/cart/cart.model";
@@ -684,6 +685,7 @@ export class CheckoutService {
     const products = await Product.find({
       _id: { $in: items.map((item) => item.productId) },
       status: ProductStatus.PUBLISHED,
+      availabilityStatus: { $in: [ProductAvailabilityStatus.AVAILABLE, ProductAvailabilityStatus.LIMITED] },
     }).lean({ virtuals: true });
     const map = new Map(
       products.map((product) => [recordId(product), product]),

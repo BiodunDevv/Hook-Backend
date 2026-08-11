@@ -391,7 +391,7 @@ export class AuthService {
       firstName: body.firstName ?? user.firstName,
       lastName: body.lastName ?? user.lastName,
       phone: body.phone ?? user.phone,
-      avatarUrl: body.avatarUrl ?? user.avatarUrl,
+      avatarUrl: body.avatarUrl !== undefined ? body.avatarUrl : user.avatarUrl,
       address: body.address ?? user.address,
       preferences: body.preferences ?? user.preferences,
       isActive: true,

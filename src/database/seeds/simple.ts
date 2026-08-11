@@ -529,12 +529,15 @@ async function seedProducts(categories: any[], markets: any[], states: any[], ad
       lastMarketVerifiedAt: new Date(),
       lastPriceVerifiedAt: new Date(),
       lastAvailabilityConfirmedAt: availabilityStatus === ProductAvailabilityStatus.UNCONFIRMED ? undefined : new Date(),
+      availabilityValidUntil: [ProductAvailabilityStatus.AVAILABLE, ProductAvailabilityStatus.LIMITED].includes(availabilityStatus)
+        ? new Date(Date.now() + 4 * 24 * 60 * 60 * 1000)
+        : undefined,
       availabilityCheckRequestedAt: availabilityStatus === ProductAvailabilityStatus.UNCONFIRMED ? new Date(Date.now() - 5 * 24 * 60 * 60 * 1000) : undefined,
       availabilityCheckDueAt: availabilityStatus === ProductAvailabilityStatus.UNCONFIRMED ? new Date(Date.now() - 24 * 60 * 60 * 1000) : undefined,
       availabilityPreviousStatus: availabilityStatus === ProductAvailabilityStatus.UNCONFIRMED ? ProductStatus.PUBLISHED : undefined,
       availabilityCheckRequestedBy: availabilityStatus === ProductAvailabilityStatus.UNCONFIRMED ? adminId : undefined,
       availabilityCheckNote: availabilityStatus === ProductAvailabilityStatus.UNCONFIRMED ? 'Confirm stock with the source vendor before republishing.' : undefined,
-      publishedAt: availabilityStatus === ProductAvailabilityStatus.UNCONFIRMED || availabilityStatus === ProductAvailabilityStatus.UNAVAILABLE ? undefined : new Date(Date.now() - index * 60_000),
+      publishedAt: new Date(Date.now() - index * 60_000),
       publishedBy: adminId,
       commercialApproval: { approved: true, approvedBy: adminId, approvedAt: new Date() },
       catalogMigrationVersion: 3,

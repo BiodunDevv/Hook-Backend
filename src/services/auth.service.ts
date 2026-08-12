@@ -80,9 +80,10 @@ export class AuthService {
     };
   }
 
-  async login(email: string, password: string, portal: 'customer' | 'staff' = 'customer') {
+  async login(email: string, password: string, portal: 'customer' | 'staff' | 'auto' = 'auto') {
+    const normalizedEmail = email.toLowerCase().trim();
     const user = await this.userRepo.findOne({
-      where: { email },
+      where: { email: normalizedEmail },
       select: {
         id: true,
         email: true,
@@ -103,7 +104,11 @@ export class AuthService {
       throw new HttpError(401, 'Invalid email or password');
     }
 
-    const customerLogin = portal === 'customer';
+    const isCustomerAccount = user.accountType
+      ? user.accountType === AccountType.CUSTOMER
+      : user.role === UserRole.SHOPPER;
+    const customerLogin = portal === 'customer'
+      || (portal === 'auto' && isCustomerAccount);
     if (customerLogin && user.accountType && user.accountType !== AccountType.CUSTOMER) {
       throw new HttpError(403, 'Use the Hook staff portal to sign in to this account', undefined, 'ACCOUNT_PORTAL_MISMATCH');
     }

@@ -32,7 +32,10 @@ export class AuthController {
   };
 
   login = async (req: Request, res: Response) => {
-    const portal = req.header('x-hook-portal') === 'staff' ? 'staff' : 'customer';
+    const requestedPortal = req.header('x-hook-portal');
+    const portal = requestedPortal === 'staff' || requestedPortal === 'customer'
+      ? requestedPortal
+      : 'auto';
     sendSuccess(res, await this.auth.login(req.body.email, req.body.password, portal));
   };
 

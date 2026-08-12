@@ -80,7 +80,7 @@ export class AuthService {
     };
   }
 
-  async login(email: string, password: string) {
+  async login(email: string, password: string, portal: 'customer' | 'staff' = 'customer') {
     const user = await this.userRepo.findOne({
       where: { email },
       select: {
@@ -102,6 +102,18 @@ export class AuthService {
     if (!user?.password || !(await comparePassword(password, user.password))) {
       throw new HttpError(401, 'Invalid email or password');
     }
+
+    const customerLogin = portal === 'customer';
+    if (customerLogin && user.accountType && user.accountType !== AccountType.CUSTOMER) {
+      throw new HttpError(403, 'Use the Hook staff portal to sign in to this account', undefined, 'ACCOUNT_PORTAL_MISMATCH');
+    }
+    if (customerLogin && !user.accountType && user.role !== UserRole.SHOPPER) {
+      throw new HttpError(403, 'Use the Hook staff portal to sign in to this account', undefined, 'ACCOUNT_PORTAL_MISMATCH');
+    }
+    if (!customerLogin && (user.accountType === AccountType.CUSTOMER || (!user.accountType && user.role === UserRole.SHOPPER))) {
+      throw new HttpError(403, 'Use the Hook mobile app to sign in to this customer account', undefined, 'ACCOUNT_PORTAL_MISMATCH');
+    }
+    if (customerLogin) user.accountType = AccountType.CUSTOMER;
 
     if (!user.isActive) {
       throw new HttpError(401, 'Account not activated. Complete your profile first.');
@@ -133,6 +145,13 @@ export class AuthService {
     const isNewUser = !user;
 
     if (user) {
+      if (user.accountType && user.accountType !== AccountType.CUSTOMER) {
+        throw new HttpError(403, 'Use the Hook staff portal to sign in to this account', undefined, 'ACCOUNT_PORTAL_MISMATCH');
+      }
+      if (!user.accountType && user.role !== UserRole.SHOPPER) {
+        throw new HttpError(403, 'Use the Hook staff portal to sign in to this account', undefined, 'ACCOUNT_PORTAL_MISMATCH');
+      }
+      user.accountType = AccountType.CUSTOMER;
       if (!user.isActive || (user.accountStatus && user.accountStatus !== AccountStatus.ACTIVE)) {
         throw new HttpError(403, 'This account is not available for sign in', undefined, 'ACCESS_DENIED');
       }
@@ -205,6 +224,13 @@ export class AuthService {
         lastLoginAt: new Date(),
       }));
     } else {
+      if (user.accountType && user.accountType !== AccountType.CUSTOMER) {
+        throw new HttpError(403, 'Use the Hook staff portal to sign in to this account', undefined, 'ACCOUNT_PORTAL_MISMATCH');
+      }
+      if (!user.accountType && user.role !== UserRole.SHOPPER) {
+        throw new HttpError(403, 'Use the Hook staff portal to sign in to this account', undefined, 'ACCOUNT_PORTAL_MISMATCH');
+      }
+      user.accountType = AccountType.CUSTOMER;
       if (!user.isActive || (user.accountStatus && user.accountStatus !== AccountStatus.ACTIVE)) {
         throw new HttpError(403, 'This account is not available for sign in', undefined, 'ACCESS_DENIED');
       }

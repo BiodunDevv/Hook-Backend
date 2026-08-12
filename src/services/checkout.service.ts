@@ -712,7 +712,7 @@ export class CheckoutService {
           _id: item.quoteId,
           customerId,
           productId,
-          quantity: item.quantity,
+          ...(item.variantId ? { variantId: item.variantId } : {}),
           status: NegotiatedQuoteStatus.ACTIVE,
           expiresAt: { $gt: new Date() },
         }).lean({ virtuals: true });

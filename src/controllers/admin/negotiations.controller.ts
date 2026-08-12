@@ -2,6 +2,9 @@ import { Request, Response } from 'express';
 import { NegotiationStatus } from '@lib/constants';
 import { Negotiation } from '@models/negotiations/negotiation.model';
 import { Product } from '@models/products/product.model';
+import { CommerceSettings } from '@models/commerce/commerce.model';
+import { User } from '@models/users/user.model';
+import { recordAudit } from '@services/platform-audit.service';
 import { HttpError, sendSuccess } from '@utils/http';
 import { routeParam } from './admin.helpers';
 
@@ -27,6 +30,8 @@ function safeSession(session: any, product?: any, includeTranscript = false) {
     maximumOffers: session.maximumOffers,
     lastDecision: session.lastDecision || null,
     agreedPriceMinor: session.agreedPriceMinor || null,
+    language: session.language || 'english',
+    providerFallback: Boolean((session.providerTelemetry || []).some((entry: any) => entry.failed)),
     ...(includeTranscript ? { transcript: session.transcript || [] } : {}),
     ...(includeTranscript ? { providerTelemetry: (session.providerTelemetry || []).map((entry: any) => ({
       provider: entry.provider,
@@ -47,9 +52,9 @@ export class AdminNegotiationsController {
       filter.status = req.query.status;
     }
     if (req.platformContext?.stateId) filter.sourceStateId = req.platformContext.stateId;
-    const [sessions, total, accepted] = await Promise.all([
+    const [sessions, total, accepted, active, fallbackSessions] = await Promise.all([
       Negotiation.find(filter)
-        .select('publicId status channel productId quantity currency offerCount maximumOffers lastDecision agreedPriceMinor expiresAt createdAt updatedAt')
+        .select('publicId status channel customerId productId quantity currency offerCount maximumOffers lastDecision agreedPriceMinor language providerTelemetry expiresAt createdAt updatedAt')
         .sort({ createdAt: -1 })
         .limit(limit + 1)
         .lean({ virtuals: true }),
@@ -58,18 +63,24 @@ export class AdminNegotiationsController {
         ...filter,
         status: { $in: [NegotiationStatus.AGREED, NegotiationStatus.ACCEPTED] },
       }),
+      Negotiation.countDocuments({ ...filter, status: NegotiationStatus.ACTIVE }),
+      Negotiation.countDocuments({ ...filter, 'providerTelemetry.failed': true }),
     ]);
     const page = sessions.slice(0, limit);
     const products = await Product.find({ _id: { $in: page.map((item) => item.productId) } })
       .select('publicId title name images')
       .lean({ virtuals: true });
     const productById = new Map(products.map((product) => [product._id.toString(), product]));
+    const customers = await User.find({ _id: { $in: page.map((item) => item.customerId).filter(Boolean) } }).select('firstName lastName email').lean();
+    const customerById = new Map(customers.map((customer) => [customer._id.toString(), customer]));
     sendSuccess(res, {
-      data: page.map((session) => safeSession(session, productById.get(session.productId))),
+      data: page.map((session) => ({ ...safeSession(session, productById.get(session.productId)), customer: customerById.get(session.customerId || '') || null })),
       total,
       hasMore: sessions.length > limit,
       accepted,
       conversionRate: total ? Math.round((accepted / total) * 10_000) / 100 : 0,
+      active,
+      fallbackRate: total ? Math.round((fallbackSessions / total) * 10_000) / 100 : 0,
     });
   };
 
@@ -79,6 +90,44 @@ export class AdminNegotiationsController {
     const session = await Negotiation.findOne(filter).lean({ virtuals: true });
     if (!session) throw new HttpError(404, 'Negotiation not found', undefined, 'NOT_FOUND');
     const product = await Product.findById(session.productId).select('publicId title name images').lean({ virtuals: true });
-    sendSuccess(res, safeSession(session, product, true));
+    const canReadTranscript = req.user?.roleKeys?.includes('SUPER_ADMIN') || req.user?.permissions?.includes('ai_negotiation.transcript.view');
+    const customer = session.customerId ? await User.findById(session.customerId).select('firstName lastName email').lean() : null;
+    if (canReadTranscript) await recordAudit(req, { action: 'negotiation.transcript_viewed', entityType: 'negotiation', entityPublicId: session.publicId });
+    sendSuccess(res, { ...safeSession(session, product, Boolean(canReadTranscript)), customer, transcriptRestricted: !canReadTranscript });
+  };
+
+  settings = async (_req: Request, res: Response) => {
+    const settings = await CommerceSettings.findOne({ key: 'commerce' })
+      .select('negotiationEnabled negotiationSessionMode negotiationSessionMinutes negotiationMaximumOffers negotiationQuoteMinutes negotiationAzureWordingEnabled updatedAt')
+      .lean();
+    sendSuccess(res, {
+      enabled: settings?.negotiationEnabled !== false,
+      sessionMode: settings?.negotiationSessionMode || 'fixed',
+      sessionMinutes: settings?.negotiationSessionMinutes || 10,
+      maximumOffers: settings?.negotiationMaximumOffers || 3,
+      quoteMinutes: settings?.negotiationQuoteMinutes || 30,
+      azureWordingEnabled: settings?.negotiationAzureWordingEnabled !== false,
+      providerConfigured: Boolean(process.env.AZURE_OPENAI_API_KEY && process.env.AZURE_OPENAI_ENDPOINT && process.env.AZURE_OPENAI_DEPLOYMENT_NAME),
+      updatedAt: settings?.updatedAt,
+    });
+  };
+
+  updateSettings = async (req: Request, res: Response) => {
+    const before = await CommerceSettings.findOne({ key: 'commerce' }).lean();
+    const updated = await CommerceSettings.findOneAndUpdate(
+      { key: 'commerce' },
+      { $set: {
+        negotiationEnabled: req.body.enabled,
+        negotiationSessionMode: req.body.sessionMode,
+        negotiationSessionMinutes: req.body.sessionMinutes,
+        negotiationMaximumOffers: req.body.maximumOffers,
+        negotiationQuoteMinutes: req.body.quoteMinutes,
+        negotiationAzureWordingEnabled: req.body.azureWordingEnabled,
+        updatedBy: req.user!.sub,
+      } },
+      { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
+    ).lean();
+    await recordAudit(req, { action: 'negotiation.settings_updated', entityType: 'commerce_settings', before, after: updated, reason: req.body.reason });
+    sendSuccess(res, { message: 'Negotiation settings updated' });
   };
 }

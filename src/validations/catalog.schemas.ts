@@ -97,8 +97,12 @@ export const negotiationCreateSchema = z.object({
   productId: publicOrInternalId,
   variantId: publicOrInternalId,
   quantity: z.coerce.number().int().min(1).max(20),
+  message: z.string().trim().max(500).optional(),
 }).strict();
 
 export const negotiationOfferSchema = z.object({
-  offeredPriceMinor: moneyMinor,
-}).strict();
+  offeredPriceMinor: moneyMinor.optional(),
+  message: z.string().trim().min(1).max(500),
+}).strict().refine((value) => Boolean(value.message || value.offeredPriceMinor), {
+  message: 'Enter a message or offer',
+});

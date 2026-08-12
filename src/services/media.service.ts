@@ -1,5 +1,7 @@
 import { HttpError } from '@utils/http';
 import { v2 as cloudinary } from 'cloudinary';
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
 
 export interface MediaAsset {
   url: string;
@@ -26,31 +28,21 @@ interface CloudinaryUploadResponse {
   error?: { message?: string };
 }
 
-const imageExtensionPattern = /\.(avif|gif|jpe?g|png|svg|webp)(\?.*)?$/i;
-const defaultAllowedImageHosts = [
-  'cloudinary.com',
-  'images.unsplash.com',
-  'plus.unsplash.com',
-  'res.cloudinary.com',
-  'encrypted-tbn0.gstatic.com',
-  'images.gstatic.com',
-];
-
-function allowedImageHosts() {
-  return (process.env.ALLOWED_EXTERNAL_IMAGE_HOSTS || defaultAllowedImageHosts.join(','))
-    .split(',')
-    .map((host) => host.trim().toLowerCase())
-    .filter(Boolean);
-}
-
-function isPrivateHostname(hostname: string) {
-  const host = hostname.toLowerCase();
-  if (['localhost', 'metadata.google.internal'].includes(host)) return true;
-  if (/^(127|10)\./.test(host)) return true;
-  if (/^192\.168\./.test(host)) return true;
-  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(host)) return true;
-  if (/^169\.254\./.test(host)) return true;
-  if (host === '::1' || host.startsWith('fc') || host.startsWith('fd')) return true;
+function isPrivateAddress(address: string) {
+  const normalized = address.toLowerCase().replace(/^\[|\]$/g, '');
+  if (isIP(normalized) === 4) {
+    const parts = normalized.split('.').map(Number);
+    return parts[0] === 0 || parts[0] === 10 || parts[0] === 127 ||
+      (parts[0] === 169 && parts[1] === 254) ||
+      (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+      (parts[0] === 192 && parts[1] === 168) ||
+      parts[0] >= 224;
+  }
+  if (isIP(normalized) === 6) {
+    return normalized === '::' || normalized === '::1' || normalized.startsWith('fc') ||
+      normalized.startsWith('fd') || normalized.startsWith('fe8') || normalized.startsWith('fe9') ||
+      normalized.startsWith('fea') || normalized.startsWith('feb') || normalized.startsWith('ff');
+  }
   return false;
 }
 
@@ -68,7 +60,7 @@ function assertCloudinaryConfig() {
   }
 }
 
-function assertImageUrl(value: string) {
+function parseImageUrl(value: string) {
   let parsed: URL;
   try {
     parsed = new URL(value);
@@ -79,17 +71,22 @@ function assertImageUrl(value: string) {
     throw new HttpError(400, 'Image URL must start with http or https');
   }
   const host = parsed.hostname.toLowerCase();
-  if (isPrivateHostname(host)) {
+  if (!host || host === 'localhost' || host.endsWith('.localhost') || host === 'metadata.google.internal' || isPrivateAddress(host)) {
     throw new HttpError(400, 'Private or internal image URLs are not allowed');
   }
-  const allowed = allowedImageHosts();
-  const allowedHost = allowed.some((item) => host === item || host.endsWith(`.${item}`));
-  if (!allowedHost) {
-    throw new HttpError(400, `Image host is not allowed: ${host}`);
-  }
-  const looksLikeImage = imageExtensionPattern.test(parsed.pathname) || allowed.some((item) => host === item || host.endsWith(`.${item}`));
-  if (!looksLikeImage) {
-    throw new HttpError(400, `Image URL must point to a supported image resource: ${value}`);
+  return parsed;
+}
+
+async function assertPublicImageUrl(value: string) {
+  const parsed = parseImageUrl(value);
+  try {
+    const addresses = await lookup(parsed.hostname, { all: true, verbatim: true });
+    if (!addresses.length || addresses.some((entry) => isPrivateAddress(entry.address))) {
+      throw new HttpError(400, 'Private or internal image URLs are not allowed');
+    }
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    throw new HttpError(400, 'The image host could not be reached');
   }
 }
 
@@ -148,7 +145,7 @@ export class MediaService {
 
   async uploadRemoteImage(url: string): Promise<MediaAsset> {
     const cleanUrl = url.trim();
-    assertImageUrl(cleanUrl);
+    await assertPublicImageUrl(cleanUrl);
     const cloud = cloudName();
     const apiKey = process.env.CLOUDINARY_API_KEY;
     const apiSecret = process.env.CLOUDINARY_API_SECRET;
@@ -176,7 +173,7 @@ export class MediaService {
 
   fromExternalUrl(url: string): MediaAsset {
     const cleanUrl = url.trim();
-    assertImageUrl(cleanUrl);
+    parseImageUrl(cleanUrl);
     return {
       url: cleanUrl,
       secureUrl: cleanUrl,

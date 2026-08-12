@@ -550,6 +550,25 @@ export function createAdminRouter() {
     requirePermission("ai_negotiation.view"),
     asyncHandler(negotiations.detail),
   );
+  router.get(
+    "/negotiation-settings",
+    requirePermission("ai_negotiation.view"),
+    asyncHandler(negotiations.settings),
+  );
+  router.patch(
+    "/negotiation-settings",
+    requirePermission("ai_negotiation.manage"),
+    validateBody(z.object({
+      enabled: z.boolean(),
+      sessionMode: z.enum(["fixed", "unlimited"]),
+      sessionMinutes: z.number().int().min(1).max(1440),
+      maximumOffers: z.number().int().min(1).max(10),
+      quoteMinutes: z.number().int().min(1).max(1440),
+      azureWordingEnabled: z.boolean(),
+      reason: z.string().trim().min(3).max(500),
+    }).strict()),
+    asyncHandler(negotiations.updateSettings),
+  );
 
   // ── Reports ───────────────────────────────────────────────────────────
   router.get(

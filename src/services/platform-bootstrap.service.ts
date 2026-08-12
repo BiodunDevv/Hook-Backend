@@ -25,7 +25,7 @@ const domains: Record<string, string[]> = {
   deletions: ['view', 'manage'],
   analytics: ['checkout'],
   reports: ['view'],
-  ai_negotiation: ['view'],
+  ai_negotiation: ['view', 'manage', 'transcript.view'],
   settings: ['view', 'manage'],
   audit: ['view'],
   'commerce.pod': ['review', 'override', 'eligibility'],
@@ -87,7 +87,7 @@ const commercialManage = [
   'catalog.negotiation_rules.view_internal',
   'catalog.negotiation_rules.edit',
   'catalog.media.review',
-  'ai_negotiation.view',
+  'ai_negotiation.view', 'ai_negotiation.manage', 'ai_negotiation.transcript.view',
 ];
 const supportPermissions = [
   ...orderRead,

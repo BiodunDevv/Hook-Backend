@@ -163,8 +163,7 @@ export class CartService {
         customerId: owner.userId,
         status: NegotiatedQuoteStatus.ACTIVE,
         expiresAt: { $gt: new Date() },
-        quantity,
-        ...(variant ? { variantId: variant.id } : {}),
+        ...(variant ? { variantId: variant._id.toString() } : {}),
       }).lean({ virtuals: true });
       if (!quote)
         throw new HttpError(
@@ -247,7 +246,7 @@ export class CartService {
         "publicId quantity quoteId quoteVersion unitPriceMinor totalPriceMinor unitPrice totalPrice",
       );
       if (existing) {
-        const nextQuantity = existing.quantity + quantity;
+        const nextQuantity = quote ? quantity : existing.quantity + quantity;
         if (nextQuantity > 99)
           throw new HttpError(
             400,
@@ -255,7 +254,11 @@ export class CartService {
             undefined,
             "VALIDATION_ERROR",
           );
-        if (existing.quoteId && nextQuantity !== quote?.quantity) {
+        if (quote) {
+          existing.quoteId = quote._id.toString();
+          existing.quoteVersion = quote.version || 1;
+          existing.unitPriceMinor = quote.agreedPriceMinor;
+        } else if (existing.quoteId) {
           existing.quoteId = undefined;
           existing.quoteVersion = undefined;
           existing.unitPriceMinor = Number(
@@ -348,7 +351,7 @@ export class CartService {
     if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > 99)
       throw new HttpError(400, "Quantity must be between 1 and 99");
     const item = await CartItem.findOne({ ...identifierFilter(itemId), cartId })
-      .select("quantity unitPriceMinor quoteId quoteVersion productId")
+      .select("quantity unitPriceMinor quoteId quoteVersion productId variantId")
       .lean();
     if (!item) throw new HttpError(404, "Cart item not found");
     const product = await Product.findById(item.productId)
@@ -362,11 +365,25 @@ export class CartService {
         "PRODUCT_NOT_AVAILABLE",
       );
     let unitPriceMinor = Number(item.unitPriceMinor || 0);
-    const resetQuote = Boolean(item.quoteId && item.quantity !== quantity);
-    if (item.quoteId && item.quantity !== quantity) {
-      unitPriceMinor =
-        Number(product.sellingPriceMinor || 0) -
-        Number(product.discountMinor || 0);
+    if (item.quoteId) {
+      const quote = await NegotiatedQuote.findOne({
+        _id: item.quoteId,
+        customerId: owner.userId,
+        productId: item.productId,
+        ...(item.variantId ? { variantId: item.variantId } : {}),
+        status: NegotiatedQuoteStatus.ACTIVE,
+        expiresAt: { $gt: new Date() },
+      })
+        .select("agreedPriceMinor")
+        .lean();
+      if (!quote)
+        throw new HttpError(
+          409,
+          "Your negotiated price has expired",
+          undefined,
+          "NEGOTIATION_QUOTE_EXPIRED",
+        );
+      unitPriceMinor = Number(quote.agreedPriceMinor);
     }
     const updated = await CartItem.findOneAndUpdate(
       { ...identifierFilter(itemId), cartId },
@@ -378,7 +395,6 @@ export class CartService {
           totalPriceMinor: quantity * unitPriceMinor,
           totalPrice: (quantity * unitPriceMinor) / 100,
         },
-        ...(resetQuote ? { $unset: { quoteId: 1, quoteVersion: 1 } } : {}),
       },
       { returnDocument: "after" },
     )
@@ -455,7 +471,7 @@ export class CartService {
     const productIds = [...new Set(items.map((item) => item.productId))];
     const stateIds = [...new Set(items.map((item) => String(item.stateId || "")).filter(Boolean))];
     const objectStateIds = stateIds.filter((stateId) => Types.ObjectId.isValid(stateId));
-    const [products, states] = await Promise.all([
+    const [products, states, quotes] = await Promise.all([
       productIds.length
         ? Product.find({ _id: { $in: productIds } })
             .select(
@@ -473,8 +489,12 @@ export class CartService {
             .select("_id publicId name code")
             .lean({ virtuals: true })
         : [],
+      NegotiatedQuote.find({ _id: { $in: items.map((item) => item.quoteId).filter(Boolean) } })
+        .select('_id publicId originalPriceMinor agreedPriceMinor expiresAt status')
+        .lean({ virtuals: true }),
     ]);
     const productMap = new Map(products.map((product) => [product._id.toString(), product]));
+    const quoteMap = new Map(quotes.map((quote) => [quote._id.toString(), quote]));
     const stateMap = new Map<string, { publicId: string; name: string; code: string }>();
     for (const state of states) {
       const value = { publicId: state.publicId, name: state.name, code: state.code };
@@ -496,6 +516,13 @@ export class CartService {
         productId: product?.publicId || product?.hookId || item.productId,
         publicStateId: stateMap.get(String(item.stateId))?.publicId,
         product: product ? this.cartProduct(product) : undefined,
+        negotiatedQuote: item.quoteId && quoteMap.get(item.quoteId) ? {
+          id: quoteMap.get(item.quoteId)!.publicId,
+          originalPriceMinor: quoteMap.get(item.quoteId)!.originalPriceMinor,
+          agreedPriceMinor: quoteMap.get(item.quoteId)!.agreedPriceMinor,
+          expiresAt: quoteMap.get(item.quoteId)!.expiresAt,
+          status: quoteMap.get(item.quoteId)!.status,
+        } : undefined,
         blockingReasons,
         checkoutEligible: blockingReasons.length === 0,
       };

@@ -28,16 +28,18 @@ export class NegotiationController {
       routeParam(req.params.id),
       req.body.offeredPriceMinor,
       req.header('idempotency-key') || '',
+      req.body.message,
     );
+    const auditResult = result as Record<string, unknown>;
     await recordAudit(req, {
-      action: result.providerFallback ? 'negotiation.azure_fallback' : 'negotiation.offer_processed',
+      action: auditResult.providerFallback ? 'negotiation.azure_fallback' : 'negotiation.offer_processed',
       entityType: 'negotiation',
       entityPublicId: routeParam(req.params.id),
       after: {
-        decision: result.decision,
-        status: result.status,
-        quoteId: result.quoteId,
-        providerFallback: result.providerFallback,
+        decision: auditResult.decision,
+        status: auditResult.status,
+        quoteId: auditResult.quoteId,
+        providerFallback: auditResult.providerFallback,
       },
     });
     sendSuccess(res, result);
@@ -49,6 +51,14 @@ export class NegotiationController {
 
   list = async (req: Request, res: Response) => {
     sendSuccess(res, await this.negotiations.list(identity(req)));
+  };
+
+  active = async (req: Request, res: Response) => {
+    sendSuccess(res, await this.negotiations.active(identity(req), {
+      productId: String(req.query.productId || ''),
+      variantId: String(req.query.variantId || ''),
+      quantity: Math.max(1, Number(req.query.quantity) || 1),
+    }));
   };
 
   accept = async (req: Request, res: Response) => {

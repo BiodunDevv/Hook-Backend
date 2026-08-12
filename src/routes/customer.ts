@@ -186,6 +186,7 @@ export function createCustomerRouter() {
   );
 
   router.get("/negotiations", asyncHandler(negotiations.list));
+  router.get("/negotiations-active", asyncHandler(negotiations.active));
   router.post(
     "/negotiations",
     validateBody(negotiationCreateSchema),

@@ -64,6 +64,12 @@ export interface CommerceSettings extends BaseEntity {
   defaultPodLimitMinor: number;
   previewTtlMinutes: number;
   catalogAvailabilityCheckDays: number;
+  negotiationEnabled: boolean;
+  negotiationSessionMode: "fixed" | "unlimited";
+  negotiationSessionMinutes: number;
+  negotiationMaximumOffers: number;
+  negotiationQuoteMinutes: number;
+  negotiationAzureWordingEnabled: boolean;
   activePolicyVersions: Record<string, string>;
   updatedBy?: string;
 }
@@ -226,6 +232,12 @@ const settingsSchema = createSchema<CommerceSettings>({
   defaultPodLimitMinor: { type: Number, default: 10000000, min: 0 },
   previewTtlMinutes: { type: Number, default: 10, min: 2, max: 30 },
   catalogAvailabilityCheckDays: { type: Number, default: 4, min: 1, max: 30 },
+  negotiationEnabled: { type: Boolean, default: true },
+  negotiationSessionMode: { type: String, enum: ["fixed", "unlimited"], default: "fixed" },
+  negotiationSessionMinutes: { type: Number, default: 10, min: 1, max: 1440 },
+  negotiationMaximumOffers: { type: Number, default: 3, min: 1, max: 10 },
+  negotiationQuoteMinutes: { type: Number, default: 30, min: 1, max: 1440 },
+  negotiationAzureWordingEnabled: { type: Boolean, default: true },
   activePolicyVersions: { type: Object, default: {} },
   updatedBy: { type: String },
   deletedAt: { type: Date },

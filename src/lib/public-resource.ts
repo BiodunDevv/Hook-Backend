@@ -137,6 +137,15 @@ function publicCartLine(item: Record<string, any>) {
         : null),
     checkoutEligible: item.checkoutEligible === true,
     blockingReasons: item.blockingReasons || [],
+    negotiatedQuote: item.negotiatedQuote
+      ? {
+          id: publicIdentifier(item.negotiatedQuote.id),
+          originalPriceMinor: Number(item.negotiatedQuote.originalPriceMinor || 0),
+          agreedPriceMinor: Number(item.negotiatedQuote.agreedPriceMinor || 0),
+          expiresAt: item.negotiatedQuote.expiresAt,
+          status: item.negotiatedQuote.status,
+        }
+      : undefined,
     product: product
       ? {
           id: productId,

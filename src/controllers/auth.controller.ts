@@ -32,7 +32,8 @@ export class AuthController {
   };
 
   login = async (req: Request, res: Response) => {
-    sendSuccess(res, await this.auth.login(req.body.email, req.body.password));
+    const portal = req.header('x-hook-portal') === 'staff' ? 'staff' : 'customer';
+    sendSuccess(res, await this.auth.login(req.body.email, req.body.password, portal));
   };
 
   googleLogin = async (req: Request, res: Response) => {

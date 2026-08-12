@@ -39,11 +39,15 @@ async function authenticateToken(token: string, req: Request) {
     throw new HttpError(401, 'Account is not active', undefined, 'TOKEN_INVALID');
   }
 
+  // Older shopper records may predate the accountType field.
+  const accountType = user.accountType
+    || (user.role === UserRole.SHOPPER ? AccountType.CUSTOMER : undefined);
+
   req.user = {
     sub: payload.sub,
     email: user.email,
     role: user.role,
-    accountType: user.accountType,
+    accountType,
     publicId: user.publicId,
     permissions: [],
     roleKeys: [],
@@ -53,7 +57,7 @@ async function authenticateToken(token: string, req: Request) {
     sid: payload.sid,
   };
 
-  if (user.accountType === AccountType.STAFF) {
+  if (accountType === AccountType.STAFF) {
     const access = await resolveAccessContext(user._id.toString(), user);
     Object.assign(req.user, {
       permissions: access.permissions,

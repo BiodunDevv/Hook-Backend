@@ -14,6 +14,7 @@ import {
   PaymentWebhookEvent,
 } from "@models/commerce/commerce.model";
 import { Order } from "@models/orders/order.model";
+import { OrderFulfilmentGroup } from "@models/orders/order-fulfilment-group.model";
 import { Payment } from "@models/payments/payment.model";
 import { Shipment } from "@models/fulfilment/fulfilment.model";
 import { EscrowLedger } from "@models/payments/escrow-ledger.model";
@@ -21,7 +22,8 @@ import { User } from "@models/users/user.model";
 import { nextPublicId } from "@services/public-id.service";
 import { createCommerceNotification } from "@services/commerce-notification.service";
 import { HttpError } from "@utils/http";
-import { PaystackProvider } from "./payments/paystack.provider";
+import { paymentProvider, type ProviderName } from "./payments/provider-registry";
+import { PaymentAttempt, PaymentLink } from "@models/payments/payment-link.model";
 import { publishRealtime } from "@services/realtime.service";
 
 function identity(value: string) {
@@ -31,7 +33,7 @@ function identity(value: string) {
 }
 
 export class PaymentService {
-  private provider = new PaystackProvider();
+  private provider = paymentProvider("paystack");
   constructor(
     _payments?: Repository<Payment>,
     _orders?: Repository<Order>,
@@ -157,13 +159,14 @@ export class PaymentService {
     };
   }
 
-  async webhook(rawBody: Buffer, signature: string, requestId?: string) {
-    const parsed = this.provider.parseWebhook(rawBody, signature);
+  async webhook(providerName: ProviderName, rawBody: Buffer, signature: string, requestId?: string) {
+    const provider = paymentProvider(providerName);
+    const parsed = provider.parseWebhook(rawBody, signature);
     const payloadHash = createHash("sha256").update(rawBody).digest("hex");
     let event;
     try {
       event = await PaymentWebhookEvent.create({
-        provider: "paystack",
+        provider: providerName,
         providerEventId: parsed.providerEventId,
         payloadHash,
         eventType: parsed.eventType,
@@ -181,7 +184,8 @@ export class PaymentService {
       await event.save();
       return { received: true, ignored: true };
     }
-    const payment = await Payment.findOne({ transactionRef: parsed.reference });
+    const attempt = await PaymentAttempt.findOne({ reference: parsed.reference });
+    const payment = attempt ? await Payment.findById(attempt.paymentId) : await Payment.findOne({ transactionRef: parsed.reference });
     if (!payment?.orderId) {
       event.processingStatus = "ignored";
       event.failureCode = "PAYMENT_NOT_FOUND";
@@ -189,8 +193,8 @@ export class PaymentService {
       return { received: true, matched: false };
     }
     try {
-      const verified = await this.provider.verify(parsed.reference);
-      if (verified.reference !== payment.transactionRef)
+      const verified = await provider.verify(parsed.reference);
+      if (verified.reference !== parsed.reference)
         throw new HttpError(
           409,
           "Provider reference mismatch",
@@ -224,6 +228,12 @@ export class PaymentService {
         verified.paidAt,
         parsed.providerEventId,
       );
+      if (attempt) {
+        attempt.status = "confirmed";
+        attempt.providerReference = verified.providerId;
+        attempt.completedAt = new Date();
+        await attempt.save();
+      }
       event.processingStatus = "processed";
       event.processedAt = new Date();
       await event.save();
@@ -233,7 +243,7 @@ export class PaymentService {
       event.failureCode = error?.code || "PAYMENT_EVIDENCE_MISMATCH";
       await event.save();
       await IntegrationException.create({
-        provider: "paystack",
+        provider: providerName,
         type: error?.message?.toLowerCase().includes("amount")
           ? "amount"
           : "status",
@@ -253,6 +263,29 @@ export class PaymentService {
     if (!payment) throw new HttpError(409, "Payment record is missing");
     payment.commerceStatus = CommercePaymentStatus.DUE_AT_HANDOVER;
     await payment.save();
+  }
+
+  async verifyAttempt(attemptIdentifier: string) {
+    const attempt = await PaymentAttempt.findOne(
+      isValidObjectId(attemptIdentifier)
+        ? { $or: [{ publicId: attemptIdentifier }, { _id: attemptIdentifier }] }
+        : { publicId: attemptIdentifier },
+    );
+    if (!attempt) throw new HttpError(404, "Payment attempt not found");
+    const payment = await Payment.findById(attempt.paymentId);
+    if (!payment) throw new HttpError(404, "Payment record not found");
+    if (payment.commerceStatus === CommercePaymentStatus.CONFIRMED) return { confirmed: true };
+    const verified = await paymentProvider(attempt.provider).verify(attempt.reference);
+    if (verified.status !== "success") return { confirmed: false, status: verified.status };
+    if (verified.reference !== attempt.reference || verified.amountMinor !== payment.amountMinor || verified.currency !== payment.currency) {
+      throw new HttpError(409, "Payment evidence does not match this Order", undefined, "PAYMENT_EVIDENCE_MISMATCH");
+    }
+    await this.confirmPayment(payment, verified.providerId, verified.paidAt);
+    attempt.status = "confirmed";
+    attempt.providerReference = verified.providerId;
+    attempt.completedAt = new Date();
+    await attempt.save();
+    return { confirmed: true };
   }
 
   private async confirmPayment(
@@ -283,9 +316,21 @@ export class PaymentService {
     payment.paidAt = paidAt || new Date();
     payment.amountSettled = payment.amount;
     await payment.save();
-    order.commercePaymentStatus = CommercePaymentStatus.CONFIRMED;
+    await PaymentLink.updateMany(
+      { paymentId: String(payment._id), status: { $in: ["active", "processing"] } },
+      { $set: { status: "paid", usedAt: new Date() } },
+    );
     if (order.commercePaymentMethod === "PAY_AT_HANDOVER") {
-      order.paymentStatus = PaymentStatus.SUCCESSFUL;
+      const group = payment.fulfilmentGroupId
+        ? await OrderFulfilmentGroup.findOne({ publicId: payment.fulfilmentGroupId }).lean()
+        : undefined;
+      const outstanding = await Payment.countDocuments({
+        orderId: String(order._id),
+        _id: { $ne: payment._id },
+        commerceStatus: { $ne: CommercePaymentStatus.CONFIRMED },
+      });
+      order.commercePaymentStatus = outstanding ? CommercePaymentStatus.DUE_AT_HANDOVER : CommercePaymentStatus.CONFIRMED;
+      order.paymentStatus = outstanding ? PaymentStatus.PENDING : PaymentStatus.SUCCESSFUL;
       order.timeline = [
         ...(order.timeline || []),
         {
@@ -297,7 +342,12 @@ export class PaymentService {
       await order.save();
       this.publishOrderUpdate(order);
       await Shipment.findOneAndUpdate(
-        { orderId: order.id, status: ShipmentStatus.AWAITING_HANDOVER_PAYMENT, releaseStatus: "AWAITING_HANDOVER_PAYMENT" },
+        {
+          orderId: order.id,
+          ...(group?.sourceStateId ? { sourceStateId: group.sourceStateId } : {}),
+          status: ShipmentStatus.AWAITING_HANDOVER_PAYMENT,
+          releaseStatus: "AWAITING_HANDOVER_PAYMENT",
+        },
         {
           $set: { status: ShipmentStatus.RELEASE_APPROVED, releaseStatus: "RELEASE_APPROVED" },
           $push: { trackingEvents: { status: ShipmentStatus.RELEASE_APPROVED, at: new Date(), actorId: "PAYSTACK_WEBHOOK", note: "Verified handover payment" } },
@@ -317,6 +367,7 @@ export class PaymentService {
       }
       return;
     }
+    order.commercePaymentStatus = CommercePaymentStatus.CONFIRMED;
     order.commerceStatus = CommerceOrderStatus.APPROVED_FOR_FULFILMENT;
     order.paymentStatus = PaymentStatus.SUCCESSFUL;
     order.status = OrderStatus.APPROVED_FOR_FULFILMENT;
@@ -399,10 +450,10 @@ export class PaymentService {
     if (!Number.isSafeInteger(amountMinor) || amountMinor < 1 || amountMinor > captured - refunded) {
       throw new HttpError(409, 'Refund exceeds the captured payment balance', undefined, 'REFUND_LIMIT_EXCEEDED');
     }
-    if (!payment.transactionRef || payment.gateway !== 'paystack') {
-      throw new HttpError(409, 'Only captured Paystack payments can be refunded', undefined, 'PAYMENT_METHOD_NOT_ALLOWED');
+    if (!payment.transactionRef || !['paystack', 'opay'].includes(String(payment.gateway))) {
+      throw new HttpError(409, 'This captured payment cannot be refunded through its provider', undefined, 'PAYMENT_METHOD_NOT_ALLOWED');
     }
-    const result = await this.provider.refund({ reference: payment.transactionRef, amountMinor, reason: _idempotencyKey });
+    const result = await paymentProvider(payment.gateway as ProviderName).refund({ reference: payment.transactionRef, amountMinor, reason: _idempotencyKey });
     payment.refundedAmount = refunded + amountMinor;
     payment.commerceStatus = payment.refundedAmount >= captured ? CommercePaymentStatus.REFUNDED : CommercePaymentStatus.REFUND_PENDING;
     payment.status = payment.refundedAmount >= captured ? PaymentStatus.REFUNDED : PaymentStatus.PARTIALLY_REFUNDED;
@@ -416,7 +467,7 @@ export class PaymentService {
     return {
       id: payment.publicId || payment.id,
       orderId: payment.orderId,
-      provider: "paystack",
+      provider: payment.gateway || "paystack",
       reference: payment.transactionRef,
       status: payment.commerceStatus,
       amountMinor: payment.amountMinor,

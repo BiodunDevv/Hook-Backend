@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import {
   CommerceOutboxEvent,
+  CommerceSettings,
   IntegrationException,
 } from "@models/commerce/commerce.model";
 import { Order } from "@models/orders/order.model";
@@ -8,7 +9,8 @@ import { Payment } from "@models/payments/payment.model";
 import { PodService } from "@services/pod.service";
 import { recordAudit } from "@services/platform-audit.service";
 import { routeParam } from "@lib/api-utils";
-import { sendSuccess } from "@utils/http";
+import { HttpError, sendSuccess } from "@utils/http";
+import { paymentProviderReadiness } from "@services/payments/provider-registry";
 
 export class PhaseFourCommerceController {
   private pod = new PodService();
@@ -122,5 +124,41 @@ export class PhaseFourCommerceController {
       after: req.body,
     });
     sendSuccess(res, result);
+  };
+
+  paymentProviders = async (_req: Request, res: Response) => {
+    const settings = await CommerceSettings.findOne({ key: "commerce" }).select("paymentProviders updatedAt").lean();
+    const readiness = paymentProviderReadiness();
+    const configured = settings?.paymentProviders || [
+      { provider: "paystack" as const, enabled: true, displayOrder: 1, isDefault: true },
+      { provider: "opay" as const, enabled: false, displayOrder: 2, isDefault: false },
+    ];
+    sendSuccess(res, {
+      providers: configured.map((entry) => ({ ...entry, ...readiness.find((item) => item.provider === entry.provider) })),
+      updatedAt: settings?.updatedAt,
+    });
+  };
+
+  updatePaymentProviders = async (req: Request, res: Response) => {
+    const defaults = req.body.providers.filter((entry: any) => entry.enabled && entry.isDefault);
+    if (defaults.length !== 1) throw new HttpError(400, "Select one enabled default payment provider");
+    const readiness = paymentProviderReadiness();
+    for (const entry of req.body.providers) {
+      if (entry.enabled && !readiness.find((item) => item.provider === entry.provider)?.configured) {
+        throw new HttpError(409, `${entry.provider === "opay" ? "OPay" : "Paystack"} is missing required configuration`, undefined, "PAYMENT_PROVIDER_UNAVAILABLE");
+      }
+    }
+    const updated = await CommerceSettings.findOneAndUpdate(
+      { key: "commerce" },
+      { $set: { paymentProviders: req.body.providers, updatedBy: req.user!.sub } },
+      { upsert: true, returnDocument: "after", setDefaultsOnInsert: true },
+    ).lean();
+    await recordAudit(req, {
+      action: "commerce.payment_providers.update",
+      entityType: "commerce_settings",
+      after: { providers: req.body.providers },
+      reason: req.body.reason,
+    });
+    sendSuccess(res, { providers: updated?.paymentProviders, readiness });
   };
 }

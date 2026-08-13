@@ -70,6 +70,12 @@ export interface CommerceSettings extends BaseEntity {
   negotiationMaximumOffers: number;
   negotiationQuoteMinutes: number;
   negotiationAzureWordingEnabled: boolean;
+  paymentProviders: Array<{
+    provider: "paystack" | "opay";
+    enabled: boolean;
+    displayOrder: number;
+    isDefault: boolean;
+  }>;
   activePolicyVersions: Record<string, string>;
   updatedBy?: string;
 }
@@ -84,7 +90,7 @@ export interface CommercePolicyVersion extends BaseEntity {
 }
 
 export interface PaymentWebhookEvent extends BaseEntity {
-  provider: "paystack";
+  provider: "paystack" | "opay";
   providerEventId: string;
   payloadHash: string;
   eventType: string;
@@ -112,7 +118,7 @@ export interface CommerceOutboxEvent extends BaseEntity {
 }
 
 export interface IntegrationException extends BaseEntity {
-  provider: "paystack";
+  provider: "paystack" | "opay";
   type:
     | "signature"
     | "reference"
@@ -238,6 +244,13 @@ const settingsSchema = createSchema<CommerceSettings>({
   negotiationMaximumOffers: { type: Number, default: 3, min: 1, max: 10 },
   negotiationQuoteMinutes: { type: Number, default: 30, min: 1, max: 1440 },
   negotiationAzureWordingEnabled: { type: Boolean, default: true },
+  paymentProviders: {
+    type: [Object],
+    default: [
+      { provider: "paystack", enabled: true, displayOrder: 1, isDefault: true },
+      { provider: "opay", enabled: false, displayOrder: 2, isDefault: false },
+    ],
+  },
   activePolicyVersions: { type: Object, default: {} },
   updatedBy: { type: String },
   deletedAt: { type: Date },
@@ -263,7 +276,7 @@ const policySchema = createSchema<CommercePolicyVersion>({
 });
 policySchema.index({ type: 1, version: 1 }, { unique: true });
 const webhookSchema = createSchema<PaymentWebhookEvent>({
-  provider: { type: String, enum: ["paystack"], required: true },
+  provider: { type: String, enum: ["paystack", "opay"], required: true },
   providerEventId: { type: String, required: true },
   payloadHash: { type: String, required: true },
   eventType: { type: String, required: true },
@@ -309,7 +322,7 @@ outboxSchema.index(
   { unique: true },
 );
 const exceptionSchema = createSchema<IntegrationException>({
-  provider: { type: String, enum: ["paystack"], default: "paystack" },
+  provider: { type: String, enum: ["paystack", "opay"], default: "paystack" },
   type: {
     type: String,
     enum: [

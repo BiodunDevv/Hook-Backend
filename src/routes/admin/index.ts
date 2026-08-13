@@ -49,6 +49,7 @@ import {
 import { asyncHandler } from "@utils/http";
 import {
   commerceSettingsSchema,
+  paymentProviderSettingsSchema,
   podCallSchema,
   podDecisionSchema,
   podOverrideSchema,
@@ -411,6 +412,17 @@ export function createAdminRouter() {
     requireSuperAdmin,
     validateBody(commerceSettingsSchema),
     asyncHandler(phaseFour.updateSettings),
+  );
+  router.get(
+    "/commerce/payment-providers",
+    requirePermission("commerce.settings.view"),
+    asyncHandler(phaseFour.paymentProviders),
+  );
+  router.patch(
+    "/commerce/payment-providers",
+    requirePermission("commerce.settings.manage"),
+    validateBody(paymentProviderSettingsSchema),
+    asyncHandler(phaseFour.updatePaymentProviders),
   );
 
   // ── Phase 5 fulfilment, Hub, logistics, returns and refunds ───────────

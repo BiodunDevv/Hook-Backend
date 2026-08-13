@@ -714,7 +714,12 @@ add('get', `${apiPrefix}/commerce/config`, op('Customer Commerce', 'Get active p
 add('get', `${apiPrefix}/orders`, op('Customer Orders', 'List authenticated customer orders.'));
 add('get', `${apiPrefix}/orders/{id}`, op('Customer Orders', 'Get an owned customer order.', { parameters: [param('id', 'Order id')] }));
 add('post', `${apiPrefix}/orders/{id}/cancel`, op('Customer Orders', 'Cancel an eligible owned order.', { parameters: [param('id', 'Order id')], requestBody: { required: false, content: { 'application/json': { schema: { type: 'object', properties: { reason: { type: 'string' } } } } } } }));
-add('post', `${apiPrefix}/payments/initialize`, op('Payments', 'Initialize Paystack Hosted Checkout from an immutable Order amount.', { requestBody: body('PaymentInitializeRequest') }));
+add('post', `${apiPrefix}/payments/initialize`, op('Payments', 'Initialize the legacy customer payment flow from an immutable Order amount.', { requestBody: body('PaymentInitializeRequest') }));
+add('post', `${apiPrefix}/payments/links`, op('Payments', 'Create an opaque 24-hour hosted payment link for an owned Order or fulfilment-group payment.'));
+add('post', `${apiPrefix}/payments/links/{id}/revoke`, op('Payments', 'Revoke an owned hosted payment link.'));
+add('get', `${apiPrefix}/public/payment-links/{token}`, op('Payments', 'Read a privacy-limited hosted payment summary.', { public: true }));
+add('post', `${apiPrefix}/public/payment-links/{token}/initialize`, op('Payments', 'Initialize an enabled hosted payment provider using an idempotency key.', { public: true }));
+add('get', `${apiPrefix}/public/payment-links/{token}/status`, op('Payments', 'Poll provider-verified hosted payment status.', { public: true }));
 add('get', `${apiPrefix}/payments/{orderId}`, op('Payments', 'Poll safe payment status; this endpoint never confirms payment.', { parameters: [param('orderId', 'ORD public ID')] }));
 add('get', `${apiPrefix}/payments/orders/{orderId}/status`, op('Payments', 'Compatibility alias for safe Order payment polling.', { parameters: [param('orderId', 'ORD public ID')] }));
 add('post', `${apiPrefix}/orders/{id}/refunds`, op('Customer Orders', 'Request a support-reviewed refund against captured funds', { parameters: [param('id', 'Order id')] }));
@@ -750,6 +755,9 @@ add('get', `${apiPrefix}/logistics/field-agent/profile`, op('Logistics', 'Get cu
 add('post', `${apiPrefix}/upload/image`, op('Uploads', 'Upload one image', { requestBody: { required: true, content: { 'multipart/form-data': { schema: { type: 'object', required: ['image'], properties: { image: { type: 'string', format: 'binary' } } } } } } }));
 add('post', `${apiPrefix}/upload/images`, op('Uploads', 'Upload multiple images', { requestBody: { required: true, content: { 'multipart/form-data': { schema: { type: 'object', required: ['images'], properties: { images: { type: 'array', items: { type: 'string', format: 'binary' } } } } } } } }));
 add('post', `${apiPrefix}/webhooks/paystack`, op('Webhooks', 'Receive a raw, signed Paystack event with replay and amount verification.', { public: true, requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } } } }));
+add('post', `${apiPrefix}/webhooks/opay`, op('Webhooks', 'Receive a raw, signed OPay event with replay and amount verification.', { public: true, requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } } } }));
+add('get', `${apiPrefix}/admin/commerce/payment-providers`, op('Admin Commerce', 'Read payment-provider enablement and credential readiness.'));
+add('patch', `${apiPrefix}/admin/commerce/payment-providers`, op('Admin Commerce', 'Update enabled providers, display order, and default provider.'));
 
 // Admin
 add('get', `${apiPrefix}/admin/dashboard`, op('Admin Dashboard', 'Get admin dashboard summary'));
@@ -925,9 +933,10 @@ add('post', `${apiPrefix}/addresses/{id}/default`, op('Customer Commerce', 'Set 
 add('post', `${apiPrefix}/commerce/import`, op('Customer Commerce', 'Idempotently import a device-local cart and saved products after authentication.'));
 add('post', `${apiPrefix}/checkout/preview`, op('Customer Commerce', 'Create one checkout preview for the complete customer cart.'));
 add('post', `${apiPrefix}/checkout/confirm`, op('Customer Commerce', 'Confirm one combined customer order. Requires Idempotency-Key.'));
-add('post', `${apiPrefix}/payments/initialize`, op('Payments', 'Initialize Paystack Hosted Checkout from an owned ORD public ID.'));
+add('post', `${apiPrefix}/payments/initialize`, op('Payments', 'Initialize the legacy hosted checkout from an owned ORD public ID.'));
 add('get', `${apiPrefix}/payments/{id}`, op('Payments', 'Poll safe payment and Order status; this never confirms payment.', { parameters: [param('id', 'PAY or ORD public ID')] }));
 add('post', `${apiPrefix}/webhooks/paystack`, op('Payments', 'Raw-body Paystack webhook with HMAC evidence validation.', { public: true }));
+add('post', `${apiPrefix}/webhooks/opay`, op('Payments', 'Raw-body OPay webhook with signed evidence validation.', { public: true }));
 add('get', `${apiPrefix}/payments/paystack/callback`, op('Payments', 'Paystack browser return bridge. Redirects to the Hook app and never confirms payment.', { public: true }));
 add('get', `${apiPrefix}/partner/customers/lookup`, op('Partner Commerce', 'Exact customer lookup in the authenticated Partner scope.'));
 add('post', `${apiPrefix}/partner/customers`, op('Partner Commerce', 'Create an attested assisted-ordering customer without verifying email.'));

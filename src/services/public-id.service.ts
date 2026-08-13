@@ -24,6 +24,8 @@ export const PUBLIC_ID_PREFIXES = {
   order: 'ORD',
   orderItem: 'ORI',
   payment: 'PAY',
+  paymentLink: 'PLK',
+  paymentAttempt: 'PAT',
   event: 'EVT',
   audit: 'AUD',
   fulfilment: 'FUL',

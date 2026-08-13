@@ -22,7 +22,9 @@ import {
   commerceCartItemSchema,
   commerceImportSchema,
   paymentInitializeV4Schema,
+  paymentLinkCreateSchema,
 } from "@validations/commerce.schemas";
+import { PaymentLinkController } from "@controllers/payment-link.controller";
 import { requireAuth, requireAccountType } from "@middleware/auth";
 import { AccountType } from "@lib/constants";
 import { asyncHandler } from "@utils/http";
@@ -32,6 +34,7 @@ import { ProductLikesController } from "@controllers/product-likes.controller";
 export function createCustomerRouter() {
   const router = Router();
   const controller = new CustomerController();
+  const paymentLinks = new PaymentLinkController();
   const negotiations = new NegotiationController();
   const fulfilment = new FulfilmentController();
   const likes = new ProductLikesController();
@@ -207,6 +210,19 @@ export function createCustomerRouter() {
     requireAccountType(AccountType.CUSTOMER),
     validateBody(paymentInitializeV4Schema),
     asyncHandler(controller.initializePayment),
+  );
+  router.post(
+    "/payments/links",
+    requireAuth,
+    requireAccountType(AccountType.CUSTOMER),
+    validateBody(paymentLinkCreateSchema),
+    asyncHandler(paymentLinks.create),
+  );
+  router.post(
+    "/payments/links/:id/revoke",
+    requireAuth,
+    requireAccountType(AccountType.CUSTOMER),
+    asyncHandler(paymentLinks.revoke),
   );
   router.get(
     "/payments/:orderId",

@@ -17,7 +17,8 @@ export type ProviderTransaction = {
 };
 
 export interface PaymentProvider {
-  readonly name: "paystack";
+  readonly name: "paystack" | "opay";
+  readiness(): { configured: boolean; mode: "test" | "live"; reason?: string };
   initialize(
     input: ProviderInitializeInput,
   ): Promise<{

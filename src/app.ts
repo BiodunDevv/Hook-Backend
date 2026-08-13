@@ -50,7 +50,14 @@ export function createApp() {
     try {
       const { PaymentService } = await import('@services/payment.service');
       const signature = String(req.header('x-paystack-signature') || '');
-      sendSuccess(res, await new PaymentService().webhook(req.body as Buffer, signature, req.requestId));
+      sendSuccess(res, await new PaymentService().webhook('paystack', req.body as Buffer, signature, req.requestId));
+    } catch (error) { next(error); }
+  });
+  app.post(`${apiPrefix}/webhooks/opay`, express.raw({ type: 'application/json', limit: '256kb' }), async (req, res, next) => {
+    try {
+      const { PaymentService } = await import('@services/payment.service');
+      const signature = String(req.header('signature') || req.header('x-opay-signature') || '');
+      sendSuccess(res, await new PaymentService().webhook('opay', req.body as Buffer, signature, req.requestId));
     } catch (error) { next(error); }
   });
   app.get(`${apiPrefix}/payments/paystack/callback`, (req, res) => {

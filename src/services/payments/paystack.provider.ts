@@ -23,6 +23,14 @@ export class PaystackProvider implements PaymentProvider {
     return value;
   }
 
+  readiness() {
+    return {
+      configured: Boolean(process.env.PAYSTACK_SECRET_KEY),
+      mode: (String(process.env.PAYSTACK_SECRET_KEY || "").startsWith("sk_live_") ? "live" : "test") as "live" | "test",
+      reason: process.env.PAYSTACK_SECRET_KEY ? undefined : "Secret key is missing",
+    };
+  }
+
   async initialize(input: ProviderInitializeInput) {
     const response = await this.request("/transaction/initialize", {
       method: "POST",

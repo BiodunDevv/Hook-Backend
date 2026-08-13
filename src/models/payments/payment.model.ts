@@ -39,6 +39,7 @@ export interface Payment extends BaseEntity {
   providerEventId?: string;
   authorizationUrl?: string;
   accessCode?: string;
+  activeAttemptId?: string;
   commerceMigrationVersion?: number;
   legacyProvider?: string;
 }
@@ -98,6 +99,7 @@ const PaymentSchema = createSchema<Payment>({
   providerEventId: { type: String, index: true, sparse: true },
   authorizationUrl: { type: String },
   accessCode: { type: String },
+  activeAttemptId: { type: String, index: true, sparse: true },
   commerceMigrationVersion: { type: Number, index: true },
   legacyProvider: { type: String },
   deletedAt: { type: Date },

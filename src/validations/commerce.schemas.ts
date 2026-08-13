@@ -93,6 +93,26 @@ export const paymentInitializeV4Schema = z
   .object({ orderId: publicId, fulfilmentGroupId: publicId.optional() })
   .strict();
 
+export const paymentLinkCreateSchema = z.object({
+  orderId: publicId,
+  fulfilmentGroupId: publicId.optional(),
+}).strict();
+
+export const paymentLinkInitializeSchema = z.object({
+  provider: z.enum(["paystack", "opay"]),
+  appReturn: z.boolean().optional().default(false),
+}).strict();
+
+export const paymentProviderSettingsSchema = z.object({
+  providers: z.array(z.object({
+    provider: z.enum(["paystack", "opay"]),
+    enabled: z.boolean(),
+    displayOrder: z.number().int().min(1).max(10),
+    isDefault: z.boolean(),
+  }).strict()).length(2),
+  reason: z.string().trim().min(5).max(500),
+}).strict();
+
 export const podCallSchema = z
   .object({
     outcome: z.enum(["CONFIRMED", "NO_ANSWER", "DECLINED", "INVALID_CONTACT"]),

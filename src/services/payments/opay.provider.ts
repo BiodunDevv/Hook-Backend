@@ -12,10 +12,13 @@ export class OpayProvider implements PaymentProvider {
   private readonly liveBase = "https://api.opaycheckout.com/api/v1/international";
 
   private get mode(): "live" | "test" {
-    return process.env.OPAY_PAYIN_MODE === "live" ? "live" : "test";
+    return process.env.NODE_ENV === "production" ? "live" : "test";
   }
 
   private get baseUrl() {
+    if (process.env.OPAY_PAYIN_BASE_URL) {
+      return process.env.OPAY_PAYIN_BASE_URL.replace(/\/$/, "");
+    }
     return this.mode === "live" ? this.liveBase : this.testBase;
   }
 

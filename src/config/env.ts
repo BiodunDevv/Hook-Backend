@@ -60,12 +60,20 @@ export function assertSafeEnvironment() {
         throw new Error(`${name} must be an independent production secret with at least 32 characters`);
       }
     }
-    if (process.env.OPAY_PAYIN_MODE === 'live') {
+    const opayConfigured = [
+      process.env.OPAY_PAYIN_PUBLIC_KEY,
+      process.env.OPAY_PAYIN_SECRET_KEY,
+      process.env.OPAY_PAYIN_MERCHANT_ID,
+      process.env.OPAY_PAYIN_CALLBACK_URL,
+    ].some(Boolean);
+    if (opayConfigured) {
       requireEnv('OPAY_PAYIN_PUBLIC_KEY');
       requireEnv('OPAY_PAYIN_SECRET_KEY');
       requireEnv('OPAY_PAYIN_MERCHANT_ID');
       const callbackUrl = requireEnv('OPAY_PAYIN_CALLBACK_URL');
-      if (!callbackUrl.startsWith('https://')) throw new Error('OPAY_PAYIN_CALLBACK_URL must use HTTPS in live mode');
+      if (!callbackUrl.startsWith('https://')) throw new Error('OPAY_PAYIN_CALLBACK_URL must use HTTPS in production');
+      const baseUrl = process.env.OPAY_PAYIN_BASE_URL;
+      if (baseUrl && !baseUrl.startsWith('https://')) throw new Error('OPAY_PAYIN_BASE_URL must use HTTPS in production');
     }
   }
 }

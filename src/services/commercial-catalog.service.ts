@@ -407,7 +407,7 @@ export async function publicProductRepresentations(products: any[], options: Pub
 
   const [categories, markets, states, variants, media] = await Promise.all([
     categoryIds.length
-      ? Category.find(identifierFilter(categoryIds)).select('publicId name slug iconUrl').lean({ virtuals: true })
+      ? Category.find(identifierFilter(categoryIds)).select('publicId name slug iconUrl attributeSchema').lean({ virtuals: true })
       : Promise.resolve([]),
     marketIds.length
       ? Market.find(identifierFilter(marketIds)).select('publicId name stateId cityId').lean({ virtuals: true })
@@ -497,6 +497,7 @@ export async function publicProductRepresentations(products: any[], options: Pub
         name: category.name,
         slug: category.slug,
         iconUrl: category.iconUrl || null,
+        sizingGuide: (category as any).attributeSchema?.sizingGuide || null,
       } : null,
       variants: productVariants,
       currency: product.currency || 'NGN',

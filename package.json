@@ -13,7 +13,11 @@
     "start:debug": "node --inspect -r ts-node/register/transpile-only -r tsconfig-paths/register src/server.ts",
     "start:prod": "node dist/server.js",
     "lint": "eslint \"src/**/*.ts\"",
-    "seed": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/seeds/index.ts"
+    "seed": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/seeds/index.ts",
+    "db:clear-orders": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/clear-orders.ts",
+    "db:clear-runner-uploads": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/clear-runner-uploads.ts",
+    "db:seed-runner-products": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/seed-runner-products.ts",
+    "db:sync-runner-product-options": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/sync-runner-product-options.ts"
   },
   "dependencies": {
     "@types/cors": "^2.8.19",

@@ -6,15 +6,16 @@
   <style>{{emailStyles}}</style>
 </head>
 <body>
-  <main class="email-shell">
-    <section class="email-card">
-      <div class="wordmark">hook<span>.</span></div>
-      <p>Hello {{name}},</p>
+  <div class="wrap">
+    <div class="card">
+      <div class="brand">hook<span class="brand-dot">.</span></div>
+      <div class="icon">KEY</div>
       <h1>Activate your Hook account</h1>
-      <p>You have been invited to join Hook as a {{accountType}} account. Create your password using the secure button below.</p>
-      <p><a class="button" href="{{activationUrl}}">Activate account</a></p>
-      <p class="muted">This single-use link expires in {{expiresIn}}. If you were not expecting this invitation, you can ignore this email.</p>
-    </section>
-  </main>
+      <p class="lead">Hello {{name}}, you have been invited to join Hook as a {{accountType}} account. Create your password using the secure button below.</p>
+      <p style="text-align:center"><a class="button" href="{{activationUrl}}">Activate account</a></p>
+      <div class="notice">This single-use link expires in {{expiresIn}}. If you were not expecting this invitation, you can ignore this email.</div>
+    </div>
+    <p class="footer">Need help? Contact {{supportEmail}}</p>
+  </div>
 </body>
 </html>

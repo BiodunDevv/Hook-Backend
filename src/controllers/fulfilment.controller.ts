@@ -19,6 +19,7 @@ export class FulfilmentController {
   runnerTask = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.runnerTask(req.user!.sub, routeParam(req.params.id)));
   runnerAction = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.runnerTransition(req.user!.sub, routeParam(req.params.id), routeParam(req.params.action), Number(req.body.version), req.body));
   runnerIssue = async (req: Request, res: Response) => sendCreated(res, await fulfilmentService.runnerIssue(req.user!.sub, routeParam(req.params.id), req.body));
+  verifyItem = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.verifyItem(req.user!.sub, routeParam(req.params.id), routeParam(req.params.orderItemId), req.body));
 
   controlTower = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.controlTower(actor(req), req.query as Record<string, unknown>));
   adminTaskDetail = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.adminTaskDetail(actor(req), routeParam(req.params.id)));

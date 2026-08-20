@@ -1,10 +1,17 @@
 import fs from 'fs';
 import path from 'path';
 import {
+  AccountActivatedEmailPayload,
   AccountInvitationEmailPayload,
   CustomerAccountSetupEmailPayload,
+  NegotiationAcceptedEmailPayload,
+  NegotiationOfferEmailPayload,
+  OrderCancelledEmailPayload,
   OrderEmailPayload,
   OtpEmailPayload,
+  PaymentConfirmedEmailPayload,
+  RefundEmailPayload,
+  SubmissionDecisionEmailPayload,
   VendorDecisionEmailPayload,
   WelcomeEmailPayload,
 } from './email.types';
@@ -208,5 +215,103 @@ export function settlementUpdateEmailTemplate(payload: OrderEmailPayload) {
       status: payload.status || 'pending',
     })),
     text: `Settlement for ${payload.orderCode}: ${money(payload.amount)} is ${payload.status || 'pending'}.`,
+  };
+}
+
+export function orderCancelledEmailTemplate(payload: OrderCancelledEmailPayload) {
+  return {
+    subject: `Hook order cancelled: ${payload.orderCode}`,
+    html: renderTemplate('order-cancelled.html', baseValues({
+      name: payload.name || 'there',
+      orderCode: payload.orderCode,
+      amount: money(payload.amount),
+      reasonSuffix: payload.reason ? ` (${payload.reason})` : '',
+    })),
+    text: `Your Hook order ${payload.orderCode} was cancelled${payload.reason ? ` (${payload.reason})` : ''}.`,
+  };
+}
+
+export function paymentConfirmedEmailTemplate(payload: PaymentConfirmedEmailPayload) {
+  return {
+    subject: `Hook payment confirmed: ${payload.orderCode}`,
+    html: renderTemplate('payment-confirmed.html', baseValues({
+      name: payload.name || 'there',
+      orderCode: payload.orderCode,
+      amount: money(payload.amount),
+    })),
+    text: `Payment confirmed for Hook order ${payload.orderCode}: ${money(payload.amount)}.`,
+  };
+}
+
+export function refundIssuedEmailTemplate(payload: RefundEmailPayload) {
+  return {
+    subject: `Hook refund issued: ${payload.orderCode}`,
+    html: renderTemplate('refund-issued.html', baseValues({
+      name: payload.name || 'there',
+      orderCode: payload.orderCode,
+      amount: money(payload.amountMinor / 100),
+      refundTitle: payload.fullyRefunded ? 'Your refund is on the way' : 'A partial refund is on the way',
+    })),
+    text: `A refund for Hook order ${payload.orderCode} has been issued: ${money(payload.amountMinor / 100)}.`,
+  };
+}
+
+export function negotiationOfferEmailTemplate(payload: NegotiationOfferEmailPayload) {
+  return {
+    subject: `New counter-offer for ${payload.productTitle}`,
+    html: renderTemplate('negotiation-offer.html', baseValues({
+      name: payload.name || 'there',
+      productTitle: payload.productTitle,
+      counterPrice: money(payload.counterPriceMinor / 100),
+      expiresAt: new Date(payload.expiresAt).toLocaleString('en-NG'),
+    })),
+    text: `Hook sent a counter-offer of ${money(payload.counterPriceMinor / 100)} for ${payload.productTitle}.`,
+  };
+}
+
+export function negotiationAcceptedEmailTemplate(payload: NegotiationAcceptedEmailPayload) {
+  return {
+    subject: `Price locked for ${payload.productTitle}`,
+    html: renderTemplate('negotiation-accepted.html', baseValues({
+      name: payload.name || 'there',
+      productTitle: payload.productTitle,
+      agreedPrice: money(payload.agreedPriceMinor / 100),
+      quoteExpiresAt: new Date(payload.quoteExpiresAt).toLocaleString('en-NG'),
+    })),
+    text: `Your negotiated price of ${money(payload.agreedPriceMinor / 100)} for ${payload.productTitle} is locked in.`,
+  };
+}
+
+const submissionDecisionCopy: Record<SubmissionDecisionEmailPayload['decision'], { title: string; lead: string; label: string; icon: string }> = {
+  approved: { title: 'Your submission was approved', lead: 'was approved and is now live on Hook.', label: 'Approved', icon: '✓' },
+  rejected: { title: 'Your submission was not approved', lead: 'was not approved.', label: 'Rejected', icon: '✕' },
+  changes_requested: { title: 'Changes requested on your submission', lead: 'needs a few changes before it can go live.', label: 'Changes requested', icon: '!' },
+};
+
+export function submissionDecisionEmailTemplate(payload: SubmissionDecisionEmailPayload) {
+  const copy = submissionDecisionCopy[payload.decision];
+  return {
+    subject: `Hook submission update: ${payload.productTitle}`,
+    html: renderTemplate('submission-decision.html', baseValues({
+      name: payload.name || 'there',
+      productTitle: payload.productTitle,
+      decisionTitle: copy.title,
+      decisionLead: copy.lead,
+      decisionLabel: copy.label,
+      decisionIcon: copy.icon,
+      reason: payload.reason || 'No additional notes were provided.',
+    })),
+    text: `Your Hook submission for ${payload.productTitle} ${copy.lead}${payload.reason ? ` ${payload.reason}` : ''}`,
+  };
+}
+
+export function accountActivatedEmailTemplate(payload: AccountActivatedEmailPayload) {
+  return {
+    subject: "You're all set on Hook",
+    html: renderTemplate('account-activated.html', baseValues({
+      name: payload.name || 'there',
+      accountType: payload.accountType,
+    })),
+    text: `Your Hook ${payload.accountType} account is now active.`,
   };
 }

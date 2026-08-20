@@ -280,11 +280,22 @@ export const adminUserSchema = z.object({
   role: z.nativeEnum(UserRole).default(UserRole.SHOPPER),
 });
 
+const sizingGuideSchema = z.object({
+  summary: z.string().max(200).optional(),
+  howToMeasure: z.string().max(2000).optional(),
+  presetGroups: z.array(z.enum(['clothing', 'shoes', 'general'])).max(3).default([]),
+  chart: z.array(z.object({
+    size: z.string().min(1).max(40),
+    measurements: z.record(z.string(), z.string().max(60)).default({}),
+  })).max(20).optional(),
+}).strict().optional();
+
 export const categoryCreateSchema = z.object({
   name: z.string().min(2).max(60),
   description: z.string().max(300).optional(),
   iconUrl: z.string().url().optional(),
   sortOrder: z.coerce.number().int().min(0).optional(),
+  sizingGuide: sizingGuideSchema,
 });
 
 export const categoryUpdateSchema = categoryCreateSchema.partial();

@@ -21,6 +21,7 @@ import { EscrowLedger } from "@models/payments/escrow-ledger.model";
 import { User } from "@models/users/user.model";
 import { nextPublicId } from "@services/public-id.service";
 import { createCommerceNotification } from "@services/commerce-notification.service";
+import { EmailService } from "@emails/email.service";
 import { HttpError } from "@utils/http";
 import { paymentProvider, type ProviderName } from "./payments/provider-registry";
 import { PaymentAttempt, PaymentLink } from "@models/payments/payment-link.model";
@@ -34,6 +35,7 @@ function identity(value: string) {
 
 export class PaymentService {
   private provider = paymentProvider("paystack");
+  private email = new EmailService();
   constructor(
     _payments?: Repository<Payment>,
     _orders?: Repository<Order>,
@@ -417,7 +419,7 @@ export class PaymentService {
     await order.save();
     this.publishOrderUpdate(order);
     await this.emitOrderApproved(order);
-    if (order.userId)
+    if (order.userId) {
       await createCommerceNotification({
         eventKey: `order:${order.publicId}:payment-confirmed`,
         userId: order.userId,
@@ -426,6 +428,16 @@ export class PaymentService {
         type: "payment_confirmed",
         data: { orderId: order.publicId, paymentId: payment.publicId },
       }).catch(() => undefined);
+      const customer = await User.findById(order.userId).select('email firstName').lean() as any;
+      if (customer?.email) {
+        await this.email.sendPaymentConfirmed({
+          to: customer.email,
+          name: customer.firstName,
+          orderCode: order.publicId || String(order.id),
+          amount: Number(order.totalMinor || 0) / 100,
+        }).catch(() => undefined);
+      }
+    }
   }
 
   async emitOrderApproved(order: Order) {

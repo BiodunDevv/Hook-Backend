@@ -18,6 +18,7 @@ import { Otp } from '@models/auth/otp.model';
 import { randomInt } from 'crypto';
 import { nextPublicId } from './public-id.service';
 import { publishRealtime } from './realtime.service';
+import { createCommerceNotification } from './commerce-notification.service';
 
 type CheckoutBody = Pick<Order, 'deliveryAddress' | 'deliveryNotes' | 'scheduledDeliveryAt' | 'guestEmail' | 'guestName' | 'paymentMode' | 'orderType' | 'giftRecipient'>;
 
@@ -391,6 +392,26 @@ export class OrderService {
     const { PaymentLink } = await import('@models/payments/payment-link.model');
     await PaymentLink.updateMany({ orderId: stored.id, status: { $in: ['active', 'processing'] } }, { $set: { status: 'cancelled', cancelledAt: new Date() } });
     publishRealtime({ type: 'order.updated', entityId: saved.publicId || saved.id, version: Number(saved.__v || 1) }, { accountId: owner.userId, admin: true });
+    if (owner.userId) {
+      await createCommerceNotification({
+        eventKey: `order:${saved.publicId || saved.id}:cancelled`,
+        userId: owner.userId,
+        title: 'Order cancelled',
+        body: `Your order ${saved.publicId || saved.orderCode} has been cancelled.`,
+        type: 'order_cancelled',
+        data: { orderId: saved.publicId || saved.id },
+      }).catch(() => undefined);
+      const customer = await AppDataSource.getRepository(User).findOne({ where: { id: owner.userId } });
+      if (customer?.email) {
+        await this.email.sendOrderCancelled({
+          to: customer.email,
+          name: customer.firstName,
+          orderCode: saved.publicId || saved.orderCode || '',
+          amount: Number(saved.total || 0),
+          reason,
+        }).catch(() => undefined);
+      }
+    }
     return this.getCustomerOrder(owner, saved.publicId || saved.orderCode);
   }
 

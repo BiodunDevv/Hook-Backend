@@ -51,3 +51,57 @@ export interface VendorDecisionEmailPayload {
   vendorName: string;
   reason?: string;
 }
+
+export interface OrderCancelledEmailPayload {
+  to: string;
+  name?: string;
+  orderCode: string;
+  amount: number;
+  reason?: string;
+}
+
+export interface PaymentConfirmedEmailPayload {
+  to: string;
+  name?: string;
+  orderCode: string;
+  amount: number;
+}
+
+export interface RefundEmailPayload {
+  to: string;
+  name?: string;
+  orderCode: string;
+  amountMinor: number;
+  currency?: string;
+  fullyRefunded: boolean;
+}
+
+export interface NegotiationOfferEmailPayload {
+  to: string;
+  name?: string;
+  productTitle: string;
+  counterPriceMinor: number;
+  expiresAt: string | Date;
+}
+
+export interface NegotiationAcceptedEmailPayload {
+  to: string;
+  name?: string;
+  productTitle: string;
+  agreedPriceMinor: number;
+  quoteExpiresAt: string | Date;
+}
+
+export interface SubmissionDecisionEmailPayload {
+  to: string;
+  name?: string;
+  productTitle: string;
+  decision: 'approved' | 'rejected' | 'changes_requested';
+  reason?: string;
+}
+
+export interface AccountActivatedEmailPayload {
+  email: string;
+  name?: string;
+  accountType: string;
+}

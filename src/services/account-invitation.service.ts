@@ -8,6 +8,7 @@ import { HttpError } from '@utils/http';
 import { EmailService } from '@emails/email.service';
 import { PlatformAuditLog } from '@models/platform/audit-log.model';
 import { nextPublicId } from './public-id.service';
+import { createCommerceNotification } from './commerce-notification.service';
 
 const email = new EmailService();
 const invitationTtlHours = Number(process.env.ACCOUNT_INVITATION_TTL_HOURS || 48);
@@ -172,5 +173,20 @@ export async function acceptAccountInvitation(
     ipAddress: context?.ipAddress,
     userAgent: context?.userAgent,
   });
+  await createCommerceNotification({
+    eventKey: `account:${account.id}:activated`,
+    userId: account.id,
+    title: "You're all set",
+    body: `Your Hook ${invitation.accountType.toLowerCase()} account is now active.`,
+    type: 'account_activated',
+    data: { accountType: invitation.accountType },
+  }).catch(() => undefined);
+  if (account.email) {
+    await email.sendAccountActivated({
+      email: account.email,
+      name: account.firstName,
+      accountType: invitation.accountType,
+    }).catch(() => undefined);
+  }
   return { activated: true, accountType: invitation.accountType };
 }

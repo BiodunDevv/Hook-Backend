@@ -15,8 +15,11 @@ import { Product } from '@models/products/product.model';
 import { MarketVendor } from '@models/catalog/market-vendor.model';
 import { Market } from '@models/platform/network.model';
 import { RunnerMarketAssignment, RunnerProfile } from '@models/platform/operations-accounts.model';
+import { User } from '@models/users/user.model';
 import { nextPublicId } from './public-id.service';
 import { CatalogMediaService } from './catalog-media.service';
+import { createCommerceNotification } from './commerce-notification.service';
+import { EmailService } from '@emails/email.service';
 import { HttpError } from '@utils/http';
 import { adminReviewCache } from '@lib/ttl-cache';
 
@@ -165,7 +168,19 @@ export class RunnerCatalogService {
     const data = await ProductSubmission.find(filter).sort({ _id: -1 }).limit(limit + 1).lean({ virtuals: true });
     const hasMore = data.length > limit;
     const page = data.slice(0, limit);
-    return { data: page, nextCursor: hasMore && page.length ? page[page.length - 1]._id.toString() : null, hasMore };
+    const productIds = [...new Set(page.map((item) => item.productId).filter(Boolean).map(String))];
+    const products = productIds.length
+      ? await Product.find({ _id: { $in: productIds } }).select('_id images').lean()
+      : [];
+    const imageByProductId = new Map(products.map((product) => [String(product._id), product.images?.[0]]));
+    return {
+      data: page.map((item) => ({
+        ...item,
+        imageUrl: item.productId ? imageByProductId.get(String(item.productId)) : undefined,
+      })),
+      nextCursor: hasMore && page.length ? page[page.length - 1]._id.toString() : null,
+      hasMore,
+    };
   }
 
   async detail(accountId: string, identifier: string) {
@@ -286,6 +301,32 @@ export class RunnerCatalogService {
 }
 
 export class CatalogReviewService {
+  private readonly email = new EmailService();
+
+  private async notifySubmissionDecision(submissionId: string, runnerId: string | undefined, productTitle: string, decision: 'approved' | 'rejected' | 'changes_requested', reason?: string) {
+    if (!runnerId) return;
+    const runner = await RunnerProfile.findById(runnerId).select('accountId').lean() as any;
+    if (!runner?.accountId) return;
+    await createCommerceNotification({
+      eventKey: `submission:${submissionId}:${decision}`,
+      userId: runner.accountId,
+      title: decision === 'approved' ? 'Your submission was approved' : decision === 'rejected' ? 'Your submission was not approved' : 'Changes requested on your submission',
+      body: decision === 'approved' ? `${productTitle} was approved and is now live on Hook.` : decision === 'rejected' ? `${productTitle} was not approved.` : `${productTitle} needs a few changes before it can go live.`,
+      type: 'submission_decision',
+      data: { decision, productTitle },
+    }).catch(() => undefined);
+    const account = await User.findById(runner.accountId).select('email firstName').lean() as any;
+    if (account?.email) {
+      await this.email.sendSubmissionDecision({
+        to: account.email,
+        name: account.firstName,
+        productTitle,
+        decision,
+        reason,
+      }).catch(() => undefined);
+    }
+  }
+
   async dashboard(stateIds?: string[]) {
     const cacheKey = `review:${stateIds?.length ? [...stateIds].sort().join(',') : 'global'}`;
     const cached = adminReviewCache.get(cacheKey);
@@ -431,6 +472,7 @@ export class CatalogReviewService {
         { returnDocument: 'after' },
       ).lean({ virtuals: true });
       if (!updated) throw new HttpError(409, 'Another reviewer changed this submission', undefined, 'SUBMISSION_REVIEW_CONFLICT');
+      await this.notifySubmissionDecision(current._id.toString(), current.runnerId, current.basicTitle, action, input.reason);
       return updated;
     }
 
@@ -525,6 +567,7 @@ export class CatalogReviewService {
           { session: transaction },
         );
       });
+      await this.notifySubmissionDecision(current._id.toString(), current.runnerId, current.basicTitle, 'approved', input.reason);
       return result;
     } finally {
       await transaction.endSession();

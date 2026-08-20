@@ -1,21 +1,35 @@
 import {
+  AccountActivatedEmailPayload,
   AccountInvitationEmailPayload,
   CustomerAccountSetupEmailPayload,
   EmailMessage,
+  NegotiationAcceptedEmailPayload,
+  NegotiationOfferEmailPayload,
+  OrderCancelledEmailPayload,
   OrderEmailPayload,
   OtpEmailPayload,
+  PaymentConfirmedEmailPayload,
+  RefundEmailPayload,
+  SubmissionDecisionEmailPayload,
   VendorDecisionEmailPayload,
   WelcomeEmailPayload,
 } from './email.types';
 import {
+  accountActivatedEmailTemplate,
   accountInvitationEmailTemplate,
   customerAccountSetupEmailTemplate,
   hookNewOrderEmailTemplate,
+  negotiationAcceptedEmailTemplate,
+  negotiationOfferEmailTemplate,
+  orderCancelledEmailTemplate,
   orderConfirmationEmailTemplate,
   orderStatusUpdateEmailTemplate,
   otpEmailTemplate,
   passwordResetEmailTemplate,
+  paymentConfirmedEmailTemplate,
+  refundIssuedEmailTemplate,
   settlementUpdateEmailTemplate,
+  submissionDecisionEmailTemplate,
   vendorApprovedEmailTemplate,
   vendorNewOrderEmailTemplate,
   vendorRejectedEmailTemplate,
@@ -123,5 +137,33 @@ export class EmailService {
 
   async sendSettlementUpdate(payload: OrderEmailPayload) {
     return this.send({ to: payload.to, ...settlementUpdateEmailTemplate(payload) });
+  }
+
+  async sendOrderCancelled(payload: OrderCancelledEmailPayload) {
+    return this.send({ to: payload.to, ...orderCancelledEmailTemplate(payload) });
+  }
+
+  async sendPaymentConfirmed(payload: PaymentConfirmedEmailPayload) {
+    return this.send({ to: payload.to, ...paymentConfirmedEmailTemplate(payload) });
+  }
+
+  async sendRefundIssued(payload: RefundEmailPayload) {
+    return this.send({ to: payload.to, ...refundIssuedEmailTemplate(payload) });
+  }
+
+  async sendNegotiationOffer(payload: NegotiationOfferEmailPayload) {
+    return this.send({ to: payload.to, ...negotiationOfferEmailTemplate(payload) });
+  }
+
+  async sendNegotiationAccepted(payload: NegotiationAcceptedEmailPayload) {
+    return this.send({ to: payload.to, ...negotiationAcceptedEmailTemplate(payload) });
+  }
+
+  async sendSubmissionDecision(payload: SubmissionDecisionEmailPayload) {
+    return this.send({ to: payload.to, ...submissionDecisionEmailTemplate(payload) });
+  }
+
+  async sendAccountActivated(payload: AccountActivatedEmailPayload) {
+    return this.send({ to: payload.email, ...accountActivatedEmailTemplate(payload) });
   }
 }

@@ -14,6 +14,24 @@ export type FulfilmentEvidence = {
   capturedAt: Date;
 };
 
+export type ItemVerificationCheck = {
+  productMatches: boolean;
+  sizeMatches: boolean;
+  colorMatches: boolean;
+  quantityMatches: boolean;
+};
+
+export type ItemVerification = {
+  orderItemId: string;
+  photoUrl: string;
+  photoAssetId?: string;
+  checks: ItemVerificationCheck;
+  matched: boolean;
+  reportedIssue?: { summary: string; note?: string; exceptionId?: string };
+  verifiedAt: Date;
+  verifiedBy: string;
+};
+
 export interface FulfilmentTask extends BaseEntity {
   publicId: string;
   orderId: string;
@@ -40,6 +58,7 @@ export interface FulfilmentTask extends BaseEntity {
   resolutionDueAt: Date;
   actualCostMinor?: number;
   evidence: FulfilmentEvidence[];
+  itemVerifications: ItemVerification[];
   issue?: Record<string, unknown>;
   assignmentHistory: Array<Record<string, unknown>>;
 }
@@ -239,7 +258,7 @@ const taskSchema = createSchema<FulfilmentTask>({
   hubArrivedAt: { type: Date }, hubReceivedAt: { type: Date }, completedAt: { type: Date },
   acceptanceDueAt: { type: Date, required: true, index: true },
   sourcingDueAt: { type: Date, required: true }, hubHandoverDueAt: { type: Date, required: true }, resolutionDueAt: { type: Date, required: true },
-  actualCostMinor: { type: Number, min: 0 }, evidence, issue: { type: Object }, assignmentHistory: { type: [Object], default: [] },
+  actualCostMinor: { type: Number, min: 0 }, evidence, itemVerifications: { type: [Object], default: [] }, issue: { type: Object }, assignmentHistory: { type: [Object], default: [] },
 });
 taskSchema.index({ orderId: 1, marketId: 1 }, { unique: true });
 taskSchema.index({ runnerId: 1, status: 1, acceptanceDueAt: 1 });

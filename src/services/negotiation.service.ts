@@ -9,6 +9,8 @@ import { User } from '@models/users/user.model';
 import { nextPublicId } from './public-id.service';
 import { AzureNegotiationService, detectNegotiationLanguage } from './azure-negotiation.service';
 import { PricingEngine } from './pricing-engine.service';
+import { createCommerceNotification } from './commerce-notification.service';
+import { EmailService } from '@emails/email.service';
 import { HttpError } from '@utils/http';
 
 /**
@@ -90,6 +92,32 @@ function present(session: any, response?: Record<string, unknown>, product?: any
 export class NegotiationService {
   private readonly pricing = new PricingEngine();
   private readonly language = new AzureNegotiationService();
+  private readonly email = new EmailService();
+
+  private async notifyQuoteAgreed(session: { publicId?: string; productId: string; customerId: string }, agreedPriceMinor: number, expiresAt: Date | string) {
+    const [product, customer] = await Promise.all([
+      Product.findById(session.productId).select('title').lean(),
+      User.findById(session.customerId).select('email firstName').lean(),
+    ]);
+    const productTitle = (product as any)?.title || 'your product';
+    await createCommerceNotification({
+      eventKey: `negotiation:${session.publicId}:agreed`,
+      userId: session.customerId,
+      title: 'Your price is locked in',
+      body: `Your negotiated price for ${productTitle} is confirmed. Checkout before your quote expires.`,
+      type: 'negotiation_agreed',
+      data: { negotiationId: session.publicId, agreedPriceMinor },
+    }).catch(() => undefined);
+    if ((customer as any)?.email) {
+      await this.email.sendNegotiationAccepted({
+        to: (customer as any).email,
+        name: (customer as any).firstName,
+        productTitle,
+        agreedPriceMinor,
+        quoteExpiresAt: expiresAt,
+      }).catch(() => undefined);
+    }
+  }
 
   async start(identity: NegotiationIdentity, input: { productId: string; variantId: string; quantity: number; message?: string }) {
     const settings = await CommerceSettings.findOne({ key: 'commerce' }).lean();
@@ -356,6 +384,9 @@ export class NegotiationService {
         ).lean({ virtuals: true });
         if (!updated) throw new HttpError(409, 'The negotiation changed before this offer completed', undefined, 'IDEMPOTENCY_CONFLICT');
       });
+      if (shouldLockBestPrice && identity.customerId && quote) {
+        await this.notifyQuoteAgreed({ publicId: session.publicId, productId: session.productId, customerId: identity.customerId }, bestAvailablePrice, quote.expiresAt);
+      }
       return response;
     } finally {
       await transaction.endSession();
@@ -427,6 +458,7 @@ export class NegotiationService {
         );
         if (!updated.modifiedCount) throw new HttpError(409, 'Negotiation state changed before acceptance', undefined, 'INVALID_STATE_TRANSITION');
       });
+      await this.notifyQuoteAgreed({ publicId: session.publicId, productId: session.productId, customerId: identity.customerId }, bestPrice, quote.expiresAt);
       return {
         negotiationId: session.publicId,
         status: NegotiationStatus.AGREED,

@@ -79,6 +79,8 @@ export type ErrorCode =
   | 'VENDOR_COLLECTION_EXISTS'
   | 'VENDOR_PAYMENT_MISSING'
   | 'AVAILABILITY_CHECK_NOT_PENDING'
+  | 'ITEMS_NOT_VERIFIED'
+  | 'ITEMS_NOT_CONFIRMED'
 
 export class HttpError extends Error {
   constructor(

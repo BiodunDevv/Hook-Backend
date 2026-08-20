@@ -28,6 +28,7 @@ import {
 } from "@validations/commerce.schemas";
 import { RunnerMarketVendorController } from '@controllers/market-vendor.controller';
 import { availabilityConfirmSchema, availabilityReportSchema, marketVendorSchema, marketVendorUpdateSchema, vendorCollectionSchema } from '@validations/vendor.schemas';
+import { itemVerifySchema } from '@validations/fulfilment.schemas';
 import { Product } from '@models/products/product.model';
 import { CatalogAvailabilityService } from '@services/catalog-availability.service';
 import { AppDataSource } from '@config/data-source';
@@ -173,8 +174,13 @@ export function createRunnerRouter() {
   router.get("/fulfilments/:id", asyncHandler(fulfilment.runnerTask));
   router.post(
     "/fulfilments/:id/issues",
-    validateBody(z.object({ type: z.string().optional(), severity: z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']).optional(), summary: z.string().min(3).max(1000), evidence: z.array(z.unknown()).optional(), idempotencyKey: z.string().min(8).optional() }).strict()),
+    validateBody(z.object({ type: z.string().optional(), severity: z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']).optional(), summary: z.string().min(3).max(1000), evidence: z.array(z.unknown()).optional(), orderItemId: z.string().optional(), idempotencyKey: z.string().min(8).optional() }).strict()),
     asyncHandler(fulfilment.runnerIssue),
+  );
+  router.post(
+    "/fulfilments/:id/items/:orderItemId/verify",
+    validateBody(itemVerifySchema),
+    asyncHandler(fulfilment.verifyItem),
   );
   router.post(
     "/fulfilments/:id/:action",

@@ -29,7 +29,7 @@ export async function presentSubmission(record: any) {
           status: 'ready',
         }).sort({ order: 1 }).lean({ virtuals: true }),
     record.productId
-      ? Product.findById(record.productId).select('publicId').lean({ virtuals: true })
+      ? Product.findById(record.productId).select('publicId sellingPriceMinor minAcceptablePrice sellingPrice costPrice currency status publishedAt').lean({ virtuals: true })
       : null,
     record.marketVendorId
       ? MarketVendor.findOne({ $or: [{ publicId: record.marketVendorId }, { _id: record.marketVendorId }] }).select('publicId businessName contactName').lean({ virtuals: true })
@@ -64,6 +64,7 @@ export async function presentSubmission(record: any) {
       height: asset.height,
       format: asset.format,
     })),
+    imageUrl: media[0]?.deliveryUrl,
     basePriceMinor: record.basePriceMinor,
     currency: record.currency,
     variants: record.variants || [],
@@ -75,6 +76,15 @@ export async function presentSubmission(record: any) {
     reviewStartedAt: record.reviewStartedAt,
     reviewedAt: record.reviewedAt,
     productId: product?.publicId,
+    approvedProduct: product ? {
+      publicId: product.publicId,
+      sellingPriceMinor: product.sellingPriceMinor ?? Number(product.sellingPrice || 0) * 100,
+      minimumPriceMinor: Number(product.minAcceptablePrice || 0) * 100,
+      observedCostMinor: Number(product.costPrice || 0) * 100,
+      currency: product.currency || record.currency,
+      status: product.status,
+      publishedAt: product.publishedAt,
+    } : null,
     version: record.version,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,

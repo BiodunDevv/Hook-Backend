@@ -18,7 +18,7 @@ import { Category } from '@models/categories/category.model';
 import { CommercePolicyVersion, CommerceSettings } from '@models/commerce/commerce.model';
 import { Cart } from '@models/cart/cart.model';
 import { CartItem } from '@models/cart/cart-item.model';
-import { ProductSubmission, ProductVariant } from '@models/catalog/catalog.model';
+import { CatalogMediaAsset, ProductSubmission, ProductVariant } from '@models/catalog/catalog.model';
 import { MarketVendor, VendorCollection, VendorInvitation, VendorPaymentRecord } from '@models/catalog/market-vendor.model';
 import { OperationCity, OperationState } from '@models/platform/geography.model';
 import { DeliveryPricingRule } from '@models/platform/delivery-pricing.model';
@@ -37,19 +37,9 @@ import { ensurePlatformAccessCatalog } from '@services/platform-bootstrap.servic
 import { nextPublicIds, nextPublicId } from '@services/public-id.service';
 import { refreshNigerianLocationCatalog } from '@services/location-catalog.service';
 import { encryptVendorAccountNumber } from '@lib/vendor-payment-crypto';
+import { productGallery, productOptions, RUNNER_PRODUCT_CATALOG } from './runner-product-catalog';
 
 dotenv.config({ quiet: true });
-
-const PRODUCT_IMAGES = [
-  'https://images.unsplash.com/photo-1491553895911-0055eca6402d?w=900&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=900&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1549298916-b41d501d3772?w=900&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1608231387042-66d1773070a5?w=900&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1525966222134-fcfa99b8ae77?w=900&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1552346154-21d32810aba3?w=900&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1506629905607-d405d7d3b0d2?w=900&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1556906781-9a412961c28c?w=900&auto=format&fit=crop&q=80',
-];
 
 const CATEGORY_SEEDS = [
   ['Sneakers', 'sneakers', 'Everyday, running, and fashion sneakers.', 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=500&auto=format&fit=crop&q=80'],
@@ -60,31 +50,13 @@ const CATEGORY_SEEDS = [
 ] as const;
 
 const MARKET_SEEDS = [
-  { stateCode: 'LA', city: 'Lagos', cityCode: 'LOS', market: 'Balogun Market', address: 'Balogun Market, Lagos Island', color: '#FF5A19', priority: 1, image: 'https://images.unsplash.com/photo-1441986300917-64674bd600d8?w=1200&auto=format&fit=crop&q=80' },
-  { stateCode: 'LA', city: 'Lagos', cityCode: 'LOS', market: 'Tejuosho Market', address: 'Tejuosho Road, Yaba', color: '#48C7E8', priority: 2, image: 'https://images.unsplash.com/photo-1472851294608-062f824d29cc?w=1200&auto=format&fit=crop&q=80' },
-  { stateCode: 'LA', city: 'Lagos', cityCode: 'LOS', market: 'Mile 12 Market', address: 'Ikorodu Road, Ketu', color: '#F15AC8', priority: 3, image: 'https://images.unsplash.com/photo-1534452203293-494d7ddbf7e0?w=1200&auto=format&fit=crop&q=80' },
-  { stateCode: 'OG', city: 'Abeokuta', cityCode: 'ABK', market: 'Kuto Market', address: 'Kuto Road, Abeokuta', color: '#F3A7D9', priority: 10, image: 'https://images.unsplash.com/photo-1483985988355-763728e1935b?w=1200&auto=format&fit=crop&q=80' },
-  { stateCode: 'OY', city: 'Ibadan', cityCode: 'IBD', market: 'Bodija Market', address: 'Bodija, Ibadan', color: '#269AF2', priority: 20, image: 'https://images.unsplash.com/photo-1445205170230-053b83016050?w=1200&auto=format&fit=crop&q=80' },
-  { stateCode: 'RI', city: 'Port Harcourt', cityCode: 'PHC', market: 'Mile One Market', address: 'Ikwerre Road, Port Harcourt', color: '#FF8A62', priority: 30, image: 'https://images.unsplash.com/photo-1555529669-e69e7aa0ba9a?w=1200&auto=format&fit=crop&q=80' },
-  { stateCode: 'FC', city: 'Abuja', cityCode: 'ABV', market: 'Wuse Market', address: 'Wuse Zone 5, Abuja', color: '#FFC809', priority: 40, image: 'https://images.unsplash.com/photo-1528698827591-e19ccd7bc23d?w=1200&auto=format&fit=crop&q=80' },
-] as const;
-
-const PRODUCT_SEEDS = [
-  ['Air Pulse Runner', 39000, 52000, 45000, 25, 'sneakers'],
-  ['Court Flex Low', 42000, 58000, 50000, 18, 'sneakers'],
-  ['Metro Knit Trainer', 35000, 47000, 41000, 9, 'sneakers'],
-  ['Street Grid 90', 46000, 64000, 56000, 14, 'sneakers'],
-  ['Cloudstep Daily', 28000, 39000, 34000, 30, 'sneakers'],
-  ['Vanta High Top', 50000, 72000, 63000, 7, 'sneakers'],
-  ['Luxe Track Jacket', 26000, 42000, 35000, 20, 'streetwear'],
-  ['Utility Crossbody Bag', 18000, 29500, 24000, 35, 'bags'],
-  ['Everyday Ribbed Socks', 3500, 6500, 5000, 80, 'accessories'],
-  ['Oversized Street Tee', 9000, 16500, 13500, 45, 'streetwear'],
-  ['Premium Snapback Cap', 7000, 12000, 9500, 32, 'accessories'],
-  ['Lagos Day Dress', 24000, 38000, 32000, 16, 'dresses'],
-  ['Classic Suede Court', 33000, 45500, 39000, 21, 'sneakers'],
-  ['Nova Street Runner', 57000, 82000, 72000, 16, 'sneakers'],
-  ['Canvas Carryall', 22000, 35000, 29000, 24, 'bags'],
+  { stateCode: 'LA', city: 'Lagos', cityCode: 'LOS', market: 'Balogun Market', address: 'Balogun Market, Lagos Island', color: '#FF5A19', priority: 1, image: 'https://res.cloudinary.com/df4f0usnh/image/upload/v1786737693/hook/sfal3eilrlzfnyqpxklk.jpg' },
+  { stateCode: 'LA', city: 'Lagos', cityCode: 'LOS', market: 'Tejuosho Market', address: 'Tejuosho Road, Yaba', color: '#48C7E8', priority: 2, image: 'https://res.cloudinary.com/df4f0usnh/image/upload/v1786737770/hook/jpaiy0iikjagvqpq4eau.jpg' },
+  { stateCode: 'LA', city: 'Lagos', cityCode: 'LOS', market: 'Mandilas Market', address: 'Mandilas, Lagos Island', color: '#F15AC8', priority: 3, image: 'https://res.cloudinary.com/df4f0usnh/image/upload/v1786738247/hook/ynjxnerrdn5mml3bc55j.jpg' },
+  { stateCode: 'LA', city: 'Lagos', cityCode: 'LOS', market: 'Tradefair Market', address: 'Trade Fair Complex, Lagos', color: '#F3A7D9', priority: 10, image: 'https://res.cloudinary.com/df4f0usnh/image/upload/v1786741425/hook/gdveeddjd2zfuyxan4mz.jpg' },
+  { stateCode: 'OY', city: 'Ibadan', cityCode: 'IBD', market: 'Bodija Market', address: 'Bodija, Ibadan', color: '#269AF2', priority: 20, image: 'https://res.cloudinary.com/df4f0usnh/image/upload/v1786717010/hook/ap0lvsftv8maxog3qccq.jpg' },
+  { stateCode: 'RI', city: 'Port Harcourt', cityCode: 'PHC', market: 'Mile One Market', address: 'Ikwerre Road, Port Harcourt', color: '#FF8A62', priority: 30, image: 'https://res.cloudinary.com/df4f0usnh/image/upload/v1786717107/hook/lgscio2wfi8nuvzz5mal.jpg' },
+  { stateCode: 'FC', city: 'Abuja', cityCode: 'ABV', market: 'Wuse Market', address: 'Wuse Zone 5, Abuja', color: '#FFC809', priority: 40, image: 'https://res.cloudinary.com/df4f0usnh/image/upload/v1786718127/hook/bdnnhdz3fpahthumnn4h.jpg' },
 ] as const;
 
 function assertSeedResetAllowed() {
@@ -463,10 +435,11 @@ async function seedMarketVendors(markets: any[], runnerProfile: any) {
 async function seedProducts(categories: any[], markets: any[], states: any[], adminId: string, vendors: any[], runnerProfile: any) {
   const categoryBySlug = new Map(categories.map((category) => [category.slug, category]));
   const stateById = new Map(states.map((state) => [idOf(state), state]));
-  const productIds = await nextPublicIds('product', PRODUCT_SEEDS.length);
+  const productIds = await nextPublicIds('product', RUNNER_PRODUCT_CATALOG.length);
   const products: any[] = [];
-  for (let index = 0; index < PRODUCT_SEEDS.length; index += 1) {
-    const [title, basePrice, sellingPrice, floorPrice, quantity, categorySlug] = PRODUCT_SEEDS[index];
+  for (let index = 0; index < RUNNER_PRODUCT_CATALOG.length; index += 1) {
+    const seed = RUNNER_PRODUCT_CATALOG[index];
+    const { title, costPrice: basePrice, sellingPrice, floorPrice, quantity, categorySlug } = seed;
     const market = markets[index % markets.length];
     const state = stateById.get(String(market.stateId));
     const marketVendors = vendors.filter((vendor) => vendor.marketId === idOf(market));
@@ -486,8 +459,8 @@ async function seedProducts(categories: any[], markets: any[], states: any[], ad
       mediaIds: [],
       basePriceMinor,
       currency: 'NGN',
-      variants: [{ size: '42', colour: '#111111', attributes: {}, active: true }],
-      availabilityStatus: index === 1 ? ProductAvailabilityStatus.LIMITED : index === 2 ? ProductAvailabilityStatus.UNAVAILABLE : ProductAvailabilityStatus.AVAILABLE,
+      variants: productOptions(seed),
+      availabilityStatus: ProductAvailabilityStatus.AVAILABLE,
       status: ProductSubmissionStatus.APPROVED,
       reviewNotes: [],
       submittedAt: new Date(),
@@ -495,13 +468,34 @@ async function seedProducts(categories: any[], markets: any[], states: any[], ad
       reviewedBy: adminId,
       version: 1,
     });
-    const availabilityStatus = index === 0 ? ProductAvailabilityStatus.UNCONFIRMED : index === 2 ? ProductAvailabilityStatus.UNAVAILABLE : index === 1 ? ProductAvailabilityStatus.LIMITED : ProductAvailabilityStatus.AVAILABLE;
+    const images = productGallery(seed);
+    const media = await CatalogMediaAsset.insertMany(images.map((url, mediaIndex) => ({
+      publicId: `MED-SEED-${slugify(title)}-${mediaIndex + 1}`,
+      provider: 'legacy_external',
+      providerPublicId: `unsplash/${slugify(title)}/${mediaIndex + 1}`,
+      resourceType: 'image',
+      deliveryType: 'external',
+      secureUrl: url,
+      format: 'jpg',
+      width: 1200,
+      height: 1200,
+      bytes: 1,
+      uploaderAccountId: String(runnerProfile.accountId),
+      ownerType: 'submission',
+      ownerId: idOf(submission),
+      uploadIntentId: `seed-${slugify(title)}-${mediaIndex + 1}`,
+      status: 'ready',
+      order: mediaIndex,
+      metadata: { source: 'unsplash', seeded: true },
+    })));
+    submission.mediaIds = media.map((asset) => asset.publicId);
+    const availabilityStatus = ProductAvailabilityStatus.AVAILABLE;
     const product = await Product.create({
       publicId: productIds[index],
       hookId: `HK-${String(index + 1).padStart(4, '0')}`,
       title,
       slug: slugify(title),
-      description: `${title} is part of the Hook marketplace collection, curated for everyday style and reliable delivery.`,
+      description: seed.description,
       costPrice: basePrice,
       sellingPrice,
       discountedPrice: discountMinor ? sellingPrice - discountMinor / 100 : undefined,
@@ -519,30 +513,23 @@ async function seedProducts(categories: any[], markets: any[], states: any[], ad
       categoryId: idOf(categoryBySlug.get(categorySlug)),
       quantity,
       reservedQuantity: 0,
-      colors: ['#111111', '#FFFFFF', '#FFC809'],
-      sizes: ['40', '41', '42', '43', '44'],
-      images: [PRODUCT_IMAGES[index % PRODUCT_IMAGES.length], PRODUCT_IMAGES[(index + 1) % PRODUCT_IMAGES.length]],
+      colors: seed.colors,
+      sizes: seed.sizes,
+      images,
       mediaAssetIds: [],
       negotiationRules: { enabled: true, minimumNegotiablePriceMinor: floorPrice * 100, maximumDiscountMinor: sellingPriceMinor - floorPrice * 100, maximumCustomerOffers: 3, acceptedQuoteExpiryMinutes: 30 },
       availabilityStatus,
       customerAvailabilityNote: 'Available from a verified Hook Market.',
       lastMarketVerifiedAt: new Date(),
       lastPriceVerifiedAt: new Date(),
-      lastAvailabilityConfirmedAt: availabilityStatus === ProductAvailabilityStatus.UNCONFIRMED ? undefined : new Date(),
-      availabilityValidUntil: [ProductAvailabilityStatus.AVAILABLE, ProductAvailabilityStatus.LIMITED].includes(availabilityStatus)
-        ? new Date(Date.now() + 4 * 24 * 60 * 60 * 1000)
-        : undefined,
-      availabilityCheckRequestedAt: availabilityStatus === ProductAvailabilityStatus.UNCONFIRMED ? new Date(Date.now() - 5 * 24 * 60 * 60 * 1000) : undefined,
-      availabilityCheckDueAt: availabilityStatus === ProductAvailabilityStatus.UNCONFIRMED ? new Date(Date.now() - 24 * 60 * 60 * 1000) : undefined,
-      availabilityPreviousStatus: availabilityStatus === ProductAvailabilityStatus.UNCONFIRMED ? ProductStatus.PUBLISHED : undefined,
-      availabilityCheckRequestedBy: availabilityStatus === ProductAvailabilityStatus.UNCONFIRMED ? adminId : undefined,
-      availabilityCheckNote: availabilityStatus === ProductAvailabilityStatus.UNCONFIRMED ? 'Confirm stock with the source vendor before republishing.' : undefined,
+      lastAvailabilityConfirmedAt: new Date(),
+      availabilityValidUntil: new Date(Date.now() + 4 * 24 * 60 * 60 * 1000),
       publishedAt: new Date(Date.now() - index * 60_000),
       publishedBy: adminId,
       commercialApproval: { approved: true, approvedBy: adminId, approvedAt: new Date() },
       catalogMigrationVersion: 3,
       catalogVersion: 1,
-      status: availabilityStatus === ProductAvailabilityStatus.UNCONFIRMED ? ProductStatus.AVAILABILITY_UNCONFIRMED : availabilityStatus === ProductAvailabilityStatus.UNAVAILABLE ? ProductStatus.PAUSED : ProductStatus.PUBLISHED,
+      status: ProductStatus.PUBLISHED,
       viewCount: 0,
       orderCount: 0,
       averageRating: 4.6,
@@ -550,9 +537,16 @@ async function seedProducts(categories: any[], markets: any[], states: any[], ad
     });
     submission.productId = idOf(product);
     await submission.save();
-    await ProductVariant.create({
-      publicId: await nextPublicId('variant'), productId: idOf(product), sku: `${product.hookId}-42-BLK`, size: '42', colour: '#111111', attributes: {}, active: true, mediaAssetIds: [],
-    });
+    const options = productOptions(seed);
+    for (let optionIndex = 0; optionIndex < options.length; optionIndex += 1) {
+      await ProductVariant.create({
+        publicId: await nextPublicId('variant'),
+        productId: idOf(product),
+        sku: `${product.hookId}-${String(optionIndex + 1).padStart(2, '0')}`,
+        ...options[optionIndex],
+        mediaAssetIds: [],
+      });
+    }
     products.push(product);
     if (index < 3) {
       const collection = await VendorCollection.create({

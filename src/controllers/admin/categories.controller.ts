@@ -87,6 +87,8 @@ export class AdminCategoriesController {
       createdAt: category.createdAt,
       productCount: productCounts.get(category.id) || 0,
       managers: managersByCategory.get(category.id) || [],
+      hasSizingGuide: Boolean(category.attributeSchema?.sizingGuide?.summary),
+      attributeSchema: { sizingGuide: category.attributeSchema?.sizingGuide || null },
     }));
 
     adminCategoryCache.set('list', data);
@@ -122,6 +124,7 @@ export class AdminCategoriesController {
       iconUrl: req.body.iconUrl,
       sortOrder: req.body.sortOrder ?? 0,
       isActive: true,
+      attributeSchema: req.body.sizingGuide ? { sizingGuide: req.body.sizingGuide } : {},
     }));
 
     const auditLogs = adminRepos.auditLogs();
@@ -157,6 +160,9 @@ export class AdminCategoriesController {
     if (req.body.description !== undefined) category.description = req.body.description;
     if (req.body.iconUrl !== undefined) category.iconUrl = req.body.iconUrl;
     if (req.body.sortOrder !== undefined) category.sortOrder = req.body.sortOrder;
+    if (req.body.sizingGuide !== undefined) {
+      category.attributeSchema = { ...(category.attributeSchema || {}), sizingGuide: req.body.sizingGuide };
+    }
 
     await categories.save(category);
 

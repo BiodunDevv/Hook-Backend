@@ -249,7 +249,7 @@ export class PublicCatalogController {
       iconUrl: item.iconUrl || null,
       description: item.description || '',
       sortOrder: item.sortOrder || 0,
-      attributeSchema: item.attributeSchema || [],
+      sizingGuide: item.attributeSchema?.sizingGuide || null,
     }));
     publicCatalogCache.set(cacheKey, response);
     sendSuccess(res, response);

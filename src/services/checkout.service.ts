@@ -39,6 +39,7 @@ import {
 } from "@services/delivery-pricing.service";
 import { nextPublicId } from "@services/public-id.service";
 import { createCommerceNotification } from "@services/commerce-notification.service";
+import { EmailService } from "@emails/email.service";
 import { HttpError } from "@utils/http";
 
 type PreviewInput = {
@@ -78,6 +79,7 @@ function storedStateIdentifiers(state: { _id?: unknown; publicId?: string }, fal
 
 export class CheckoutService {
   private addresses = new AddressService();
+  private email = new EmailService();
 
   async preview(
     actor: CheckoutActor,
@@ -732,6 +734,18 @@ export class CheckoutService {
       type: "order_created",
       data: { orderId: result.publicId || result.id, stateId: preview.stateId },
     }).catch(() => undefined);
+    if (actor.customerId) {
+      const customer = await User.findById(actor.customerId).select('email firstName').lean() as any;
+      if (customer?.email) {
+        await this.email.sendOrderConfirmation({
+          to: customer.email,
+          name: customer.firstName,
+          orderCode: result.publicId || String(result.id || ''),
+          amount: Number((result as any).totalMinor || 0) / 100,
+          itemCount: result.items?.length || 0,
+        }).catch(() => undefined);
+      }
+    }
     return result;
   }
 

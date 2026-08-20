@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import {
   AccountInvitationEmailPayload,
+  CustomerAccountSetupEmailPayload,
   OrderEmailPayload,
   OtpEmailPayload,
   VendorDecisionEmailPayload,
@@ -104,6 +105,20 @@ export function accountInvitationEmailTemplate(payload: AccountInvitationEmailPa
       expiresIn: `${payload.expiresInHours} hours`,
     })),
     text: `Activate your Hook ${payload.accountType} account: ${payload.activationUrl}. This link expires in ${payload.expiresInHours} hours.`,
+  };
+}
+
+export function customerAccountSetupEmailTemplate(payload: CustomerAccountSetupEmailPayload) {
+  return {
+    subject: 'Set your Hook password',
+    html: renderTemplate('customer-account-setup.html', baseValues({
+      name: payload.name || 'there',
+      email: payload.email,
+      partnerName: payload.partnerName,
+      activationUrl: payload.activationUrl,
+      expiresIn: `${payload.expiresInHours} hours`,
+    })),
+    text: `${payload.partnerName} started an order for you on Hook. Set your password: ${payload.activationUrl}. This link expires in ${payload.expiresInHours} hours.`,
   };
 }
 

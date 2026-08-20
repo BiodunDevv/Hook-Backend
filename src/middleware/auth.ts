@@ -16,14 +16,37 @@ interface TokenPayload {
   sid?: string;
 }
 
+/**
+ * TEMPORARY diagnostic for investigating the partner-cart 401 reports.
+ * Logs only on the failing branch, dev-only, same shape as the existing
+ * slow_request logger. Remove once the root cause is confirmed and fixed.
+ */
+function logAuthFailure(req: Request, reason: string, extra?: Record<string, unknown>) {
+  if (process.env.NODE_ENV === 'production') return;
+  console.warn(JSON.stringify({
+    event: 'auth_401',
+    requestId: req.requestId,
+    method: req.method,
+    route: req.route?.path || req.path,
+    reason,
+    ...extra,
+  }));
+}
+
 async function authenticateToken(token: string, req: Request) {
   let payload: TokenPayload;
   try {
     payload = jwt.verify(token, jwtSecret()) as TokenPayload;
-  } catch {
+  } catch (error) {
+    logAuthFailure(req, 'jwt_verify_failed', {
+      jwtError: error instanceof Error ? error.name : String(error),
+      // Last 12 chars only — enough to correlate requests without logging a usable token.
+      tokenTail: token.slice(-12),
+    });
     throw new HttpError(401, 'Invalid or expired token', undefined, 'TOKEN_INVALID');
   }
   if (!payload.sid) {
+    logAuthFailure(req, 'missing_sid', { sub: payload.sub });
     throw new HttpError(401, 'Legacy session expired. Please sign in again.', undefined, 'TOKEN_INVALID');
   }
   const [session, user] = await Promise.all([
@@ -33,9 +56,22 @@ async function authenticateToken(token: string, req: Request) {
       .lean(),
   ]);
   if (!session || session.revokedAt || session.expiresAt <= new Date()) {
+    logAuthFailure(req, !session ? 'session_not_found' : session.revokedAt ? 'session_revoked' : 'session_expired', {
+      sid: payload.sid,
+      sub: payload.sub,
+      revokedAt: session?.revokedAt,
+      expiresAt: session?.expiresAt,
+      now: new Date().toISOString(),
+    });
     throw new HttpError(401, 'Session is no longer active', undefined, 'TOKEN_INVALID');
   }
   if (!user || !isActiveAccount(user)) {
+    logAuthFailure(req, !user ? 'user_not_found' : 'account_inactive', {
+      sid: payload.sid,
+      sub: payload.sub,
+      accountStatus: user?.accountStatus,
+      isActive: user?.isActive,
+    });
     throw new HttpError(401, 'Account is not active', undefined, 'TOKEN_INVALID');
   }
 
@@ -72,6 +108,7 @@ async function authenticateToken(token: string, req: Request) {
 export async function requireAuth(req: Request, _res: Response, next: NextFunction) {
   const [scheme, token] = (req.header('authorization') || '').split(' ');
   if (scheme !== 'Bearer' || !token) {
+    logAuthFailure(req, 'no_bearer_token', { scheme: scheme || null });
     return next(new HttpError(401, 'Authentication token required', undefined, 'AUTHENTICATION_REQUIRED'));
   }
   try {

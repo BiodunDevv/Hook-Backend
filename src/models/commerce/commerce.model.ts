@@ -45,6 +45,9 @@ export interface CheckoutPreview extends BaseEntity {
   pickupPartnerSnapshot?: Record<string, unknown>;
   lines: Array<Record<string, unknown>>;
   subtotalMinor: number;
+  vatRate: number;
+  vatMinor: number;
+  taxSnapshot?: Record<string, unknown>;
   deliveryFeeMinor: number;
   deliveryPricing?: Record<string, unknown>;
   totalMinor: number;
@@ -217,6 +220,9 @@ const previewSchema = createSchema<CheckoutPreview>({
   pickupPartnerSnapshot: { type: Object },
   lines: { type: [Object], required: true },
   subtotalMinor: { type: Number, required: true, min: 0 },
+  vatRate: { type: Number, required: true, min: 0, default: 0.075 },
+  vatMinor: { type: Number, required: true, min: 0, default: 0 },
+  taxSnapshot: { type: Object },
   deliveryFeeMinor: { type: Number, required: true, min: 0 },
   deliveryPricing: { type: Object },
   totalMinor: { type: Number, required: true, min: 0 },

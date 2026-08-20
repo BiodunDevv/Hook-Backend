@@ -15,6 +15,7 @@ import { User } from "@models/users/user.model";
 import { Order } from "@models/orders/order.model";
 import { CommerceSettings } from "@models/commerce/commerce.model";
 import { recordAudit } from "@services/platform-audit.service";
+import { issueCustomerAccountSetup } from "@services/account-invitation.service";
 import { HttpError, sendCreated, sendSuccess } from "@utils/http";
 import { routeParam } from "@lib/api-utils";
 
@@ -117,6 +118,12 @@ export class PartnerCommerceController {
         policyVersions: req.body.policyVersions,
         consent: true,
       },
+    });
+    await issueCustomerAccountSetup({
+      accountId: customer.id,
+      email: customer.email,
+      name: customer.firstName || "there",
+      partnerName: partner.name,
     });
     sendCreated(res, {
       id: customer.publicId,

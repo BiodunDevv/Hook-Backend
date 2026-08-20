@@ -13,8 +13,13 @@ import { Market } from "@models/platform/network.model";
 import { User } from "@models/users/user.model";
 import { asyncHandler, HttpError, sendSuccess } from "@utils/http";
 import { RunnerCatalogController } from "@controllers/runner/catalog.controller";
-import { runnerSubmissionDraftSchema } from "@validations/catalog.schemas";
+import {
+  negotiationCreateSchema,
+  negotiationOfferSchema,
+  runnerSubmissionDraftSchema,
+} from "@validations/catalog.schemas";
 import { PartnerCommerceController } from "@controllers/partner-commerce.controller";
+import { PartnerNegotiationController } from "@controllers/partner-negotiation.controller";
 import { FulfilmentController } from "@controllers/fulfilment.controller";
 import {
   checkoutConfirmSchema,
@@ -25,6 +30,38 @@ import { RunnerMarketVendorController } from '@controllers/market-vendor.control
 import { availabilityConfirmSchema, availabilityReportSchema, marketVendorSchema, marketVendorUpdateSchema, vendorCollectionSchema } from '@validations/vendor.schemas';
 import { Product } from '@models/products/product.model';
 import { CatalogAvailabilityService } from '@services/catalog-availability.service';
+import { AppDataSource } from '@config/data-source';
+import { DeviceToken } from '@models/notifications/device-token.model';
+import { Notification } from '@models/notifications/notification.model';
+import { NotificationService } from '@services/notification.service';
+
+function mountNotificationRoutes(router: Router) {
+  const notifications = new NotificationService(
+    AppDataSource.getRepository(DeviceToken),
+    AppDataSource.getRepository(Notification),
+  );
+  router.get(
+    '/notifications',
+    asyncHandler(async (req, res) => {
+      sendSuccess(res, await notifications.list({ userId: req.user!.sub }, {
+        limit: Number(req.query.limit || 30),
+        cursor: typeof req.query.cursor === 'string' ? req.query.cursor : undefined,
+      }));
+    }),
+  );
+  router.patch(
+    '/notifications/read-all',
+    asyncHandler(async (req, res) => {
+      sendSuccess(res, await notifications.markAllRead({ userId: req.user!.sub }));
+    }),
+  );
+  router.patch(
+    '/notifications/:id/read',
+    asyncHandler(async (req, res) => {
+      sendSuccess(res, await notifications.markRead({ userId: req.user!.sub }, routeParam(req.params.id)));
+    }),
+  );
+}
 
 export function createRunnerRouter() {
   const router = Router();
@@ -32,6 +69,7 @@ export function createRunnerRouter() {
   const fulfilment = new FulfilmentController();
   const marketVendors = new RunnerMarketVendorController();
   router.use(requireAuth, requireAccountType(AccountType.RUNNER));
+  mountNotificationRoutes(router);
   router.get(
     "/profile",
     asyncHandler(async (req, res) => {
@@ -56,14 +94,22 @@ export function createRunnerRouter() {
   router.patch(
     "/profile",
     asyncHandler(async (req, res) => {
-      const allowed = (({ phone, avatarUrl, preferences }) => ({
-        phone,
-        avatarUrl,
-        preferences,
-      }))(req.body);
+      const { phone, avatarUrl, preferences } = req.body ?? {};
+      const set: Record<string, unknown> = {};
+      const unset: Record<string, unknown> = {};
+      if (phone !== undefined) set.phone = phone;
+      if (preferences !== undefined) set.preferences = preferences;
+      // An empty avatarUrl means "remove my photo"; $set with undefined is a no-op.
+      if (avatarUrl !== undefined) {
+        if (avatarUrl) set.avatarUrl = avatarUrl;
+        else unset.avatarUrl = "";
+      }
       const account = await User.findByIdAndUpdate(
         req.user!.sub,
-        { $set: allowed },
+        {
+          ...(Object.keys(set).length ? { $set: set } : {}),
+          ...(Object.keys(unset).length ? { $unset: unset } : {}),
+        },
         { returnDocument: "after" },
       )
         .select("-password -refreshToken")
@@ -161,7 +207,9 @@ export function createPartnerRouter() {
   const router = Router();
   const commerce = new PartnerCommerceController();
   const fulfilment = new FulfilmentController();
+  const negotiations = new PartnerNegotiationController();
   router.use(requireAuth, requireAccountType(AccountType.PARTNER));
+  mountNotificationRoutes(router);
   router.get(
     "/profile",
     asyncHandler(async (req, res) => {
@@ -186,14 +234,22 @@ export function createPartnerRouter() {
   router.patch(
     "/profile",
     asyncHandler(async (req, res) => {
-      const allowed = (({ phone, avatarUrl, preferences }) => ({
-        phone,
-        avatarUrl,
-        preferences,
-      }))(req.body);
+      const { phone, avatarUrl, preferences } = req.body ?? {};
+      const set: Record<string, unknown> = {};
+      const unset: Record<string, unknown> = {};
+      if (phone !== undefined) set.phone = phone;
+      if (preferences !== undefined) set.preferences = preferences;
+      // An empty avatarUrl means "remove my photo"; $set with undefined is a no-op.
+      if (avatarUrl !== undefined) {
+        if (avatarUrl) set.avatarUrl = avatarUrl;
+        else unset.avatarUrl = "";
+      }
       const account = await User.findByIdAndUpdate(
         req.user!.sub,
-        { $set: allowed },
+        {
+          ...(Object.keys(set).length ? { $set: set } : {}),
+          ...(Object.keys(unset).length ? { $unset: unset } : {}),
+        },
         { returnDocument: "after" },
       )
         .select("-password -refreshToken")
@@ -267,6 +323,24 @@ export function createPartnerRouter() {
     validateBody(checkoutConfirmSchema),
     asyncHandler(commerce.confirm),
   );
+  // Negotiation on behalf of an assisted customer.
+  router.get("/negotiations/active-count", asyncHandler(negotiations.activeCount));
+  router.get("/customers/:customerId/negotiations", asyncHandler(negotiations.list));
+  router.get("/customers/:customerId/negotiations-active", asyncHandler(negotiations.active));
+  router.post(
+    "/customers/:customerId/negotiations",
+    validateBody(negotiationCreateSchema),
+    asyncHandler(negotiations.create),
+  );
+  router.get("/customers/:customerId/negotiations/:id", asyncHandler(negotiations.detail));
+  router.post(
+    "/customers/:customerId/negotiations/:id/offers",
+    validateBody(negotiationOfferSchema),
+    asyncHandler(negotiations.offer),
+  );
+  router.post("/customers/:customerId/negotiations/:id/accept", asyncHandler(negotiations.accept));
+  router.post("/customers/:customerId/negotiations/:id/close", asyncHandler(negotiations.close));
+
   router.get("/orders", asyncHandler(commerce.orders));
   router.get("/fulfilment/custody", asyncHandler(fulfilment.partnerCustodyList));
   router.get("/fulfilment/custody/:orderId", asyncHandler(fulfilment.partnerCustody));

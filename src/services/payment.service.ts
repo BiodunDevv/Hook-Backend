@@ -144,6 +144,10 @@ export class PaymentService {
       payment = await Payment.findOne({ orderId: order._id.toString() });
     }
     if (!payment?.orderId) throw new HttpError(404, "Payment not found");
+    if (payment.commerceStatus === CommercePaymentStatus.PROCESSING) {
+      await this.verifyByReference(payment).catch(() => undefined);
+      payment = (await Payment.findById(payment._id)) || payment;
+    }
     const order = await Order.findOne({
       _id: payment.orderId,
       userId: customerId,
@@ -157,6 +161,37 @@ export class PaymentService {
         paymentStatus: order.commercePaymentStatus,
       },
     };
+  }
+
+  /**
+   * Self-heal fallback for the primary checkout path, which has no PaymentAttempt
+   * record. Re-verifies a still-PROCESSING payment against the provider so
+   * confirmation does not depend solely on the webhook arriving. Never throws —
+   * this backs a status poll, not the audited webhook path.
+   */
+  private async verifyByReference(payment: any): Promise<{ confirmed: boolean }> {
+    if (payment.commerceStatus === CommercePaymentStatus.CONFIRMED) return { confirmed: true };
+    if (!payment.transactionRef) return { confirmed: false };
+    const attempt = await PaymentAttempt.findOne({ reference: payment.transactionRef });
+    const providerName = (attempt?.provider || payment.gateway || "paystack") as ProviderName;
+    const verified = await paymentProvider(providerName)
+      .verify(payment.transactionRef)
+      .catch(() => undefined);
+    if (!verified || verified.status !== "success") return { confirmed: false };
+    if (
+      verified.reference !== payment.transactionRef ||
+      verified.amountMinor !== payment.amountMinor ||
+      verified.currency !== payment.currency
+    )
+      return { confirmed: false };
+    await this.confirmPayment(payment, verified.providerId, verified.paidAt);
+    if (attempt) {
+      attempt.status = "confirmed";
+      attempt.providerReference = verified.providerId;
+      attempt.completedAt = new Date();
+      await attempt.save();
+    }
+    return { confirmed: true };
   }
 
   async webhook(providerName: ProviderName, rawBody: Buffer, signature: string, requestId?: string) {

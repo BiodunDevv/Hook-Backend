@@ -19,6 +19,7 @@ function tokenDigest(token: string) {
 function activationPath(accountType: AccountType) {
   if (accountType === AccountType.RUNNER) return '/runner/activate';
   if (accountType === AccountType.PARTNER) return '/partner/activate';
+  if (accountType === AccountType.CUSTOMER) return '/customer/activate';
   return '/activate';
 }
 
@@ -58,6 +59,46 @@ export async function issueAccountInvitation(input: {
   return { expiresAt, delivery };
 }
 
+/**
+ * Customer variant of issueAccountInvitation: same token/expiry mechanics,
+ * but the email needs Partner/Market context a generic staff invitation
+ * doesn't carry, so it uses its own template rather than sendAccountInvitation.
+ */
+export async function issueCustomerAccountSetup(input: {
+  accountId: string;
+  email: string;
+  name: string;
+  partnerName: string;
+}) {
+  await AccountInvitation.updateMany(
+    { accountId: input.accountId, acceptedAt: { $exists: false }, revokedAt: { $exists: false } },
+    { $set: { revokedAt: new Date() } },
+  );
+  const token = crypto.randomBytes(32).toString('base64url');
+  const expiresAt = new Date(Date.now() + invitationTtlHours * 60 * 60 * 1000);
+  await AccountInvitation.create({
+    accountId: input.accountId,
+    accountType: AccountType.CUSTOMER,
+    email: input.email,
+    tokenHash: tokenDigest(token),
+    expiresAt,
+    invitedBy: input.accountId,
+  });
+  const baseUrl = (process.env.ADMIN_APP_URL || 'http://localhost:3000').replace(/\/$/, '');
+  const activationUrl = `${baseUrl}${activationPath(AccountType.CUSTOMER)}?token=${encodeURIComponent(token)}`;
+  const delivery = await email.sendCustomerAccountSetup({
+    email: input.email,
+    name: input.name,
+    partnerName: input.partnerName,
+    activationUrl,
+    expiresInHours: invitationTtlHours,
+  }).catch((error) => {
+    console.error(`[account-invitation] Customer setup email failed for account ${input.accountId}`, error);
+    return { delivered: false, provider: 'error' };
+  });
+  return { expiresAt, delivery };
+}
+
 export async function revokeAccountInvitations(accountId: string) {
   const result = await AccountInvitation.updateMany(
     {
@@ -85,7 +126,20 @@ export async function acceptAccountInvitation(
     throw new HttpError(400, 'Invitation is invalid or has expired', undefined, 'TOKEN_INVALID');
   }
   const account = await User.findById(invitation.accountId);
-  if (!account || !account.isActive || account.accountStatus !== AccountStatus.INVITED) {
+  if (!account || !account.isActive) {
+    throw new HttpError(409, 'Account cannot be activated', undefined, 'INVALID_STATE_TRANSITION');
+  }
+  /**
+   * Staff/Runner/Partner invitees start life as INVITED. Customers created at
+   * a Partner's counter start PENDING_PASSWORD instead (they already have a
+   * usable account, they just need a password) — both are valid pre-activation
+   * states for this endpoint, anything else means the account already moved on.
+   */
+  const acceptableStatus: AccountStatus[] =
+    invitation.accountType === AccountType.CUSTOMER
+      ? [AccountStatus.PENDING_PASSWORD, AccountStatus.INVITED]
+      : [AccountStatus.INVITED];
+  if (!acceptableStatus.includes(account.accountStatus ?? AccountStatus.ACTIVE)) {
     throw new HttpError(409, 'Account cannot be activated', undefined, 'INVALID_STATE_TRANSITION');
   }
 

@@ -1,5 +1,6 @@
 import {
   AccountInvitationEmailPayload,
+  CustomerAccountSetupEmailPayload,
   EmailMessage,
   OrderEmailPayload,
   OtpEmailPayload,
@@ -8,6 +9,7 @@ import {
 } from './email.types';
 import {
   accountInvitationEmailTemplate,
+  customerAccountSetupEmailTemplate,
   hookNewOrderEmailTemplate,
   orderConfirmationEmailTemplate,
   orderStatusUpdateEmailTemplate,
@@ -89,6 +91,10 @@ export class EmailService {
 
   async sendAccountInvitation(payload: AccountInvitationEmailPayload) {
     return this.send({ to: payload.email, ...accountInvitationEmailTemplate(payload) });
+  }
+
+  async sendCustomerAccountSetup(payload: CustomerAccountSetupEmailPayload) {
+    return this.send({ to: payload.email, ...customerAccountSetupEmailTemplate(payload) });
   }
 
   async sendOrderConfirmation(payload: OrderEmailPayload) {

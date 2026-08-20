@@ -599,7 +599,7 @@ async function seedCommerceDefaults(adminId: string) {
   })));
   await CommerceSettings.create({ key: 'commerce', currency: 'NGN', defaultDeliveryFeeMinor: 300_000, podEnabled: false, defaultPodLimitMinor: 10_000_000, previewTtlMinutes: 10, catalogAvailabilityCheckDays: 4, negotiationEnabled: true, negotiationSessionMode: 'fixed', negotiationSessionMinutes: 10, negotiationMaximumOffers: 3, negotiationQuoteMinutes: 30, negotiationAzureWordingEnabled: true, paymentProviders: [{ provider: 'paystack', enabled: true, displayOrder: 1, isDefault: true }, { provider: 'opay', enabled: false, displayOrder: 2, isDefault: false }], activePolicyVersions: policyVersions, updatedBy: adminId });
   await DeliveryPricingRule.create({
-    publicId: await nextPublicId('deliveryRule'), name: 'Nigeria default delivery', scope: 'global', mode: 'per_km', baseFeeMinor: 150_000, feePerKmMinor: 15_000, fallbackFeeMinor: 300_000, status: 'active', version: 1, createdBy: adminId,
+    publicId: await nextPublicId('deliveryRule'), name: 'Nigeria default delivery', scope: 'global', mode: 'flat', flatFeeMinor: 300_000, fallbackFeeMinor: 300_000, status: 'active', version: 1, createdBy: adminId,
   });
 }
 

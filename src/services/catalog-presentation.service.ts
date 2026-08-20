@@ -3,11 +3,12 @@ import { Market } from '@models/platform/network.model';
 import { OperationState } from '@models/platform/geography.model';
 import { RunnerProfile } from '@models/platform/operations-accounts.model';
 import { CatalogMediaAsset } from '@models/catalog/catalog.model';
+import { MarketVendor } from '@models/catalog/market-vendor.model';
 import { Product } from '@models/products/product.model';
 import { CatalogMediaService } from './catalog-media.service';
 
 export async function presentSubmission(record: any) {
-  const [market, category, state, runner, rawMedia, product] = await Promise.all([
+  const [market, category, state, runner, rawMedia, product, marketVendor] = await Promise.all([
     record.market?.publicId
       ? record.market
       : Market.findById(record.marketId).select('publicId name').lean({ virtuals: true }),
@@ -30,6 +31,9 @@ export async function presentSubmission(record: any) {
     record.productId
       ? Product.findById(record.productId).select('publicId').lean({ virtuals: true })
       : null,
+    record.marketVendorId
+      ? MarketVendor.findOne({ $or: [{ publicId: record.marketVendorId }, { _id: record.marketVendorId }] }).select('publicId businessName contactName').lean({ virtuals: true })
+      : null,
   ]);
   const mediaService = new CatalogMediaService();
   const media = rawMedia.map((asset: any) => ({
@@ -47,6 +51,9 @@ export async function presentSubmission(record: any) {
     sourceState: state ? { publicId: state.publicId, name: state.name, code: state.code } : null,
     categorySuggestionId: category?.publicId,
     category: category ? { publicId: category.publicId, name: category.name, slug: category.slug } : null,
+    marketVendorId: marketVendor?.publicId || record.marketVendorId,
+    marketVendor: marketVendor ? { publicId: marketVendor.publicId, businessName: marketVendor.businessName, contactName: marketVendor.contactName } : null,
+    internalSellerReference: record.internalSellerReference,
     basicTitle: record.basicTitle,
     notes: record.notes,
     mediaIds: media.map((asset: any) => asset.publicId),

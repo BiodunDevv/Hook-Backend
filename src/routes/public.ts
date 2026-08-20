@@ -13,9 +13,9 @@ export function createPublicRouter() {
   const marketVendors = new RunnerMarketVendorController();
   const paymentLinks = new PaymentLinkController();
 
-  router.get('/payment-links/:token', asyncHandler(paymentLinks.detail));
-  router.post('/payment-links/:token/initialize', validateBody(paymentLinkInitializeSchema), asyncHandler(paymentLinks.initialize));
-  router.get('/payment-links/:token/status', asyncHandler(paymentLinks.status));
+  router.get('/public/payment-links/:token', asyncHandler(paymentLinks.detail));
+  router.post('/public/payment-links/:token/initialize', validateBody(paymentLinkInitializeSchema), asyncHandler(paymentLinks.initialize));
+  router.get('/public/payment-links/:token/status', asyncHandler(paymentLinks.status));
 
   router.get('/products', asyncHandler(controller.getProducts));
   router.get('/products/:id', asyncHandler(controller.getProduct));

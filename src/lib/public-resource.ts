@@ -100,6 +100,9 @@ export function publicCart<T extends Record<string, any> | null | undefined>(car
     deliveryFeeMinor,
     totalMinor,
     items: lines,
+    // stateGroups carries per-state checkoutEligible/blockingReasons that
+    // checkout depends on; it was computed above but never returned.
+    stateGroups,
     sourceStateCount: new Set(
       lines.map((item: Record<string, any>) => item.stateId).filter(Boolean),
     ).size,

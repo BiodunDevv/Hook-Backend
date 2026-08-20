@@ -257,8 +257,17 @@ export class CheckoutService {
           coordinates: addressSnapshot?.coordinates as { latitude: number; longitude: number } | undefined,
           defaultFeeMinor: settings.defaultDeliveryFeeMinor ?? DEFAULT_DELIVERY_FEE_MINOR,
         });
+    const vatRate = 0.075;
+    const vatMinor = Math.round(subtotalMinor * vatRate);
+    const taxSnapshot = {
+      jurisdiction: "NG",
+      name: "VAT",
+      rate: vatRate,
+      basis: "product_subtotal",
+      version: "ng-vat-7.5-v1",
+    };
     const deliveryFeeMinor = deliveryPricing.feeMinor;
-    const totalMinor = subtotalMinor + deliveryFeeMinor;
+    const totalMinor = subtotalMinor + vatMinor + deliveryFeeMinor;
     const podLimitMinor = Number(
       deliveryState.podLimitMinor ??
         settings.defaultPodLimitMinor ??
@@ -319,6 +328,9 @@ export class CheckoutService {
           : undefined,
       lines,
       subtotalMinor,
+      vatRate,
+      vatMinor,
+      taxSnapshot,
       deliveryFeeMinor,
       deliveryPricing,
       totalMinor,
@@ -345,6 +357,9 @@ export class CheckoutService {
       fulfilmentGroups: groupedLines,
       sourceStateCount: groupedLines.length,
       subtotalMinor,
+      vatRate,
+      vatMinor,
+      taxSnapshot,
       deliveryFeeMinor,
       deliveryPricing,
       totalMinor,
@@ -452,6 +467,36 @@ export class CheckoutService {
         "CHECKOUT_REVALIDATION_REQUIRED",
       );
 
+    const currentSubtotalMinor = currentLines.reduce(
+      (sum, line) => sum + Number(line.totalPriceMinor),
+      0,
+    );
+    const currentVatMinor = Math.round(currentSubtotalMinor * Number(preview.vatRate ?? 0.075));
+    let currentDeliveryFeeMinor = Number(preview.deliveryFeeMinor);
+    if (preview.deliveryMethod === DeliveryMethod.HOME_DELIVERY) {
+      const address = await this.addresses.getOwned(actor.customerId, String(preview.addressId || ""));
+      const deliveryState = await resolveDeliveryState(String(address.stateId));
+      if (!deliveryState || deliveryState.deliveryEnabled === false)
+        throw new HttpError(409, "Delivery is no longer available in this State", undefined, "ADDRESS_OUTSIDE_COVERAGE");
+      const settings = await this.getSettings();
+      const pricing = await calculateDeliveryPricing({
+        state: deliveryState,
+        defaultFeeMinor: settings.defaultDeliveryFeeMinor ?? DEFAULT_DELIVERY_FEE_MINOR,
+      });
+      currentDeliveryFeeMinor = pricing.feeMinor;
+      if (
+        currentDeliveryFeeMinor !== Number(preview.deliveryFeeMinor) ||
+        pricing.ruleVersion !== (preview.deliveryPricing as any)?.ruleVersion
+      )
+        throw new HttpError(409, "Delivery pricing changed. Review checkout again.", undefined, "CHECKOUT_REVALIDATION_REQUIRED");
+    }
+    if (
+      currentSubtotalMinor !== Number(preview.subtotalMinor) ||
+      currentVatMinor !== Number(preview.vatMinor) ||
+      currentSubtotalMinor + currentVatMinor + currentDeliveryFeeMinor !== Number(preview.totalMinor)
+    )
+      throw new HttpError(409, "Order totals changed. Review checkout again.", undefined, "CHECKOUT_REVALIDATION_REQUIRED");
+
     const groupSnapshots = (preview.fulfilmentGroups || []).map((group: any) => ({
       sourceStateId: String(group.sourceStateId),
       subtotalMinor: Number(group.subtotalMinor || 0),
@@ -461,12 +506,17 @@ export class CheckoutService {
     const pod = preview.paymentMethod === CommercePaymentMethod.PAY_AT_HANDOVER;
     const paymentIds = await Promise.all((pod ? effectiveGroups : [null]).map(() => nextPublicId("payment")));
     let allocatedFee = 0;
+    let allocatedVat = 0;
     const groupPlans = effectiveGroups.map((group, index) => {
       const feeShare = index === effectiveGroups.length - 1
         ? Number(preview.deliveryFeeMinor) - allocatedFee
         : Math.floor(Number(preview.deliveryFeeMinor) * group.subtotalMinor / Math.max(Number(preview.subtotalMinor), 1));
       allocatedFee += feeShare;
-      return { ...group, publicId: groupIds[index], deliveryFeeShareMinor: feeShare, paymentPublicId: pod ? paymentIds[index] : undefined };
+      const vatShare = index === effectiveGroups.length - 1
+        ? Number(preview.vatMinor || 0) - allocatedVat
+        : Math.floor(Number(preview.vatMinor || 0) * group.subtotalMinor / Math.max(Number(preview.subtotalMinor), 1));
+      allocatedVat += vatShare;
+      return { ...group, publicId: groupIds[index], vatShareMinor: vatShare, deliveryFeeShareMinor: feeShare, paymentPublicId: pod ? paymentIds[index] : undefined };
     });
     const ids = {
       order: await nextPublicId("order"),
@@ -501,6 +551,9 @@ export class CheckoutService {
             ? CommercePaymentStatus.DUE_AT_HANDOVER
             : CommercePaymentStatus.PENDING,
           subtotalMinor: preview.subtotalMinor,
+          vatRate: preview.vatRate,
+          vatMinor: preview.vatMinor,
+          taxSnapshot: preview.taxSnapshot,
           deliveryFeeMinor: preview.deliveryFeeMinor,
           deliveryPricing: preview.deliveryPricing,
           totalMinor: preview.totalMinor,
@@ -581,13 +634,14 @@ export class CheckoutService {
             sourceStateId: group.sourceStateId,
             orderItemIds: createdItems.filter((item) => item.fulfilmentGroupId === group.publicId).map((item) => item.publicId || item.id),
             subtotalMinor: group.subtotalMinor,
+            vatShareMinor: group.vatShareMinor,
             deliveryFeeShareMinor: group.deliveryFeeShareMinor,
             status: "PENDING",
           })),
           { session },
         );
         await Payment.create(
-          (pod ? groupPlans : [{ publicId: undefined, subtotalMinor: Number(preview.subtotalMinor), deliveryFeeShareMinor: Number(preview.deliveryFeeMinor), paymentPublicId: ids.payment }]).map((group) =>
+          (pod ? groupPlans : [{ publicId: undefined, subtotalMinor: Number(preview.subtotalMinor), vatShareMinor: Number(preview.vatMinor || 0), deliveryFeeShareMinor: Number(preview.deliveryFeeMinor), paymentPublicId: ids.payment }]).map((group) =>
             ({
               publicId: group.paymentPublicId,
               orderId: order.id,
@@ -596,8 +650,8 @@ export class CheckoutService {
               transactionRef: `PSK-${group.paymentPublicId}`,
               gateway: "paystack",
               paymentMethod: pod ? "pos" : "card",
-              amount: (group.subtotalMinor + group.deliveryFeeShareMinor) / 100,
-              amountMinor: group.subtotalMinor + group.deliveryFeeShareMinor,
+              amount: (group.subtotalMinor + group.vatShareMinor + group.deliveryFeeShareMinor) / 100,
+              amountMinor: group.subtotalMinor + group.vatShareMinor + group.deliveryFeeShareMinor,
               currency: preview.currency,
               gatewayFee: 0,
               amountSettled: 0,

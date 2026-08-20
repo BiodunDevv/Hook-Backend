@@ -1,4 +1,5 @@
 import { HydratedDocument, Model, Schema, SchemaDefinition, model, models } from 'mongoose';
+import leanVirtuals from 'mongoose-lean-virtuals';
 
 export interface BaseEntity {
   id: string;
@@ -37,6 +38,15 @@ export function createSchema<T>(definition: SchemaDefinition<T>): Schema<T> {
   schema.virtual('id').get(function getId(this: { _id?: any }) {
     return this._id?.toString();
   });
+
+  /**
+   * Mongoose's built-in `.lean({ virtuals: true })` only auto-includes
+   * populated-relation virtuals, not plain getter virtuals like `id` above —
+   * without this plugin every `.lean({ virtuals: true })` call across the
+   * codebase silently returns `id: undefined`, even though `_id` is present.
+   * This plugin makes lean queries actually compute schema.virtual() getters.
+   */
+  schema.plugin(leanVirtuals);
 
   return schema;
 }

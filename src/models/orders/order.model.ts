@@ -43,6 +43,9 @@ export interface Order extends BaseEntity {
     | "REFUND_PENDING"
     | "REFUNDED";
   subtotalMinor?: number;
+  vatRate?: number;
+  vatMinor?: number;
+  taxSnapshot?: Record<string, unknown>;
   deliveryFeeMinor?: number;
   deliveryPricing?: Record<string, unknown>;
   totalMinor?: number;
@@ -170,6 +173,9 @@ const OrderSchema = createSchema<Order>({
     index: true,
   },
   subtotalMinor: { type: Number, min: 0 },
+  vatRate: { type: Number, min: 0 },
+  vatMinor: { type: Number, min: 0 },
+  taxSnapshot: { type: Object },
   deliveryFeeMinor: { type: Number, min: 0 },
   deliveryPricing: { type: Object },
   totalMinor: { type: Number, min: 0 },

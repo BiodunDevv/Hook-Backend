@@ -60,6 +60,7 @@ export function assertSafeEnvironment() {
         throw new Error(`${name} must be an independent production secret with at least 32 characters`);
       }
     }
+    requireEnv('PAYSTACK_SECRET_KEY');
     const opayConfigured = [
       process.env.OPAY_PAYIN_PUBLIC_KEY,
       process.env.OPAY_PAYIN_SECRET_KEY,

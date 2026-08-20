@@ -26,6 +26,14 @@ export interface AccountInvitationEmailPayload {
   expiresInHours: number;
 }
 
+export interface CustomerAccountSetupEmailPayload {
+  email: string;
+  name: string;
+  partnerName: string;
+  activationUrl: string;
+  expiresInHours: number;
+}
+
 export interface OrderEmailPayload {
   to: string;
   name?: string;

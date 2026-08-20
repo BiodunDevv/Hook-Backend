@@ -4,6 +4,7 @@ import { CommercePaymentStatus } from "@lib/constants";
 import { CommerceSettings } from "@models/commerce/commerce.model";
 import { OrderItem } from "@models/orders/order-item.model";
 import { Order } from "@models/orders/order.model";
+import { OrderFulfilmentGroup } from "@models/orders/order-fulfilment-group.model";
 import { PaymentAttempt, PaymentLink } from "@models/payments/payment-link.model";
 import { Payment } from "@models/payments/payment.model";
 import { nextPublicId } from "@services/public-id.service";
@@ -76,13 +77,16 @@ export class PaymentLinkService {
 
   async detail(token: string) {
     const link = await this.resolve(token);
-    const [order, payment, items, settings] = await Promise.all([
-      Order.findById(link.orderId).select("publicId orderCode commerceStatus commercePaymentStatus subtotalMinor deliveryFeeMinor totalMinor currency").lean(),
+    const [order, payment, items, settings, group] = await Promise.all([
+      Order.findById(link.orderId).select("publicId orderCode commerceStatus commercePaymentStatus subtotalMinor vatRate vatMinor deliveryFeeMinor totalMinor currency").lean(),
       Payment.findById(link.paymentId).select("publicId commerceStatus paidAt gateway amountMinor currency").lean(),
       OrderItem.find({ orderId: link.orderId, ...(link.fulfilmentGroupId ? { fulfilmentGroupId: link.fulfilmentGroupId } : {}) })
         .select("publicId productTitle productImage quantity selectedVariants unitPriceMinor totalPriceMinor currency")
         .lean({ virtuals: true }),
       CommerceSettings.findOne({ key: "commerce" }).select("paymentProviders").lean(),
+      link.fulfilmentGroupId
+        ? OrderFulfilmentGroup.findOne({ publicId: link.fulfilmentGroupId }).select("subtotalMinor vatShareMinor deliveryFeeShareMinor").lean()
+        : Promise.resolve(null),
     ]);
     if (!order || !payment) throw new HttpError(404, "Payment link not found");
     await PaymentLink.updateOne({ _id: link._id }, { $set: { lastAccessedAt: new Date() } });
@@ -103,10 +107,10 @@ export class PaymentLinkService {
       order: {
         id: order.publicId,
         reference: order.orderCode || order.publicId,
-        subtotalMinor: link.fulfilmentGroupId ? items.reduce((sum, item) => sum + Number(item.totalPriceMinor || 0), 0) : order.subtotalMinor,
-        deliveryFeeMinor: link.fulfilmentGroupId
-          ? Math.max(0, link.amountMinor - items.reduce((sum, item) => sum + Number(item.totalPriceMinor || 0), 0))
-          : order.deliveryFeeMinor,
+        subtotalMinor: link.fulfilmentGroupId ? Number(group?.subtotalMinor || items.reduce((sum, item) => sum + Number(item.totalPriceMinor || 0), 0)) : Number(order.subtotalMinor || 0),
+        vatRate: Number(order.vatRate || 0),
+        vatMinor: link.fulfilmentGroupId ? Number(group?.vatShareMinor || 0) : Number(order.vatMinor || 0),
+        deliveryFeeMinor: link.fulfilmentGroupId ? Number(group?.deliveryFeeShareMinor || 0) : Number(order.deliveryFeeMinor || 0),
         totalMinor: link.amountMinor,
         currency: link.currency,
         items: items.map((item) => ({

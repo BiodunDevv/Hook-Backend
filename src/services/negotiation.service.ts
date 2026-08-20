@@ -11,11 +11,25 @@ import { AzureNegotiationService, detectNegotiationLanguage } from './azure-nego
 import { PricingEngine } from './pricing-engine.service';
 import { HttpError } from '@utils/http';
 
-export interface NegotiationIdentity { customerId: string; }
+/**
+ * `partnerId` is set only for partner-assisted sessions. The negotiation is
+ * still owned by `customerId` (the shopper being helped) — the partner is
+ * recorded as the initiator so admin can audit who negotiated on whose behalf.
+ */
+export interface NegotiationIdentity {
+  customerId: string;
+  partnerId?: string;
+}
 
 function identityFilter(identity: NegotiationIdentity) {
-  if (identity.customerId) return { customerId: identity.customerId };
-  throw new HttpError(401, 'Customer account required', undefined, 'AUTHENTICATION_REQUIRED');
+  if (!identity.customerId) {
+    throw new HttpError(401, 'Customer account required', undefined, 'AUTHENTICATION_REQUIRED');
+  }
+  // A Partner only ever sees the sessions they themselves initiated for this
+  // customer — never the customer's own self-serve negotiations.
+  return identity.partnerId
+    ? { customerId: identity.customerId, initiatingPartnerId: identity.partnerId }
+    : { customerId: identity.customerId };
 }
 
 function identifier(identifier: string) {
@@ -98,7 +112,8 @@ export class NegotiationService {
     }).lean({ virtuals: true });
     if (!variant) throw new HttpError(404, 'Product variant not found', undefined, 'NOT_FOUND');
     const active = await Negotiation.findOne({
-      customerId: identity.customerId,
+      // Scoped so a Partner session does not collide with the customer's own.
+      ...identityFilter(identity),
       productId: product._id.toString(),
       variantId: variant._id.toString(),
       quantity: input.quantity,
@@ -124,8 +139,9 @@ export class NegotiationService {
     const publicId = await nextPublicId('negotiation');
     const session = await Negotiation.create({
       publicId,
+      // Also supplies initiatingPartnerId for partner-assisted sessions.
       ...identityFilter(identity),
-      channel: 'shopper',
+      channel: identity.partnerId ? 'partner_assisted' : 'shopper',
       productId: product._id.toString(),
       variantId: variant._id.toString(),
       quantity: input.quantity,
@@ -350,10 +366,16 @@ export class NegotiationService {
     if (!identity.customerId) {
       throw new HttpError(403, 'Verify your customer account before saving an accepted quote', undefined, 'NEGOTIATION_OWNERSHIP_REQUIRED');
     }
+    /**
+     * Self-serve shoppers must have a verified, active account before a quote
+     * is locked to them. Partner-assisted customers are created at the counter
+     * and are intentionally unverified, so the Partner's own authenticated
+     * session is the accountable party there.
+     */
     const customer = await User.findOne({
       _id: identity.customerId,
       accountType: AccountType.CUSTOMER,
-      isEmailVerified: true,
+      ...(identity.partnerId ? {} : { isEmailVerified: true }),
       isActive: true,
     }).lean();
     if (!customer) throw new HttpError(403, 'A verified customer account is required', undefined, 'NEGOTIATION_OWNERSHIP_REQUIRED');
@@ -361,6 +383,8 @@ export class NegotiationService {
       ...identifier(negotiationIdentifier),
       customerId: identity.customerId,
       status: NegotiationStatus.ACTIVE,
+      // A Partner may only accept quotes from sessions they initiated.
+      ...(identity.partnerId ? { initiatingPartnerId: identity.partnerId } : {}),
     }).lean({ virtuals: true });
     if (!session) throw new HttpError(404, 'Active negotiation not found', undefined, 'NOT_FOUND');
     const prices = [session.agreedPriceMinor, session.lastCounterPriceMinor]
@@ -451,6 +475,19 @@ export class NegotiationService {
     const productById = new Map(products.map((product) => [product._id.toString(), product]));
     const variantById = new Map(variants.map((variant) => [variant._id.toString(), variant.publicId]));
     return sessions.map((session) => present(session, { variantId: variantById.get(session.variantId || '') }, productById.get(session.productId)));
+  }
+
+  /**
+   * Active negotiation count across every customer a Partner has assisted —
+   * unlike list()/detail(), this is not scoped to one customer, so it powers
+   * a header-level badge rather than a single conversation thread.
+   */
+  async countActiveForPartner(partnerId: string) {
+    return Negotiation.countDocuments({
+      initiatingPartnerId: partnerId,
+      status: NegotiationStatus.ACTIVE,
+      $or: [{ expiresAt: { $gt: new Date() } }, { expiresAt: { $exists: false } }],
+    });
   }
 
   async active(identity: NegotiationIdentity, input: { productId: string; variantId: string; quantity: number }) {

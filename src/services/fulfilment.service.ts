@@ -11,6 +11,7 @@ import { CommerceOutboxEvent } from '@models/commerce/commerce.model';
 import { FulfilmentTask, RunnerPackage, HubPackage, Consolidation, Shipment, FulfilmentException, PartnerCustody, ReturnRequest, FulfilmentRefund, LogisticsWebhookEvent, type LogisticsProviderKey } from '@models/fulfilment/fulfilment.model';
 import { Order } from '@models/orders/order.model';
 import { OrderItem } from '@models/orders/order-item.model';
+import { OrderFulfilmentGroup } from '@models/orders/order-fulfilment-group.model';
 import { Payment } from '@models/payments/payment.model';
 import { Market, DispatchHub } from '@models/platform/network.model';
 import { HookPartner, RunnerMarketAssignment, RunnerProfile } from '@models/platform/operations-accounts.model';
@@ -18,6 +19,7 @@ import { User } from '@models/users/user.model';
 import { PlatformAuditLog } from '@models/platform/audit-log.model';
 import { nextPublicId } from '@services/public-id.service';
 import { PaymentService } from '@services/payment.service';
+import { createCommerceNotification } from '@services/commerce-notification.service';
 import { isLogisticsSimulationEnabled, logisticsProvider, logisticsReadiness } from '@services/logistics/logistics-provider';
 import { publishRealtime } from '@services/realtime.service';
 import { HttpError } from '@utils/http';
@@ -166,6 +168,18 @@ export class FulfilmentService {
         { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
       ).lean({ virtuals: true });
       await OrderItem.updateMany({ _id: { $in: group.map((item) => item._id) } }, { $set: { fulfilmentTaskId: (task as any)._id.toString(), fulfilmentStatus: 'PENDING' } });
+      if (!groupBlocked && assignment?.runnerId && (task as any).status === FulfilmentTaskStatus.ALERTED) {
+        const runnerProfile = await RunnerProfile.findById(assignment.runnerId).select('accountId').lean();
+        if (runnerProfile?.accountId)
+          await createCommerceNotification({
+            eventKey: `fulfilment:${(task as any).publicId}:alerted`,
+            userId: runnerProfile.accountId,
+            title: "New order to fulfil",
+            body: `A new order needs pickup from ${market?.name || "your assigned Market"}. Accept within 15 minutes.`,
+            type: "order_assigned",
+            data: { taskId: (task as any).publicId, orderId: order.publicId, marketId },
+          }).catch(() => undefined);
+      }
       if (groupBlocked) {
         await FulfilmentException.findOneAndUpdate(
           { idempotencyKey: `assignment:${idempotencyKey}` },
@@ -593,28 +607,34 @@ export class FulfilmentService {
   }
 
   async consolidate(actor: Actor, orderIdentifier: string, body: Record<string, any>) {
-    const order = await orderByIdentifier(orderIdentifier); await assertStaffScope(actor, order.sourceStateId, body.hubId);
-    const items = await OrderItem.find({ orderId: order._id.toString(), resolutionState: { $ne: 'RESOLVED' } }).lean({ virtuals: true }) as any[];
-    const packages = await HubPackage.find({ orderId: order._id.toString(), status: HubPackageStatus.QC_PASSED }).lean({ virtuals: true });
+    const order = await orderByIdentifier(orderIdentifier);
+    const packages = await HubPackage.find({ orderId: order._id.toString(), hubId: body.hubId, status: HubPackageStatus.QC_PASSED }).lean({ virtuals: true });
+    const tasks = await FulfilmentTask.find({ _id: { $in: packages.map((item: any) => item.taskId) } }).select('sourceStateId').lean();
+    const sourceStates = [...new Set(tasks.map((task: any) => String(task.sourceStateId)))];
+    if (sourceStates.length !== 1) throw new HttpError(409, 'Packages must belong to one source State', undefined, 'STATE_SCOPE_DENIED');
+    const sourceStateId = sourceStates[0];
+    await assertStaffScope(actor, sourceStateId, body.hubId);
+    const group = await OrderFulfilmentGroup.findOne({ orderId: order._id.toString(), sourceStateId }).lean();
+    const items = await OrderItem.find({ orderId: order._id.toString(), ...(group ? { fulfilmentGroupId: group.publicId } : { stateId: sourceStateId }), resolutionState: { $ne: 'RESOLVED' } }).lean({ virtuals: true }) as any[];
     const packageItems = new Set(packages.flatMap((item: any) => item.itemIds.map(String)));
     if (!items.length || items.some((item) => !packageItems.has(item._id.toString()))) throw new HttpError(409, 'Every active order item must pass Hub quality check before consolidation', undefined, 'ORDER_NOT_COMPLETE');
     const packageHubIds = [...new Set(packages.map((item: any) => String(item.hubId)))];
     if (packageHubIds.length !== 1 || (body.hubId && String(body.hubId) !== packageHubIds[0])) throw new HttpError(409, 'All packages must be at the same Dispatch Hub before consolidation', undefined, 'HUB_MISMATCH');
-    await assertStaffScope(actor, order.sourceStateId, packageHubIds[0]);
-    const existing = await Consolidation.findOne({ orderId: order._id.toString() }).lean({ virtuals: true });
+    await assertStaffScope(actor, sourceStateId, packageHubIds[0]);
+    const existing = await Consolidation.findOne({ orderId: order._id.toString(), sourceStateId }).lean({ virtuals: true });
     if (existing) return existing;
     let consolidation;
     try {
-      consolidation = await Consolidation.create({ publicId: await nextPublicId('consolidation'), orderId: order._id.toString(), sourceStateId: order.sourceStateId, hubId: packageHubIds[0], hubPackageIds: packages.map((item: any) => item._id.toString()), status: 'DRAFT', evidence: [], version: 1 });
+      consolidation = await Consolidation.create({ publicId: await nextPublicId('consolidation'), orderId: order._id.toString(), fulfilmentGroupId: group?.publicId, sourceStateId, hubId: packageHubIds[0], hubPackageIds: packages.map((item: any) => item._id.toString()), status: 'DRAFT', evidence: [], version: 1 });
     } catch (error) {
       if (!isDuplicateKey(error)) throw error;
-      const concurrent = await Consolidation.findOne({ orderId: order._id.toString() }).lean({ virtuals: true });
+      const concurrent = await Consolidation.findOne({ orderId: order._id.toString(), sourceStateId }).lean({ virtuals: true });
       if (concurrent) return concurrent;
       throw error;
     }
     await HubPackage.updateMany({ _id: { $in: packages.map((item: any) => item._id) } }, { $set: { status: HubPackageStatus.CONSOLIDATED }, $push: { custodyHistory: { action: 'CONSOLIDATION_STARTED', actorId: actor.accountId, at: new Date() } } });
     await Order.updateOne({ _id: order._id }, { $set: { commerceStatus: CommerceOrderStatus.READY_FOR_CONSOLIDATION, customerProgress: [{ key: 'hub', label: 'Order received and checked', at: new Date() }] }, $push: { timeline: { status: 'READY_FOR_CONSOLIDATION', actor: actor.accountId, at: new Date() } } });
-    await this.publishOrderUpdate(order._id.toString(), order.sourceStateId, packageHubIds[0]);
+    await this.publishOrderUpdate(order._id.toString(), sourceStateId, packageHubIds[0]);
     return consolidation.toJSON();
   }
 
@@ -635,11 +655,11 @@ export class FulfilmentService {
     const provider = String(body.provider || 'manual') as LogisticsProviderKey;
     if (provider === 'simulated' && !isLogisticsSimulationEnabled()) throw new HttpError(503, 'Logistics simulation is available only in a non-production environment when explicitly enabled', undefined, 'PROVIDER_NOT_READY');
     if (!['manual', 'other', 'simulated'].includes(provider)) throw new HttpError(409, 'GIG and Fez adapters are disabled until provider credentials and contracts are verified', undefined, 'PROVIDER_NOT_READY');
-    const consolidation = await Consolidation.findOne({ orderId: order._id.toString(), status: 'SEALED' }).lean({ virtuals: true }) as any;
+    const consolidation = await Consolidation.findOne({ orderId: order._id.toString(), hubId: body.hubId, status: 'SEALED' }).lean({ virtuals: true }) as any;
     if (!consolidation) throw new HttpError(409, 'Seal the complete consolidation before booking shipment', undefined, 'ORDER_NOT_COMPLETE');
     await assertStaffScope(actor, order.sourceStateId, consolidation.hubId);
     if (body.hubId && String(body.hubId) !== String(consolidation.hubId)) throw new HttpError(409, 'Shipment Hub must match the sealed consolidation', undefined, 'HUB_MISMATCH');
-    const existing = await Shipment.findOne({ orderId: order._id.toString() }).lean({ virtuals: true });
+    const existing = await Shipment.findOne({ orderId: order._id.toString(), sourceStateId: consolidation.sourceStateId }).lean({ virtuals: true });
     if (existing) {
       if (body.idempotencyKey && existing.bookingIdempotencyKey && body.idempotencyKey !== existing.bookingIdempotencyKey) throw new HttpError(409, 'This Order already has a shipment booking', undefined, 'IDEMPOTENCY_CONFLICT');
       return existing;
@@ -649,10 +669,10 @@ export class FulfilmentService {
       : undefined;
     let shipment;
     try {
-      shipment = await Shipment.create({ publicId: await nextPublicId('shipment'), orderId: order._id.toString(), sourceStateId: order.sourceStateId, hubId: consolidation.hubId, consolidationId: consolidation._id.toString(), provider, serviceName: body.serviceName || (provider === 'simulated' ? 'Hook Logistics Simulator' : undefined), externalReference: body.externalReference || simulationBooking?.externalReference, status: ShipmentStatus.BOOKED_WITH_PROVIDER, deliveryAddressSnapshot: order.addressSnapshot || order.deliveryAddress, estimatedDeliveryAt: body.estimatedDeliveryAt ? new Date(body.estimatedDeliveryAt) : simulationBooking?.estimatedDeliveryAt ? new Date(String(simulationBooking.estimatedDeliveryAt)) : undefined, bookedAt: new Date(), providerCostMinor: body.providerCostMinor, providerQuoteMinor: body.providerQuoteMinor, trackingNumber: body.trackingNumber || simulationBooking?.trackingNumber, trackingEvents: [{ status: 'BOOKED_WITH_PROVIDER', at: new Date(), actorId: actor.accountId, mode: provider === 'simulated' ? 'simulation' : undefined }], evidence: evidence(body.evidence), releaseStatus: order.commercePaymentMethod === 'PAY_AT_HANDOVER' ? 'AWAITING_HANDOVER_PAYMENT' : 'NOT_REQUIRED', bookingIdempotencyKey: body.idempotencyKey, version: 1 });
+      shipment = await Shipment.create({ publicId: await nextPublicId('shipment'), orderId: order._id.toString(), fulfilmentGroupId: consolidation.fulfilmentGroupId, sourceStateId: consolidation.sourceStateId, hubId: consolidation.hubId, consolidationId: consolidation._id.toString(), provider, serviceName: body.serviceName || (provider === 'simulated' ? 'Hook Logistics Simulator' : undefined), externalReference: body.externalReference || simulationBooking?.externalReference, status: ShipmentStatus.BOOKED_WITH_PROVIDER, deliveryAddressSnapshot: order.addressSnapshot || order.deliveryAddress, estimatedDeliveryAt: body.estimatedDeliveryAt ? new Date(body.estimatedDeliveryAt) : simulationBooking?.estimatedDeliveryAt ? new Date(String(simulationBooking.estimatedDeliveryAt)) : undefined, bookedAt: new Date(), providerCostMinor: body.providerCostMinor, providerQuoteMinor: body.providerQuoteMinor, trackingNumber: body.trackingNumber || simulationBooking?.trackingNumber, trackingEvents: [{ status: 'BOOKED_WITH_PROVIDER', at: new Date(), actorId: actor.accountId, mode: provider === 'simulated' ? 'simulation' : undefined }], evidence: evidence(body.evidence), releaseStatus: order.commercePaymentMethod === 'PAY_AT_HANDOVER' ? 'AWAITING_HANDOVER_PAYMENT' : 'NOT_REQUIRED', bookingIdempotencyKey: body.idempotencyKey, version: 1 });
     } catch (error) {
       if (!isDuplicateKey(error)) throw error;
-      const concurrent = await Shipment.findOne({ orderId: order._id.toString() }).lean({ virtuals: true });
+      const concurrent = await Shipment.findOne({ orderId: order._id.toString(), sourceStateId: consolidation.sourceStateId }).lean({ virtuals: true });
       if (concurrent) return concurrent;
       throw error;
     }
@@ -674,15 +694,31 @@ export class FulfilmentService {
     if (next === ShipmentStatus.DELIVERED && shipment.releaseStatus === 'AWAITING_HANDOVER_PAYMENT') throw new HttpError(409, 'Verified Pay-at-Handover payment is required before release', undefined, 'PAYMENT_REQUIRED');
     const updated = await Shipment.findOneAndUpdate({ _id: shipment._id, version: body.version ?? shipment.version }, { $set: { status: next, releaseStatus: next === ShipmentStatus.RELEASE_APPROVED ? 'RELEASE_APPROVED' : shipment.releaseStatus, pickedUpAt: next === ShipmentStatus.PICKED_UP ? new Date() : shipment.pickedUpAt, deliveredAt: next === ShipmentStatus.DELIVERED ? new Date() : shipment.deliveredAt, failedAt: next === ShipmentStatus.DELIVERY_FAILED ? new Date() : shipment.failedAt }, $push: { trackingEvents: { status: next, at: new Date(), actorId: actor.accountId, note: body.note } }, $inc: { version: 1 } }, { returnDocument: 'after' }).lean({ virtuals: true });
     if (!updated) throw new HttpError(409, 'Shipment changed. Refresh and try again.', undefined, 'STALE_VERSION');
-    const orderStatus = next === ShipmentStatus.DELIVERED
-      ? CommerceOrderStatus.DELIVERED
-      : next === ShipmentStatus.RETURN_IN_TRANSIT
-        ? CommerceOrderStatus.RETURN_IN_PROGRESS
-        : next === ShipmentStatus.PICKED_UP || next === ShipmentStatus.IN_TRANSIT || next === ShipmentStatus.OUT_FOR_DELIVERY
-          ? CommerceOrderStatus.IN_TRANSIT
-          : undefined;
-    if (orderStatus) await Order.updateOne({ _id: shipment.orderId }, { $set: { commerceStatus: orderStatus, deliveredAt: next === ShipmentStatus.DELIVERED ? new Date() : undefined }, $push: { timeline: { status: next, actor: actor.accountId, at: new Date() } } });
+    if (shipment.fulfilmentGroupId) {
+      const groupStatus = next === ShipmentStatus.DELIVERED ? 'DELIVERED'
+        : [ShipmentStatus.PICKED_UP, ShipmentStatus.IN_TRANSIT, ShipmentStatus.OUT_FOR_DELIVERY].includes(next) ? 'IN_TRANSIT'
+          : next === ShipmentStatus.RETURN_IN_TRANSIT ? 'ON_HOLD' : undefined;
+      if (groupStatus) await OrderFulfilmentGroup.updateOne({ publicId: shipment.fulfilmentGroupId }, { $set: { status: groupStatus, shipmentId: shipment.publicId } });
+    }
+    const allShipments = await Shipment.find({ orderId: shipment.orderId }).select('status').lean();
+    const deliveredCount = allShipments.filter((entry) => entry.status === ShipmentStatus.DELIVERED).length;
+    const movingCount = allShipments.filter((entry) => [ShipmentStatus.PICKED_UP, ShipmentStatus.IN_TRANSIT, ShipmentStatus.OUT_FOR_DELIVERY].includes(entry.status)).length;
+    const orderStatus = next === ShipmentStatus.RETURN_IN_TRANSIT ? CommerceOrderStatus.RETURN_IN_PROGRESS
+      : deliveredCount === allShipments.length ? CommerceOrderStatus.DELIVERED
+        : deliveredCount > 0 ? CommerceOrderStatus.PARTIALLY_DELIVERED
+          : movingCount > 0 && allShipments.length > 1 ? CommerceOrderStatus.PARTIALLY_IN_TRANSIT
+            : movingCount > 0 ? CommerceOrderStatus.IN_TRANSIT : undefined;
+    if (orderStatus) await Order.updateOne({ _id: shipment.orderId }, { $set: { commerceStatus: orderStatus, deliveredAt: orderStatus === CommerceOrderStatus.DELIVERED ? new Date() : undefined }, $push: { timeline: { status: next, actor: actor.accountId, at: new Date() } } });
     await this.publishOrderUpdate(shipment.orderId, shipment.sourceStateId, shipment.hubId);
+    if (orderStatus === CommerceOrderStatus.DELIVERED && order?.userId)
+      await createCommerceNotification({
+        eventKey: `order:${order.publicId}:delivered`,
+        userId: order.userId,
+        title: "Order delivered",
+        body: "Your Hook Order has been delivered. Thanks for shopping with Hook.",
+        type: "order_delivered",
+        data: { orderId: order.publicId },
+      }).catch(() => undefined);
     return updated;
   }
 
@@ -794,7 +830,7 @@ export class FulfilmentService {
     await assertStaffScope(actor);
     const refund = await FulfilmentRefund.findOne(identifier(identifierValue)).lean({ virtuals: true }) as any;
     if (!refund) throw new HttpError(404, 'Refund record not found', undefined, 'NOT_FOUND');
-    const order = await Order.findById(refund.orderId).select('sourceStateId').lean() as any;
+    const order = await Order.findById(refund.orderId).select('sourceStateId userId publicId').lean() as any;
     if (!order) throw new HttpError(404, 'Refund record not found', undefined, 'NOT_FOUND');
     await assertStaffScope(actor, order.sourceStateId);
     if (refund.status === 'REFUNDED') return refund;
@@ -823,6 +859,15 @@ export class FulfilmentService {
         },
       );
       await this.publishOrderUpdate(refund.orderId, order.sourceStateId);
+      if (order.userId)
+        await createCommerceNotification({
+          eventKey: `order:${order.publicId}:refund:${refund.publicId}`,
+          userId: order.userId,
+          title: fullyRefunded ? "Refund processed" : "Partial refund processed",
+          body: `A refund of ${(refund.amountMinor / 100).toLocaleString("en-NG", { style: "currency", currency: refund.currency || "NGN" })} has been processed to your original payment method.`,
+          type: "refund_processed",
+          data: { orderId: order.publicId, refundId: refund.publicId },
+        }).catch(() => undefined);
       await audit('fulfilment.refund.processed', 'refund', refund.publicId, actor.accountId, { providerReference: providerResult.providerReference, amountMinor: refund.amountMinor }, body.reason);
       return updated;
     } catch (error) {
@@ -834,15 +879,26 @@ export class FulfilmentService {
   async customerOrderProgress(customerId: string, orderIdentifier: string) {
     const order = await Order.findOne({ ...identifier(orderIdentifier), userId: customerId }).lean({ virtuals: true }) as any;
     if (!order) throw new HttpError(404, 'Order not found', undefined, 'NOT_FOUND');
-    const [tasks, packages, shipment, custody, returns, refunds] = await Promise.all([
-      FulfilmentTask.find({ orderId: order._id.toString() }).select('-actualCostMinor -assignmentHistory').lean({ virtuals: true }),
-      HubPackage.find({ orderId: order._id.toString() }).select('-custodyHistory').lean({ virtuals: true }),
-      Shipment.findOne({ orderId: order._id.toString() }).select('-providerCostMinor -evidence').lean({ virtuals: true }),
+    const [tasks, packages, shipments, custody, returns, refunds] = await Promise.all([
+      FulfilmentTask.find({ orderId: order._id.toString() }).select('publicId status acceptedAt sourcingStartedAt productSecuredAt packedAt hubReceivedAt completedAt').lean({ virtuals: true }),
+      HubPackage.find({ orderId: order._id.toString() }).select('publicId status receivedAt qcPassedAt').lean({ virtuals: true }),
+      Shipment.find({ orderId: order._id.toString() }).select('publicId fulfilmentGroupId status provider trackingNumber estimatedDeliveryAt pickedUpAt deliveredAt trackingEvents').lean({ virtuals: true }),
       PartnerCustody.findOne({ orderId: order._id.toString() }).select('-collectionCodeHash -history').lean({ virtuals: true }),
       ReturnRequest.find({ orderId: order._id.toString() }).select('-reviewedBy -decisionNote').lean({ virtuals: true }),
       FulfilmentRefund.find({ orderId: order._id.toString() }).select('-idempotencyKey').lean({ virtuals: true }),
     ]);
-    return { order, tasks, packages, shipment, custody, returns, refunds };
+    return {
+      order: { id: order.publicId, status: order.commerceStatus || order.status },
+      tasks: tasks.map((task: any) => ({ id: task.publicId, status: task.status, acceptedAt: task.acceptedAt, sourcingStartedAt: task.sourcingStartedAt, productSecuredAt: task.productSecuredAt, packedAt: task.packedAt, hubReceivedAt: task.hubReceivedAt, completedAt: task.completedAt })),
+      packages: packages.map((pack: any) => ({ id: pack.publicId, status: pack.status, receivedAt: pack.receivedAt, qcPassedAt: pack.qcPassedAt })),
+      shipments: shipments.map((shipment: any) => {
+        const dispatched = ['PICKED_UP', 'IN_TRANSIT', 'OUT_FOR_DELIVERY', 'DELIVERED'].includes(String(shipment.status));
+        return { id: shipment.publicId, fulfilmentGroupId: shipment.fulfilmentGroupId, status: shipment.status, estimatedDeliveryAt: shipment.estimatedDeliveryAt, provider: dispatched ? shipment.provider : undefined, trackingNumber: dispatched ? shipment.trackingNumber : undefined, pickedUpAt: dispatched ? shipment.pickedUpAt : undefined, deliveredAt: shipment.deliveredAt, trackingEvents: dispatched ? shipment.trackingEvents : [] };
+      }),
+      custody: custody ? { status: custody.status, collectionCodeHint: custody.collectionCodeHint, expiresAt: custody.expiresAt, receivedAt: custody.receivedAt, releasedAt: custody.releasedAt } : undefined,
+      returns: returns.map((item: any) => ({ id: item.publicId, status: item.status, reasonType: item.reasonType, requestedAt: item.requestedAt, createdAt: item.createdAt })),
+      refunds: refunds.map((item: any) => ({ id: item.publicId, status: item.status, amountMinor: item.amountMinor, currency: item.currency, processedAt: item.processedAt })),
+    };
   }
 
   async controlTower(actor: Actor, query: Record<string, unknown>) {

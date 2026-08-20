@@ -21,6 +21,9 @@ export const runnerSubmissionDraftSchema = z.object({
   mediaIds: z.array(publicOrInternalId).max(12).default([]),
   basePriceMinor: moneyMinor,
   currency: z.literal('NGN').default('NGN'),
+  // No minimum here — this schema also covers draft save/update, and a Runner
+  // must be able to save incremental progress before variants are added.
+  // The minimum is enforced at submit time instead (see runnerSubmissionSubmitSchema).
   variants: z.array(variant).max(80).default([]),
   availabilityStatus: z.nativeEnum(ProductAvailabilityStatus),
   availabilityNote: z.string().trim().max(500).optional(),

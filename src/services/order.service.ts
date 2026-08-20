@@ -10,6 +10,7 @@ import { Order } from '@models/orders/order.model';
 import { Product } from '@models/products/product.model';
 import { Payment } from '@models/payments/payment.model';
 import { OrderFulfilmentGroup } from '@models/orders/order-fulfilment-group.model';
+import { Shipment } from '@models/fulfilment/fulfilment.model';
 import { User } from '@models/users/user.model';
 import { CustomerOwner } from './cart.service';
 import { HttpError } from '@utils/http';
@@ -19,6 +20,97 @@ import { nextPublicId } from './public-id.service';
 import { publishRealtime } from './realtime.service';
 
 type CheckoutBody = Pick<Order, 'deliveryAddress' | 'deliveryNotes' | 'scheduledDeliveryAt' | 'guestEmail' | 'guestName' | 'paymentMode' | 'orderType' | 'giftRecipient'>;
+
+const DISPATCHED_SHIPMENT_STATUSES = new Set(['PICKED_UP', 'IN_TRANSIT', 'OUT_FOR_DELIVERY', 'DELIVERED']);
+
+function displayNumber(order: any) {
+  const reference = String(order.publicId || order.orderCode || '');
+  const sequence = reference.match(/(\d+)$/)?.[1];
+  return sequence ? `Order #${sequence}` : 'Order';
+}
+
+function customerStatusLabel(status: unknown) {
+  const labels: Record<string, string> = {
+    AWAITING_PAYMENT: 'Awaiting payment',
+    VERIFICATION_PENDING: 'Payment review',
+    OPERATIONS_REVIEW: 'Order confirmed',
+    APPROVED_FOR_FULFILMENT: 'Preparing your order',
+    IN_FULFILMENT: 'Runner is sourcing your items',
+    PARTIALLY_RECEIVED: 'Some items reached Hook Hub',
+    READY_FOR_CONSOLIDATION: 'Checked at Hook Hub',
+    READY_FOR_DISPATCH: 'Packed for delivery',
+    BOOKED_WITH_PROVIDER: 'Delivery is being arranged',
+    AWAITING_PICKUP: 'Ready to leave Hook Hub',
+    PICKED_UP: 'Dispatched from Hook Hub',
+    OUT_FOR_DELIVERY: 'Out for delivery',
+    IN_TRANSIT: 'On the way',
+    PARTIALLY_IN_TRANSIT: 'Some deliveries are on the way',
+    PARTIALLY_DELIVERED: 'Partially delivered',
+    DELIVERED: 'Delivered',
+    COLLECTED: 'Collected',
+    COMPLETED: 'Completed',
+    ON_HOLD: 'We are resolving an issue',
+    RETURN_IN_PROGRESS: 'Return in progress',
+    REFUNDED: 'Refunded',
+    CANCELLED: 'Cancelled',
+  };
+  return labels[String(status || '').toUpperCase()] || 'Order received';
+}
+
+function timelineFor(order: any, shipment?: any) {
+  const events = [...(order.timeline || [])]
+    .map((event: any) => ({ status: String(event.status || ''), at: event.at || event.createdAt }))
+    .filter((event: any) => event.status);
+  const occurred = new Map(events.map((event: any) => [event.status, event.at]));
+  const status = String(order.commerceStatus || order.status || 'AWAITING_PAYMENT').toUpperCase();
+  const sequence = ['AWAITING_PAYMENT', 'OPERATIONS_REVIEW', 'IN_FULFILMENT', 'READY_FOR_CONSOLIDATION', 'READY_FOR_DISPATCH', 'IN_TRANSIT', 'DELIVERED'];
+  const stageByStatus: Record<string, number> = {
+    AWAITING_PAYMENT: 0,
+    VERIFICATION_PENDING: 1,
+    OPERATIONS_REVIEW: 1,
+    APPROVED_FOR_FULFILMENT: 2,
+    IN_FULFILMENT: 2,
+    PARTIALLY_RECEIVED: 3,
+    READY_FOR_CONSOLIDATION: 3,
+    READY_FOR_DISPATCH: 4,
+    BOOKED_WITH_PROVIDER: 4,
+    AWAITING_PICKUP: 4,
+    PICKED_UP: 5,
+    IN_TRANSIT: 5,
+    OUT_FOR_DELIVERY: 5,
+    PARTIALLY_IN_TRANSIT: 5,
+    PARTIALLY_DELIVERED: 5,
+    DELIVERED: 6,
+    COLLECTED: 6,
+    COMPLETED: 6,
+  };
+  const inferredIndex = stageByStatus[status] ?? events.reduce((last: number, event: any) => Math.max(last, stageByStatus[event.status] ?? 0), 0);
+  return sequence.map((step, index) => ({
+    key: step.toLowerCase(),
+    label: customerStatusLabel(step),
+    status: index < inferredIndex ? 'completed' : index === inferredIndex ? 'current' : 'upcoming',
+    occurredAt: occurred.get(step) || (step === 'AWAITING_PAYMENT' ? order.createdAt : undefined),
+  })).concat((shipment?.trackingEvents || []).map((event: any, index: number) => ({
+    key: `tracking-${index}`,
+    label: customerStatusLabel(event.status),
+    status: 'completed',
+    occurredAt: event.at,
+  })));
+}
+
+function safeItem(item: any) {
+  return {
+    id: item.publicId,
+    productId: typeof item.productId === 'string' && !/^[a-f\d]{24}$/i.test(item.productId) ? item.productId : undefined,
+    title: item.productSnapshot?.title || item.productTitle,
+    imageUrl: item.productSnapshot?.image || item.productImage,
+    variants: item.variantSnapshot || item.selectedVariants || {},
+    quantity: Number(item.quantity || 0),
+    unitPriceMinor: Number(item.unitPriceMinor ?? Math.round(Number(item.unitPrice || 0) * 100)),
+    lineTotalMinor: Number(item.totalPriceMinor ?? Math.round(Number(item.totalPrice || 0) * 100)),
+    deliveryStatus: item.deliveryStatus,
+  };
+}
 
 export class OrderService {
   private readonly email = new EmailService();
@@ -182,7 +274,30 @@ export class OrderService {
     (groups as any[]).forEach((group) => groupMap.set(String(group.orderId), [...(groupMap.get(String(group.orderId)) || []), group]));
     return orders.map((order) => {
       const orderPayments = paymentMap.get(order.id) || [];
-      return { ...order, items: itemMap.get(order.id) || [], payment: orderPayments[0], payments: orderPayments, fulfilmentGroups: groupMap.get(order.id) || [] };
+      const orderItems = itemMap.get(order.id) || [];
+      const subtotalMinor = Number(order.subtotalMinor ?? Math.round(Number(order.subtotal || 0) * 100));
+      const vatMinor = Number(order.vatMinor || 0);
+      const deliveryFeeMinor = Number(order.deliveryFeeMinor ?? Math.round(Number(order.deliveryFee || 0) * 100));
+      return {
+        id: order.publicId || order.orderCode,
+        displayNumber: displayNumber(order),
+        createdAt: order.createdAt,
+        status: order.commerceStatus || order.status,
+        statusLabel: customerStatusLabel(order.commerceStatus || order.status),
+        paymentStatus: order.commercePaymentStatus || order.paymentStatus,
+        paymentMethod: order.commercePaymentMethod || order.paymentMode,
+        itemCount: orderItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0),
+        items: orderItems.map(safeItem),
+        subtotalMinor,
+        vatRate: Number(order.vatRate || 0),
+        vatMinor,
+        deliveryFeeMinor,
+        discountMinor: Math.round(Number(order.discount || 0) * 100),
+        totalMinor: Number(order.totalMinor ?? Math.round(Number(order.total || 0) * 100)),
+        currency: order.currency || 'NGN',
+        payment: orderPayments[0] ? { status: orderPayments[0].commerceStatus || orderPayments[0].status } : undefined,
+        deliveryCount: (groupMap.get(order.id) || []).length || 1,
+      };
     }) as any;
   }
 
@@ -190,25 +305,93 @@ export class OrderService {
     const identifier = id.match(/^[a-f\d]{24}$/i) ? { $or: [{ _id: id }, { publicId: id }, { orderCode: id }] } : { $or: [{ publicId: id }, { orderCode: id }] };
     const order = await Order.findOne({ ...identifier, ...this.ownerWhere(owner) }).lean({ virtuals: true });
     if (!order) throw new HttpError(404, 'Order not found');
-    const [items, payments, fulfilmentGroups] = await Promise.all([
+    const [items, payments, fulfilmentGroups, shipments] = await Promise.all([
       OrderItem.find({ orderId: order.id }).lean({ virtuals: true }),
       Payment.find({ orderId: order.id }).select('-gatewayResponse -authorizationUrl -accessCode').lean({ virtuals: true }),
       OrderFulfilmentGroup.find({ orderId: order.id }).sort({ createdAt: 1 }).lean({ virtuals: true }),
+      Shipment.find({ orderId: order.id }).sort({ createdAt: 1 }).lean({ virtuals: true }),
     ]);
-    return { ...order, items, payment: payments[0], payments, fulfilmentGroups } as any;
+    const subtotalMinor = Number(order.subtotalMinor ?? Math.round(Number(order.subtotal || 0) * 100));
+    const vatMinor = Number(order.vatMinor || 0);
+    const deliveryFeeMinor = Number(order.deliveryFeeMinor ?? Math.round(Number(order.deliveryFee || 0) * 100));
+    const safeItems = items.map(safeItem);
+    const deliveries = (fulfilmentGroups.length ? fulfilmentGroups : [{ publicId: 'legacy', sourceStateId: order.sourceStateId, status: order.commerceStatus || order.status }]).map((group: any, index: number) => {
+      const shipment = shipments.find((entry: any) => entry.fulfilmentGroupId === group.publicId)
+        || shipments.find((entry: any) => String(entry.sourceStateId) === String(group.sourceStateId))
+        || (shipments.length === 1 ? shipments[0] : undefined);
+      const shipmentStatus = String(shipment?.status || '').toUpperCase();
+      const trackingVisible = DISPATCHED_SHIPMENT_STATUSES.has(shipmentStatus);
+      const groupItems = items.filter((item: any) => !item.fulfilmentGroupId || item.fulfilmentGroupId === group.publicId).map(safeItem);
+      const payment = payments.find((entry: any) => entry.fulfilmentGroupId === group.publicId);
+      return {
+        id: group.publicId || `delivery-${index + 1}`,
+        label: `Delivery ${index + 1}`,
+        status: shipment?.status || group.status || order.commerceStatus || order.status,
+        statusLabel: customerStatusLabel(shipment?.status || group.status || order.commerceStatus || order.status),
+        eta: shipment?.estimatedDeliveryAt,
+        items: groupItems,
+        payment: payment ? { status: payment.commerceStatus || payment.status, amountMinor: Number(payment.amountMinor || 0) } : undefined,
+        timeline: timelineFor({ ...order, commerceStatus: shipment?.status || group.status }, shipment),
+        shipment: shipment ? {
+          provider: trackingVisible ? shipment.provider : undefined,
+          trackingReference: trackingVisible ? shipment.trackingNumber : undefined,
+          status: shipment.status,
+          dispatchedAt: trackingVisible ? shipment.pickedUpAt || shipment.bookedAt : undefined,
+          deliveredAt: shipment.deliveredAt,
+        } : undefined,
+      };
+    });
+    const primaryShipment = shipments[0];
+    return {
+      id: order.publicId || order.orderCode,
+      displayNumber: displayNumber(order),
+      createdAt: order.createdAt,
+      status: order.commerceStatus || order.status,
+      statusLabel: customerStatusLabel(order.commerceStatus || order.status),
+      paymentStatus: order.commercePaymentStatus || order.paymentStatus,
+      paymentMethod: order.commercePaymentMethod || order.paymentMode,
+      itemCount: safeItems.reduce((sum, item) => sum + item.quantity, 0),
+      address: order.addressSnapshot ? {
+        label: order.addressSnapshot.label,
+        recipientName: order.addressSnapshot.recipientName,
+        phone: order.addressSnapshot.phone,
+        formattedAddress: order.addressSnapshot.formattedAddress || [order.addressSnapshot.line1, order.addressSnapshot.line2, order.addressSnapshot.localGovernmentArea, order.addressSnapshot.cityName, order.addressSnapshot.stateName].filter(Boolean).join(', '),
+        stateName: order.addressSnapshot.stateName,
+        cityName: order.addressSnapshot.cityName,
+        localGovernmentArea: order.addressSnapshot.localGovernmentArea,
+      } : {
+        formattedAddress: [order.deliveryAddress?.street, order.deliveryAddress?.city, order.deliveryAddress?.state].filter(Boolean).join(', '),
+        phone: order.deliveryAddress?.phone,
+      },
+      items: safeItems,
+      subtotalMinor,
+      vatRate: Number(order.vatRate || 0),
+      vatMinor,
+      deliveryFeeMinor,
+      discountMinor: Math.round(Number(order.discount || 0) * 100),
+      totalMinor: Number(order.totalMinor ?? Math.round(Number(order.total || 0) * 100)),
+      currency: order.currency || 'NGN',
+      timeline: timelineFor(order, primaryShipment),
+      deliveries,
+      canCancel: ['PENDING', 'AWAITING_PAYMENT'].includes(String(order.commerceStatus || order.status).toUpperCase())
+        && !['CONFIRMED', 'PAID'].includes(String(order.commercePaymentStatus || order.paymentStatus).toUpperCase()),
+    } as any;
   }
 
   async cancelCustomerOrder(owner: CustomerOwner, id: string, reason?: string) {
     const order = await this.getCustomerOrder(owner, id);
-    if (![OrderStatus.PENDING, OrderStatus.CONFIRMED].includes(order.status)) {
-      throw new HttpError(400, 'This order can no longer be cancelled');
-    }
-    order.status = OrderStatus.CANCELLED;
-    order.cancelledAt = new Date();
-    order.cancellationReason = reason;
-    const saved = await this.orders.save(order);
-    publishRealtime({ type: 'order.updated', entityId: saved.publicId || saved.id, version: Number(saved.version || 1) }, { accountId: owner.userId, admin: true });
-    return saved;
+    const stored = await Order.findOne({ $or: [{ publicId: order.id }, { orderCode: order.id }], userId: owner.userId });
+    if (!stored || !order.canCancel) throw new HttpError(409, 'This order can no longer be cancelled', undefined, 'INVALID_STATE_TRANSITION');
+    stored.status = OrderStatus.CANCELLED;
+    stored.commerceStatus = 'CANCELLED';
+    stored.cancelledAt = new Date();
+    stored.cancellationReason = reason;
+    stored.timeline = [...(stored.timeline || []), { status: 'CANCELLED', at: new Date(), actorType: 'customer', actorId: owner.userId }];
+    const saved = await stored.save();
+    const { PaymentLink } = await import('@models/payments/payment-link.model');
+    await PaymentLink.updateMany({ orderId: stored.id, status: { $in: ['active', 'processing'] } }, { $set: { status: 'cancelled', cancelledAt: new Date() } });
+    publishRealtime({ type: 'order.updated', entityId: saved.publicId || saved.id, version: Number(saved.__v || 1) }, { accountId: owner.userId, admin: true });
+    return this.getCustomerOrder(owner, saved.publicId || saved.orderCode);
   }
 
   private ownerWhere(owner: CustomerOwner) {

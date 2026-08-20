@@ -7,6 +7,7 @@ export interface OrderFulfilmentGroup extends BaseEntity {
   hubId?: string;
   orderItemIds: string[];
   subtotalMinor: number;
+  vatShareMinor: number;
   deliveryFeeShareMinor: number;
   status: "PENDING" | "IN_FULFILMENT" | "READY_FOR_DISPATCH" | "IN_TRANSIT" | "DELIVERED" | "COMPLETED" | "ON_HOLD";
   paymentId?: string;
@@ -21,6 +22,7 @@ const schema = createSchema<OrderFulfilmentGroup>({
   hubId: { type: String, index: true, sparse: true },
   orderItemIds: { type: [String], default: [] },
   subtotalMinor: { type: Number, required: true, min: 0 },
+  vatShareMinor: { type: Number, required: true, min: 0, default: 0 },
   deliveryFeeShareMinor: { type: Number, required: true, min: 0 },
   status: {
     type: String,

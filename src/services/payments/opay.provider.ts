@@ -9,17 +9,17 @@ import type {
 export class OpayProvider implements PaymentProvider {
   readonly name = "opay" as const;
   private readonly testBase = "https://testapi.opaycheckout.com/api/v1/international";
-  private readonly liveBase = "https://api.opaycheckout.com/api/v1/international";
+  private readonly liveBase = "https://liveapi.opaycheckout.com/api/v1/international";
 
   private get mode(): "live" | "test" {
-    return process.env.NODE_ENV === "production" ? "live" : "test";
+    return this.baseUrl.startsWith(this.testBase) ? "test" : "live";
   }
 
   private get baseUrl() {
     if (process.env.OPAY_PAYIN_BASE_URL) {
       return process.env.OPAY_PAYIN_BASE_URL.replace(/\/$/, "");
     }
-    return this.mode === "live" ? this.liveBase : this.testBase;
+    return this.liveBase;
   }
 
   readiness() {
@@ -38,7 +38,6 @@ export class OpayProvider implements PaymentProvider {
 
   async initialize(input: ProviderInitializeInput) {
     this.assertConfigured();
-    const expireAt = Date.now() + 15 * 60 * 1000;
     const payload = {
       country: "NG",
       reference: input.reference,
@@ -46,7 +45,8 @@ export class OpayProvider implements PaymentProvider {
       returnUrl: input.callbackUrl,
       callbackUrl: process.env.OPAY_PAYIN_CALLBACK_URL,
       cancelUrl: input.callbackUrl,
-      expireAt,
+      expireAt: 15,
+      customerVisitSource: "BROWSER",
       userInfo: { userEmail: input.email },
       product: { name: `Hook order ${input.reference}`, description: "Hook marketplace order" },
     };
@@ -118,16 +118,19 @@ export class OpayProvider implements PaymentProvider {
   private async request(path: string, payload: Record<string, unknown>, auth: "public" | "secret") {
     this.assertConfigured();
     const body = JSON.stringify(payload);
+    const merchantId = String(process.env.OPAY_PAYIN_MERCHANT_ID || "").trim();
+    const publicKey = String(process.env.OPAY_PAYIN_PUBLIC_KEY || "").trim();
+    const secretKey = String(process.env.OPAY_PAYIN_SECRET_KEY || "").trim();
     let response: Response;
     try {
       response = await fetch(`${this.baseUrl}${path}`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          MerchantId: process.env.OPAY_PAYIN_MERCHANT_ID!,
+          MerchantId: merchantId,
           Authorization: auth === "public"
-            ? `Bearer ${process.env.OPAY_PAYIN_PUBLIC_KEY}`
-            : `Bearer ${createHmac("sha512", process.env.OPAY_PAYIN_SECRET_KEY!).update(body).digest("hex")}`,
+            ? `Bearer ${publicKey}`
+            : `Bearer ${createHmac("sha512", secretKey).update(body).digest("hex")}`,
         },
         body,
         signal: AbortSignal.timeout(15_000),
@@ -137,7 +140,20 @@ export class OpayProvider implements PaymentProvider {
     }
     const envelope = await response.json().catch(() => ({})) as Record<string, any>;
     if (!response.ok || !["00000", "SUCCESS", "0"].includes(String(envelope.code || envelope.status || ""))) {
-      throw new HttpError(502, "Payment provider could not process the request", undefined, "PAYMENT_PROVIDER_ERROR");
+      const providerCode = String(envelope.code || envelope.status || response.status || "UNKNOWN");
+      const providerMessage = String(envelope.message || envelope.msg || "OPay rejected the request").slice(0, 240);
+      console.warn(JSON.stringify({ event: "opay_request_rejected", path, providerCode, providerMessage, httpStatus: response.status }));
+      const safeMessages: Record<string, string> = {
+        "00003": "OPay could not find this Merchant ID. Use credentials from the same sandbox or live environment as the configured OPay endpoint.",
+        "02000": "OPay authentication failed. Check the Merchant ID and matching API keys.",
+        "02001": "OPay rejected the payment details. Please verify the checkout configuration.",
+        "02002": "OPay Cashier is not enabled for this merchant account.",
+        "02003": "The selected OPay payment method is unavailable.",
+        "02004": "This OPay payment reference has already been used.",
+        "02007": "This OPay merchant account is currently unavailable.",
+        "50003": "OPay is temporarily unavailable. Please try again.",
+      };
+      throw new HttpError(502, safeMessages[providerCode] || "OPay could not start this payment. Please try again.", { providerCode }, "PAYMENT_PROVIDER_ERROR");
     }
     return (envelope.data || envelope) as Record<string, any>;
   }

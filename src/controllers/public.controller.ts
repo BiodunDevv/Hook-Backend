@@ -3,6 +3,7 @@ import { ProductStatus } from '@lib/constants';
 import { getPagination, paginated } from '@lib/api-utils';
 import { Category } from '@models/categories/category.model';
 import { OperationState } from '@models/platform/geography.model';
+import { LegalContent } from '@models/platform/legal-content.model';
 import { Product } from '@models/products/product.model';
 import { sendSuccess } from '@utils/http';
 import { publicProduct } from '@lib/public-resource';
@@ -46,7 +47,28 @@ function searchExpression(value: string) {
   return new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
 }
 
+const LEGAL_DEFAULT_TITLES: Record<string, string> = {
+  terms: 'Terms of Service',
+  privacy: 'Privacy Policy',
+};
+
 export class PublicController {
+  getLegalContent = async (req: Request, res: Response) => {
+    const type = routeParam(req.params.type);
+    if (type !== 'terms' && type !== 'privacy') {
+      res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Unknown legal document type' } });
+      return;
+    }
+    const doc = await LegalContent.findOne({ type }).lean();
+    sendSuccess(res, {
+      type,
+      title: doc?.title || LEGAL_DEFAULT_TITLES[type],
+      bodyHtml: doc?.bodyHtml || '',
+      version: doc?.version || 0,
+      effectiveDate: doc?.effectiveDate || null,
+    });
+  };
+
   getProducts = async (req: Request, res: Response) => {
     const { page, limit, skip } = getPagination(req.query);
     const where: Record<string, any> = { status: ProductStatus.APPROVED };

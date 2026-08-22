@@ -8,4 +8,4 @@ Phase 3 began on `development` from:
 
 The Phase 1 and Phase 2 maps, reports, decisions, identity/session design, RBAC rules, geography model, API contract, migration runbook, and removal ledger were reviewed before implementation.
 
-Phase 3 is limited to Runner capture, catalog review, Commercial management, public catalog, deterministic negotiation, wording-only Azure OpenAI, and migration tooling. Checkout, payment, fulfilment, and Vendor workflows remain excluded.
+Phase 3 is limited to Market Associate capture, catalog review, Commercial management, public catalog, deterministic negotiation, wording-only Azure OpenAI, and migration tooling. Checkout, payment, fulfilment, and Vendor workflows remain excluded.

@@ -3,7 +3,7 @@
 // ============================================================
 export enum UserRole {
   SHOPPER = 'shopper',
-  RUNNER = 'runner',
+  MARKETASSOCIATE = 'marketassociate',
   PARTNER = 'partner',
   VENDOR = 'vendor',
   SUPPORT = 'support',
@@ -14,7 +14,7 @@ export enum UserRole {
 export enum AccountType {
   CUSTOMER = 'customer',
   STAFF = 'staff',
-  RUNNER = 'runner',
+  MARKETASSOCIATE = 'marketassociate',
   PARTNER = 'partner',
 }
 

@@ -1,4 +1,4 @@
-export type RunnerProductSeed = {
+export type MarketAssociateProductSeed = {
   title: string;
   categorySlug: 'sneakers' | 'streetwear' | 'accessories' | 'dresses' | 'bags';
   description: string;
@@ -29,7 +29,7 @@ const SUPPORTING_IMAGES: Record<string, [string, string]> = {
   'Ruby Structured Handbag': ['photo-1590874103328-eac38a683ce7', 'photo-1566150905458-1bf1fc113f0d'],
 };
 
-export function productGallery(product: RunnerProductSeed) {
+export function productGallery(product: MarketAssociateProductSeed) {
   return [product.imageUrl, ...(SUPPORTING_IMAGES[product.title] || [])]
     .map((url) => {
       const source = url.startsWith('http') ? url.split('?')[0] : `https://images.unsplash.com/${url}`;
@@ -37,7 +37,7 @@ export function productGallery(product: RunnerProductSeed) {
     });
 }
 
-export function productOptions(product: RunnerProductSeed) {
+export function productOptions(product: MarketAssociateProductSeed) {
   return product.sizes.flatMap((size) => product.colors.map((colour) => ({
     size,
     colour,
@@ -46,7 +46,7 @@ export function productOptions(product: RunnerProductSeed) {
   })));
 }
 
-export const RUNNER_PRODUCT_CATALOG: RunnerProductSeed[] = [
+export const MARKET_ASSOCIATE_PRODUCT_CATALOG: MarketAssociateProductSeed[] = [
   { title: 'Aero Black Runner', categorySlug: 'sneakers', description: 'A lightweight black running sneaker with breathable panels and a cushioned everyday sole.', imageUrl: 'https://images.unsplash.com/photo-1491553895911-0055eca6402d?w=900&auto=format&fit=crop&q=80', costPrice: 39000, sellingPrice: 52000, floorPrice: 45000, quantity: 24, sizes: ['39', '40', '41', '42', '43', '44', '45'], colors: ['#111111', '#F4F4F4', '#334155'] },
   { title: 'Crimson Knit Trainer', categorySlug: 'sneakers', description: 'A bold red knit trainer designed for comfortable daily wear and casual styling.', imageUrl: 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=900&auto=format&fit=crop&q=80', costPrice: 42000, sellingPrice: 58000, floorPrice: 50000, quantity: 18, sizes: ['39', '40', '41', '42', '43', '44', '45'], colors: ['#D51D24', '#111111', '#F5F5F5'] },
   { title: 'Tan Street Court', categorySlug: 'sneakers', description: 'A clean tan low-top court sneaker with a versatile finish for workdays and weekends.', imageUrl: 'https://images.unsplash.com/photo-1549298916-b41d501d3772?w=900&auto=format&fit=crop&q=80', costPrice: 35000, sellingPrice: 47000, floorPrice: 41000, quantity: 20, sizes: ['39', '40', '41', '42', '43', '44', '45'], colors: ['#B77A45', '#E7D3B0', '#2B2118'] },

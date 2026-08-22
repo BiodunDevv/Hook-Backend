@@ -1,7 +1,7 @@
 import { ProductAvailabilityStatus, ProductStatus } from '@lib/constants';
 import { CommerceSettings } from '@models/commerce/commerce.model';
 import { Product } from '@models/products/product.model';
-import { RunnerMarketAssignment, RunnerProfile } from '@models/platform/operations-accounts.model';
+import { MarketAssociateMarketAssignment, MarketAssociateProfile } from '@models/platform/operations-accounts.model';
 import { byIdentifier } from '@services/catalog.service';
 import { MarketVendorService } from '@services/market-vendor.service';
 import { publishRealtime } from '@services/realtime.service';
@@ -22,19 +22,19 @@ function publishUpdate(product: any) {
   publishRealtime({ type: 'admin.dashboard.updated', ...event }, { admin: true });
 }
 
-async function runnerForProduct(accountId: string, identifier: string) {
-  const runner = await RunnerProfile.findOne({ accountId, status: 'active' }).lean();
-  if (!runner) throw new HttpError(403, 'Active Runner profile required', undefined, 'ACCESS_DENIED');
+async function marketAssociateForProduct(accountId: string, identifier: string) {
+  const marketAssociate = await MarketAssociateProfile.findOne({ accountId, status: 'active' }).lean();
+  if (!marketAssociate) throw new HttpError(403, 'Active Market Associate profile required', undefined, 'ACCESS_DENIED');
   const product = await byIdentifier<any>(Product, identifier);
-  const runnerId = product.sourceRunnerId || product.commercialApproval?.sourceRunnerId;
-  const assignment = await RunnerMarketAssignment.findOne({ runnerId: runner._id.toString(), marketId: product.marketId, status: 'active', activeFrom: { $lte: new Date() }, $or: [{ activeTo: { $exists: false } }, { activeTo: null }, { activeTo: { $gt: new Date() } }] }).lean();
+  const marketAssociateId = product.sourceMarketAssociateId || product.commercialApproval?.sourceMarketAssociateId;
+  const assignment = await MarketAssociateMarketAssignment.findOne({ marketAssociateId: marketAssociate._id.toString(), marketId: product.marketId, status: 'active', activeFrom: { $lte: new Date() }, $or: [{ activeTo: { $exists: false } }, { activeTo: null }, { activeTo: { $gt: new Date() } }] }).lean();
   if (!assignment) throw new HttpError(403, 'An active Market assignment is required', undefined, 'RUNNER_MARKET_ASSIGNMENT_REQUIRED');
-  if (runnerId && runnerId !== runner._id.toString()) {
-    const sourceRunner = await RunnerProfile.findById(runnerId).select('status').lean();
-    if (sourceRunner?.status === 'active') throw new HttpError(403, 'This availability check belongs to another Runner', undefined, 'SCOPE_DENIED');
+  if (marketAssociateId && marketAssociateId !== marketAssociate._id.toString()) {
+    const sourceMarketAssociate = await MarketAssociateProfile.findById(marketAssociateId).select('status').lean();
+    if (sourceMarketAssociate?.status === 'active') throw new HttpError(403, 'This availability check belongs to another Market Associate', undefined, 'SCOPE_DENIED');
   }
   if (product.availabilityStatus !== ProductAvailabilityStatus.UNCONFIRMED) throw new HttpError(409, 'This Product has no pending availability check', undefined, 'AVAILABILITY_CHECK_NOT_PENDING');
-  return { runner, product };
+  return { marketAssociate, product };
 }
 
 export class CatalogAvailabilityService {
@@ -70,7 +70,7 @@ export class CatalogAvailabilityService {
   }
 
   async confirm(accountId: string, identifier: string, input: { status: 'available' | 'limited'; note?: string; version: number }) {
-    const { product } = await runnerForProduct(accountId, identifier);
+    const { product } = await marketAssociateForProduct(accountId, identifier);
     const settings = await CommerceSettings.findOne({ key: 'commerce' }).select('catalogAvailabilityCheckDays').lean();
     const days = Math.min(Math.max(Number(settings?.catalogAvailabilityCheckDays || 4), 1), 30);
     const confirmedAt = new Date();
@@ -99,7 +99,7 @@ export class CatalogAvailabilityService {
   }
 
   async report(accountId: string, identifier: string, input: { note: string; version: number }) {
-    const { product } = await runnerForProduct(accountId, identifier);
+    const { product } = await marketAssociateForProduct(accountId, identifier);
     const updated = await Product.findOneAndUpdate(
       versionFilter(product, input.version),
       {
@@ -144,7 +144,7 @@ export async function escalateOverdueAvailabilityChecks() {
           availabilityCheckRequestedAt: now,
           availabilityCheckDueAt: now,
           availabilityEscalatedAt: now,
-          availabilityCheckNote: 'Runner confirmation required before this Product can return to sale.',
+          availabilityCheckNote: 'Market Associate confirmation required before this Product can return to sale.',
           customerAvailabilityNote: 'Temporarily unavailable while availability is being confirmed.',
         },
         $unset: { availabilityValidUntil: 1 },

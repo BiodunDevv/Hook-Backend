@@ -38,7 +38,7 @@ export interface FulfilmentTask extends BaseEntity {
   sourceStateId: string;
   marketId: string;
   hubId?: string;
-  runnerId?: string;
+  marketAssociateId?: string;
   orderItemIds: string[];
   status: FulfilmentTaskStatus;
   version: number;
@@ -67,7 +67,7 @@ export interface RunnerPackage extends BaseEntity {
   publicId: string;
   orderId: string;
   taskId: string;
-  runnerId: string;
+  marketAssociateId: string;
   hubId: string;
   status: RunnerPackageStatus;
   scanCredentialHash: string;
@@ -86,7 +86,7 @@ export interface HubPackage extends BaseEntity {
   taskId: string;
   runnerPackageId: string;
   hubId: string;
-  runnerId: string;
+  marketAssociateId: string;
   status: HubPackageStatus;
   itemIds: string[];
   receivedAt?: Date;
@@ -248,7 +248,7 @@ const taskSchema = createSchema<FulfilmentTask>({
   sourceStateId: { type: String, required: true, index: true },
   marketId: { type: String, required: true, index: true },
   hubId: { type: String, index: true },
-  runnerId: { type: String, index: true },
+  marketAssociateId: { type: String, index: true },
   orderItemIds: { type: [String], default: [] },
   status: { type: String, enum: Object.values(FulfilmentTaskStatus), default: FulfilmentTaskStatus.UNASSIGNED, index: true },
   version: { type: Number, default: 1, min: 1 },
@@ -261,18 +261,18 @@ const taskSchema = createSchema<FulfilmentTask>({
   actualCostMinor: { type: Number, min: 0 }, evidence, itemVerifications: { type: [Object], default: [] }, issue: { type: Object }, assignmentHistory: { type: [Object], default: [] },
 });
 taskSchema.index({ orderId: 1, marketId: 1 }, { unique: true });
-taskSchema.index({ runnerId: 1, status: 1, acceptanceDueAt: 1 });
+taskSchema.index({ marketAssociateId: 1, status: 1, acceptanceDueAt: 1 });
 
 const runnerPackageSchema = createSchema<RunnerPackage>({
   publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, required: true, index: true },
-  taskId: { type: String, required: true, unique: true, index: true }, runnerId: { type: String, required: true, index: true }, hubId: { type: String, required: true, index: true },
+  taskId: { type: String, required: true, unique: true, index: true }, marketAssociateId: { type: String, required: true, index: true }, hubId: { type: String, required: true, index: true },
   status: { type: String, enum: Object.values(RunnerPackageStatus), default: RunnerPackageStatus.READY_FOR_HUB, index: true },
   scanCredentialHash: { type: String, required: true, select: false }, scanCredentialHint: { type: String, required: true }, itemIds: { type: [String], default: [] },
   labelReference: { type: String }, packedAt: { type: Date }, handedOverAt: { type: Date }, evidence, version: { type: Number, default: 1, min: 1 },
 });
 
 const hubPackageSchema = createSchema<HubPackage>({
-  publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, required: true, index: true }, taskId: { type: String, required: true, index: true }, runnerPackageId: { type: String, required: true, unique: true, index: true }, hubId: { type: String, required: true, index: true }, runnerId: { type: String, required: true, index: true },
+  publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, required: true, index: true }, taskId: { type: String, required: true, index: true }, runnerPackageId: { type: String, required: true, unique: true, index: true }, hubId: { type: String, required: true, index: true }, marketAssociateId: { type: String, required: true, index: true },
   status: { type: String, enum: Object.values(HubPackageStatus), default: HubPackageStatus.RECEIVED, index: true }, itemIds: { type: [String], default: [] }, receivedAt: { type: Date }, receivedBy: { type: String }, qualityChecks: { type: [Object], default: [] }, qcPassedAt: { type: Date }, qcPassedBy: { type: String }, custodyHistory: { type: [Object], default: [] }, evidence, version: { type: Number, default: 1, min: 1 }, receiveIdempotencyKey: { type: String, unique: true, sparse: true },
 });
 

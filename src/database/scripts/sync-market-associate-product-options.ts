@@ -1,11 +1,11 @@
 import dotenv from 'dotenv';
 import { connectDatabase, disconnectDatabase } from '@config/data-source';
 import { ProductSubmission, ProductVariant } from '@models/catalog/catalog.model';
-import { RunnerProfile } from '@models/platform/operations-accounts.model';
+import { MarketAssociateProfile } from '@models/platform/operations-accounts.model';
 import { Product } from '@models/products/product.model';
 import { User } from '@models/users/user.model';
 import { nextPublicId } from '@services/public-id.service';
-import { productOptions, RUNNER_PRODUCT_CATALOG } from '../seeds/runner-product-catalog';
+import { productOptions, MARKET_ASSOCIATE_PRODUCT_CATALOG } from '../seeds/market-associate-product-catalog';
 
 dotenv.config({ quiet: true });
 
@@ -25,8 +25,8 @@ async function main() {
   const account = await User.findOne({ email: 'runner@gmail.com', isActive: true }).select('_id').lean();
   if (!account) throw new Error('Active runner@gmail.com account was not found');
 
-  const runner = await RunnerProfile.findOne({ accountId: String(account._id), status: 'active' }).select('_id').lean();
-  if (!runner) throw new Error('Active Runner profile for runner@gmail.com was not found');
+  const marketAssociate = await MarketAssociateProfile.findOne({ accountId: String(account._id), status: 'active' }).select('_id').lean();
+  if (!marketAssociate) throw new Error('Active Market Associate profile for runner@gmail.com was not found');
 
   let matchedProducts = 0;
   let createdVariants = 0;
@@ -34,10 +34,10 @@ async function main() {
   let deactivatedVariants = 0;
   const matchedProductIds: string[] = [];
 
-  for (const seed of RUNNER_PRODUCT_CATALOG) {
+  for (const seed of MARKET_ASSOCIATE_PRODUCT_CATALOG) {
     const product = await Product.findOne({
       slug: slugify(seed.title),
-      sourceRunnerId: String(runner._id),
+      sourceMarketAssociateId: String(marketAssociate._id),
     });
     if (!product) {
       console.warn(`Skipped missing Product: ${seed.title}`);
@@ -67,7 +67,7 @@ async function main() {
     );
 
     await ProductSubmission.updateOne(
-      { productId: String(product._id), runnerId: String(runner._id) },
+      { productId: String(product._id), marketAssociateId: String(marketAssociate._id) },
       {
         $set: { variants: desiredOptions },
         $inc: { version: 1 },
@@ -112,7 +112,7 @@ async function main() {
       ProductSubmission.countDocuments({ productId: { $in: matchedProductIds }, status: 'approved' }),
     ]);
     console.log(`Dry run complete for ${matchedProducts} Products. Run with --execute to apply changes.`);
-    console.log(`Current database: ${activeVariants} active variants, ${genericVariants} active One Size variants, and ${approvedCaptures} approved Runner captures.`);
+    console.log(`Current database: ${activeVariants} active variants, ${genericVariants} active One Size variants, and ${approvedCaptures} approved Market Associate captures.`);
     return;
   }
 
@@ -122,7 +122,7 @@ async function main() {
     ProductSubmission.countDocuments({ productId: { $in: matchedProductIds }, status: 'approved' }),
   ]);
   console.log(`Synchronized ${matchedProducts} Products: ${retainedVariants} variants retained, ${createdVariants} added, ${deactivatedVariants} retired.`);
-  console.log(`Verified ${activeVariants} active variants, ${genericVariants} active One Size variants, and ${approvedCaptures} approved Runner captures.`);
+  console.log(`Verified ${activeVariants} active variants, ${genericVariants} active One Size variants, and ${approvedCaptures} approved Market Associate captures.`);
 }
 
 main()

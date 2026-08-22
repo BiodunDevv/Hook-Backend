@@ -11,26 +11,26 @@ async function adminContext(req: Request) {
   return resolveAccessContext(req.user!.sub, req.user);
 }
 
-export class RunnerMarketVendorController {
-  market = async (req: Request, res: Response) => sendSuccess(res, await service.runnerMarket(req.user!.sub, routeParam(req.params.id)));
+export class MarketAssociateMarketVendorController {
+  market = async (req: Request, res: Response) => sendSuccess(res, await service.marketAssociateMarket(req.user!.sub, routeParam(req.params.id)));
 
-  vendors = async (req: Request, res: Response) => sendSuccess(res, await service.listRunnerVendors(req.user!.sub, routeParam(req.params.id), String(req.query.q || '')));
+  vendors = async (req: Request, res: Response) => sendSuccess(res, await service.listMarketAssociateVendors(req.user!.sub, routeParam(req.params.id), String(req.query.q || '')));
 
   create = async (req: Request, res: Response) => {
-    const result = await service.createRunnerVendor(req.user!.sub, routeParam(req.params.id), req.body);
+    const result = await service.createMarketAssociateVendor(req.user!.sub, routeParam(req.params.id), req.body);
     await recordAudit(req, { action: 'market.vendor.created', entityType: 'market_vendor', entityId: result.vendor.id, entityPublicId: result.vendor.publicId, stateId: result.vendor.stateId, after: result.vendor });
     await recordAudit(req, { action: 'market.vendor.invited', entityType: 'vendor_invitation', entityPublicId: result.invitation.publicId, stateId: result.vendor.stateId, after: { vendorId: result.vendor.publicId, delivery: result.invitation.delivery } });
     sendCreated(res, result);
   };
 
   detail = async (req: Request, res: Response) => {
-    const vendor = await service.runnerVendor(req.user!.sub, routeParam(req.params.id));
+    const vendor = await service.marketAssociateVendor(req.user!.sub, routeParam(req.params.id));
     sendSuccess(res, vendor);
   };
 
   update = async (req: Request, res: Response) => {
-    const before = await service.runnerVendor(req.user!.sub, routeParam(req.params.id));
-    const updated = await service.updateRunnerVendor(req.user!.sub, routeParam(req.params.id), req.body);
+    const before = await service.marketAssociateVendor(req.user!.sub, routeParam(req.params.id));
+    const updated = await service.updateMarketAssociateVendor(req.user!.sub, routeParam(req.params.id), req.body);
     await recordAudit(req, { action: 'market.vendor.updated', entityType: 'market_vendor', entityId: updated.id, entityPublicId: updated.publicId, stateId: updated.stateId, before, after: updated, reason: req.body.reason });
     sendSuccess(res, updated);
   };
@@ -47,7 +47,7 @@ export class RunnerMarketVendorController {
     sendCreated(res, result);
   };
 
-  collections = async (req: Request, res: Response) => sendSuccess(res, await service.runnerCollections(req.user!.sub, req.query.marketId ? String(req.query.marketId) : undefined));
+  collections = async (req: Request, res: Response) => sendSuccess(res, await service.marketAssociateCollections(req.user!.sub, req.query.marketId ? String(req.query.marketId) : undefined));
 
   acceptInvitation = async (req: Request, res: Response) => sendSuccess(res, await service.acceptInvitation(routeParam(req.params.token), req.body || {}));
 }

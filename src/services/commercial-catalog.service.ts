@@ -9,6 +9,7 @@ import { byIdentifier } from './catalog.service';
 import { HttpError } from '@utils/http';
 import { publishRealtime } from '@services/realtime.service';
 import { CommerceSettings } from '@models/commerce/commerce.model';
+import { getLowStockThreshold } from '@services/inventory-settings.service';
 
 async function nextAvailabilityDeadline(from = new Date()) {
   const settings = await CommerceSettings.findOne({ key: 'commerce' })
@@ -431,6 +432,8 @@ export async function publicProductRepresentations(products: any[], options: Pub
       : Promise.resolve([]),
   ]);
 
+  const lowStockThreshold = await getLowStockThreshold();
+
   const mapByIdentifier = (records: any[]) => {
     const map = new Map<string, any>();
     records.forEach((item) => {
@@ -507,6 +510,8 @@ export async function publicProductRepresentations(products: any[], options: Pub
       negotiationAvailable: isPurchasable && Boolean(product.negotiationRules?.enabled),
       availabilityStatus: product.availabilityStatus,
       isPurchasable,
+      availableQuantity: Math.max(0, Number(product.quantity || 0) - Number(product.reservedQuantity || 0)),
+      lowStockThreshold,
     };
     return options.compact
       ? compact

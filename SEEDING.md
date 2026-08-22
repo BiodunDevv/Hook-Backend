@@ -14,7 +14,7 @@ For development against the configured MongoDB database:
 npm run seed:dev
 ```
 
-> The runner **clears the database first**, then re-creates everything below. Re-running it always produces the same fresh state.
+> The seed runner **clears the database first**, then re-creates everything below. Re-running it always produces the same fresh state.
 
 ## Universal Password
 

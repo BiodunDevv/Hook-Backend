@@ -27,6 +27,8 @@ const PUBLIC_PRODUCT_CARD_FIELDS = [
   'status',
   'availabilityValidUntil',
   'publishedAt',
+  'quantity',
+  'reservedQuantity',
 ].join(' ');
 const PUBLIC_PRODUCT_FIELDS = `${PUBLIC_PRODUCT_CARD_FIELDS} description customerAvailabilityNote`;
 

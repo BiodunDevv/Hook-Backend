@@ -3,22 +3,22 @@
 ## Scope
 
 Phase 5 adds the post-order operational foundation on the existing `development`
-branch. The backend owns fulfilment state, Runner assignment, Hub custody,
+branch. The backend owns fulfilment state, Market Associate assignment, Hub custody,
 consolidation, shipment state, Partner custody, returns, refunds, scope checks,
-idempotency, and audit events. The Admin and Runner portals consume those
+idempotency, and audit events. The Admin and Market Associate portals consume those
 endpoints, and the Shopper order detail now reads customer-safe fulfilment
 progress and can submit an eligible issue.
 
 ## Delivered
 
-- Fulfilment task, Runner package, Hub package, consolidation, shipment,
+- Fulfilment task, Market Associate package, Hub package, consolidation, shipment,
   exception, Partner custody, return request, refund, and logistics webhook
   models with public IDs and idempotency fields.
 - Durable `ORDER_APPROVED_FOR_FULFILMENT` outbox consumption with atomic leases,
   retry backoff, and dead-letter handling.
 - Operational deadline processing for SLA breaches and ageing Partner custody,
   with idempotent exceptions and audit context.
-- Runner task actions: accept, sourcing, securing, packing, Hub label creation,
+- Market Associate task actions: accept, sourcing, securing, packing, Hub label creation,
   issue reporting, and scoped same-State reassignment with optimistic locking.
 - Hub package receiving with six-digit scan credentials and visible QC pass/fail.
 - Complete-item enforcement before consolidation and sealing.
@@ -36,12 +36,12 @@ progress and can submit an eligible issue.
 - Refund request and Paystack provider-processing paths with captured-balance
   limits, idempotency-key matching, provider reference persistence, and failure
   state capture.
-- Admin control tower, Hub, shipment, returns, and refund workspaces; Runner
+- Admin control tower, Hub, shipment, returns, and refund workspaces; Market Associate
   fulfilment queue and task detail workspace; Partner custody workspace with
-  scoped receipt visibility. Hub operations now separate inbound Runner
+  scoped receipt visibility. Hub operations now separate inbound Market Associate
   packages from received packages and expose consolidation/sealing; shipment
   operations expose manual booking and valid status progression; returns have
-  a reasoned review action. Task detail, same-State Runner/Hub reassignment,
+  a reasoned review action. Task detail, same-State Market Associate/Hub reassignment,
   exception resolution, and refund-request creation are exposed as audited
   operational actions.
 - Shopper order detail now offers backend-controlled Paystack resume/polling,
@@ -57,7 +57,7 @@ progress and can submit an eligible issue.
 | --- | --- |
 | `npm run build` in `Hook-Backend` | Passed |
 | `npx eslint "{src,test}/**/*.ts" --no-fix` | Passed with existing warnings; 0 errors, 477 warnings |
-| `npm run docs:swagger` | Passed; 228 paths generated, including Phase 5 Runner, Hub, task detail/reassignment, exception resolution, logistics readiness, Partner custody, return, and refund paths |
+| `npm run docs:swagger` | Passed; 228 paths generated, including Phase 5 Market Associate, Hub, task detail/reassignment, exception resolution, logistics readiness, Partner custody, return, and refund paths |
 | `npx tsc --noEmit` in `hook-admin` | Passed |
 | `npm run lint` in `hook-admin` | Passed |
 | `npm run build` in `hook-admin` | Compiled successfully; final worker output was confirmed exited |
@@ -65,7 +65,7 @@ progress and can submit an eligible issue.
 | `npx expo-doctor` in `Hook-App` | Passed, 18/18 checks |
 | `npm run seed` | The normal SRV-based run was interrupted by transient Atlas DNS; the final full reset and Phase 1–5 rebuild passed using resolved replica hosts supplied only in the command environment |
 | `npm run start` + local HTTP smoke | Passed with the resolved replica-host connection: `/health` 200, `/api/v1/public/home` 200, `/swagger-spec.json` 200, request IDs and security headers present |
-| Manual authenticated Phase 5 smoke | Passed locally: seeded admin login 200; control tower, task detail, Runner/Hub assignment lists, exceptions, Hub workspace, consolidations, shipments, returns, and refunds all returned successful responses; unauthenticated control-tower access returned 401 |
+| Manual authenticated Phase 5 smoke | Passed locally: seeded admin login 200; control tower, task detail, Market Associate/Hub assignment lists, exceptions, Hub workspace, consolidations, shipments, returns, and refunds all returned successful responses; unauthenticated control-tower access returned 401 |
 | Paystack test-mode provider check | Passed: Paystack transaction listing returned HTTP 200 with `domain: test`; a ₦100 test-mode initialization returned a matching reference and hosted checkout URL; provider status verification returned `abandoned` without a charge |
 | Hosted Paystack callback/webhook check | Passed: callback returned HTTP 302 to `hook://payments/return`; unsigned webhook returned 401; a correctly signed synthetic non-payment event returned 200 with `received: true, ignored: true` |
 | GIG/Fez readiness check | Correctly unavailable: no enablement flags, webhook secrets, credentials, or verified provider contracts are configured; audited manual booking and the explicitly gated development simulator are the active test paths |

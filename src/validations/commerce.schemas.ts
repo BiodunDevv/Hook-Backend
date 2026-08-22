@@ -113,6 +113,21 @@ export const paymentProviderSettingsSchema = z.object({
   reason: z.string().trim().min(5).max(500),
 }).strict();
 
+export const emailSettingsSchema = z.object({
+  supportEmail: z.string().trim().email().optional(),
+  hookOpsEmail: z.string().trim().email().optional(),
+  brevoFromEmail: z.string().trim().email().optional(),
+  brevoFromName: z.string().trim().min(1).max(80).optional(),
+  appName: z.string().trim().min(1).max(80).optional(),
+  appUrl: z.string().trim().url().optional(),
+  reason: z.string().trim().min(5).max(500),
+}).strict();
+
+export const inventorySettingsSchema = z.object({
+  lowStockThreshold: z.coerce.number().int().min(0).max(100),
+  reason: z.string().trim().min(5).max(500),
+}).strict();
+
 export const podCallSchema = z
   .object({
     outcome: z.enum(["CONFIRMED", "NO_ANSWER", "DECLINED", "INVALID_CONTACT"]),

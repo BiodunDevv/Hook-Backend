@@ -4,7 +4,7 @@ import { MarketVendor, VendorCollection, VendorInvitation, VendorPaymentRecord, 
 import { Product } from '@models/products/product.model';
 import { ProductSubmission } from '@models/catalog/catalog.model';
 import { Market } from '@models/platform/network.model';
-import { RunnerMarketAssignment, RunnerProfile, StaffProfile } from '@models/platform/operations-accounts.model';
+import { MarketAssociateMarketAssignment, MarketAssociateProfile, StaffProfile } from '@models/platform/operations-accounts.model';
 import { Role } from '@models/platform/access.model';
 import { User } from '@models/users/user.model';
 import { Notification } from '@models/notifications/notification.model';
@@ -44,7 +44,7 @@ function safeVendor(vendor: any) {
     preferredContactChannel: vendor.preferredContactChannel,
     status: vendor.status,
     consentAt: vendor.consentAt || null,
-    invitedByRunnerId: vendor.invitedByRunnerId || null,
+    invitedByMarketAssociateId: vendor.invitedByMarketAssociateId || null,
     lastContactedAt: vendor.lastContactedAt || null,
     paymentProfile: {
       method: profile.method || 'cash',
@@ -80,21 +80,21 @@ async function findMarket(identifier: string) {
   return market;
 }
 
-async function runnerContext(accountId: string, marketIdentifier: string) {
-  const [runner, market] = await Promise.all([
-    RunnerProfile.findOne({ accountId, status: 'active' }).lean({ virtuals: true }),
+async function marketAssociateContext(accountId: string, marketIdentifier: string) {
+  const [marketAssociate, market] = await Promise.all([
+    MarketAssociateProfile.findOne({ accountId, status: 'active' }).lean({ virtuals: true }),
     findMarket(marketIdentifier),
   ]);
-  if (!runner) throw new HttpError(403, 'Active Runner profile required', undefined, 'ACCESS_DENIED');
-  const assignment = await RunnerMarketAssignment.findOne({
-    runnerId: runner._id.toString(),
+  if (!marketAssociate) throw new HttpError(403, 'Active Market Associate profile required', undefined, 'ACCESS_DENIED');
+  const assignment = await MarketAssociateMarketAssignment.findOne({
+    marketAssociateId: marketAssociate._id.toString(),
     marketId: market._id.toString(),
     status: 'active',
     activeFrom: { $lte: new Date() },
     $or: [{ activeTo: { $exists: false } }, { activeTo: null }, { activeTo: { $gt: new Date() } }],
   }).lean({ virtuals: true });
   if (!assignment) throw new HttpError(403, 'An active Market assignment is required', undefined, 'RUNNER_MARKET_ASSIGNMENT_REQUIRED');
-  return { runner, market, assignment };
+  return { marketAssociate, market, assignment };
 }
 
 function paymentProfile(input: any): VendorPaymentProfile | undefined {
@@ -122,20 +122,20 @@ async function notifyAccount(accountId: string, title: string, body: string, dat
     await email.send({
       to: account.email,
       subject: title,
-      html: `<p>Hello ${account.firstName || 'Runner'},</p><p>${body}</p><p>Open your Hook Runner workspace to record the current supplier availability.</p>`,
-      text: `${body}\n\nOpen your Hook Runner workspace to record the current supplier availability.`,
+      html: `<p>Hello ${account.firstName || 'Market Associate'},</p><p>${body}</p><p>Open your Hook Market Associate workspace to record the current supplier availability.</p>`,
+      text: `${body}\n\nOpen your Hook Market Associate workspace to record the current supplier availability.`,
     }).catch(() => undefined);
   }
 }
 
 export class MarketVendorService {
-  async runnerMarket(accountId: string, identifier: string) {
-    const { market, runner } = await runnerContext(accountId, identifier);
+  async marketAssociateMarket(accountId: string, identifier: string) {
+    const { market, marketAssociate } = await marketAssociateContext(accountId, identifier);
     const [vendors, assignments, submissions, products, collections] = await Promise.all([
       MarketVendor.find({ marketId: market._id.toString(), deletedAt: { $exists: false } }).sort({ businessName: 1 }).lean({ virtuals: true }),
-      RunnerMarketAssignment.find({ marketId: market._id.toString(), status: 'active' }).lean({ virtuals: true }),
-      ProductSubmission.find({ marketId: market._id.toString(), deletedAt: { $exists: false } }).select('publicId basicTitle status marketVendorId runnerId availabilityStatus updatedAt').sort({ updatedAt: -1 }).limit(50).lean({ virtuals: true }),
-      Product.find({ marketId: market._id.toString(), deletedAt: { $exists: false } }).select('publicId title status availabilityStatus sourceMarketVendorId sourceRunnerId images mediaAssetIds updatedAt').sort({ updatedAt: -1 }).limit(50).lean({ virtuals: true }),
+      MarketAssociateMarketAssignment.find({ marketId: market._id.toString(), status: 'active' }).lean({ virtuals: true }),
+      ProductSubmission.find({ marketId: market._id.toString(), deletedAt: { $exists: false } }).select('publicId basicTitle status marketVendorId marketAssociateId availabilityStatus updatedAt').sort({ updatedAt: -1 }).limit(50).lean({ virtuals: true }),
+      Product.find({ marketId: market._id.toString(), deletedAt: { $exists: false } }).select('publicId title status availabilityStatus sourceMarketVendorId sourceMarketAssociateId images mediaAssetIds updatedAt').sort({ updatedAt: -1 }).limit(50).lean({ virtuals: true }),
       VendorCollection.find({ marketId: market._id.toString(), deletedAt: { $exists: false } }).sort({ createdAt: -1 }).limit(50).lean({ virtuals: true }),
     ]);
     const vendorMap = new Map(vendors.map((vendor: any) => [String(vendor._id), vendor]));
@@ -149,7 +149,7 @@ export class MarketVendorService {
     };
     return {
       market,
-      currentRunnerId: runner._id.toString(),
+      currentMarketAssociateId: marketAssociate._id.toString(),
       assignments,
       vendors: vendors.map(safeVendor),
       products: products.map((product: any) => presentVendorReference(product, 'sourceMarketVendorId')),
@@ -157,7 +157,7 @@ export class MarketVendorService {
       collections: collections.map((collection: any) => presentVendorReference(collection, 'marketVendorId')),
       summary: {
         vendors: vendors.length,
-        assignedRunners: assignments.length,
+        assignedMarketAssociates: assignments.length,
         products: products.length,
         pendingAvailability: products.filter((item: any) => item.availabilityStatus === 'unconfirmed').length,
         collections: collections.length,
@@ -165,8 +165,8 @@ export class MarketVendorService {
     };
   }
 
-  async listRunnerVendors(accountId: string, marketIdentifier: string, search?: string) {
-    const { market } = await runnerContext(accountId, marketIdentifier);
+  async listMarketAssociateVendors(accountId: string, marketIdentifier: string, search?: string) {
+    const { market } = await marketAssociateContext(accountId, marketIdentifier);
     const filter: Record<string, unknown> = { marketId: market._id.toString(), deletedAt: { $exists: false } };
     if (search?.trim()) filter.$or = [
       { businessName: { $regex: search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } },
@@ -177,8 +177,8 @@ export class MarketVendorService {
     return vendors.map(safeVendor);
   }
 
-  async createRunnerVendor(accountId: string, marketIdentifier: string, input: any) {
-    const { market, runner } = await runnerContext(accountId, marketIdentifier);
+  async createMarketAssociateVendor(accountId: string, marketIdentifier: string, input: any) {
+    const { market, marketAssociate } = await marketAssociateContext(accountId, marketIdentifier);
     const normalizedPhone = normalizePhone(input.phone);
     if (normalizedPhone.length < 7) throw new HttpError(400, 'Enter a valid vendor phone number', undefined, 'VALIDATION_ERROR');
     const emailAddress = input.email?.trim().toLowerCase() || undefined;
@@ -209,14 +209,14 @@ export class MarketVendorService {
           preferredContactChannel: input.preferredContactChannel || 'phone',
           paymentProfile: paymentProfile(input.paymentProfile),
           status: 'pending',
-          invitedByRunnerId: runner._id.toString(),
+          invitedByMarketAssociateId: marketAssociate._id.toString(),
           notes: input.notes?.trim(),
         } as any], { session });
         invitation = await VendorInvitation.create([{
           publicId: await nextPublicId('vendorInvitation'),
           vendorId: vendor[0].id,
           marketId: market._id.toString(),
-          invitedByRunnerId: runner._id.toString(),
+          invitedByMarketAssociateId: marketAssociate._id.toString(),
           email: emailAddress,
           tokenHash: crypto.createHash('sha256').update(token).digest('hex'),
           status: 'pending',
@@ -242,12 +242,12 @@ export class MarketVendorService {
     return { vendor: safeVendor(vendor[0]), invitation: { publicId: invitation[0].publicId, status: invitation[0].status, expiresAt: invitationExpiresAt, inviteUrl, delivery } };
   }
 
-  async updateRunnerVendor(accountId: string, identifier: string, input: any) {
-    const runner = await RunnerProfile.findOne({ accountId, status: 'active' }).lean();
-    if (!runner) throw new HttpError(403, 'Active Runner profile required', undefined, 'ACCESS_DENIED');
+  async updateMarketAssociateVendor(accountId: string, identifier: string, input: any) {
+    const marketAssociate = await MarketAssociateProfile.findOne({ accountId, status: 'active' }).lean();
+    if (!marketAssociate) throw new HttpError(403, 'Active Market Associate profile required', undefined, 'ACCESS_DENIED');
     const vendor = await MarketVendor.findOne({ ...idQuery(identifier), deletedAt: { $exists: false } });
     if (!vendor) throw new HttpError(404, 'Market vendor not found', undefined, 'NOT_FOUND');
-    await runnerContext(accountId, vendor.marketId);
+    await marketAssociateContext(accountId, vendor.marketId);
     const update: Record<string, unknown> = {};
     for (const key of ['businessName', 'contactName', 'address', 'preferredContactChannel', 'notes']) {
       if (input[key] !== undefined) update[key] = typeof input[key] === 'string' ? input[key].trim() : input[key];
@@ -262,14 +262,14 @@ export class MarketVendorService {
     return safeVendor(updated);
   }
 
-  async runnerVendor(accountId: string, identifier: string) {
-    const runner = await RunnerProfile.findOne({ accountId, status: 'active' }).lean();
-    if (!runner) throw new HttpError(403, 'Active Runner profile required', undefined, 'ACCESS_DENIED');
+  async marketAssociateVendor(accountId: string, identifier: string) {
+    const marketAssociate = await MarketAssociateProfile.findOne({ accountId, status: 'active' }).lean();
+    if (!marketAssociate) throw new HttpError(403, 'Active Market Associate profile required', undefined, 'ACCESS_DENIED');
     const vendor = await MarketVendor.findOne({ ...idQuery(identifier), deletedAt: { $exists: false } }).lean({ virtuals: true });
     if (!vendor) throw new HttpError(404, 'Market vendor not found', undefined, 'NOT_FOUND');
-    await runnerContext(accountId, vendor.marketId);
+    await marketAssociateContext(accountId, vendor.marketId);
     const [collections, invitations] = await Promise.all([
-      VendorCollection.find({ marketVendorId: vendor._id.toString(), runnerId: runner._id.toString(), deletedAt: { $exists: false } }).sort({ createdAt: -1 }).limit(50).lean({ virtuals: true }),
+      VendorCollection.find({ marketVendorId: vendor._id.toString(), marketAssociateId: marketAssociate._id.toString(), deletedAt: { $exists: false } }).sort({ createdAt: -1 }).limit(50).lean({ virtuals: true }),
       VendorInvitation.find({ vendorId: vendor._id.toString(), deletedAt: { $exists: false } }).select('publicId status expiresAt emailSentAt acceptedAt createdAt').sort({ createdAt: -1 }).limit(20).lean({ virtuals: true }),
     ]);
     return { vendor: safeVendor(vendor), collections, invitations };
@@ -293,7 +293,7 @@ export class MarketVendorService {
     const filter: Record<string, unknown> = { deletedAt: { $exists: false } };
     if (query.marketId) filter.marketId = String(query.marketId);
     if (query.vendorId) filter.marketVendorId = String(query.vendorId);
-    if (query.runnerId) filter.runnerId = String(query.runnerId);
+    if (query.marketAssociateId) filter.marketAssociateId = String(query.marketAssociateId);
     if (query.status) filter.status = String(query.status);
     const limit = Math.min(Math.max(Number(query.limit || 50), 1), 100);
     const [rows, total] = await Promise.all([
@@ -324,11 +324,11 @@ export class MarketVendorService {
   }
 
   async resendInvitation(accountId: string, identifier: string) {
-    const runner = await RunnerProfile.findOne({ accountId, status: 'active' }).lean();
-    if (!runner) throw new HttpError(403, 'Active Runner profile required', undefined, 'ACCESS_DENIED');
+    const marketAssociate = await MarketAssociateProfile.findOne({ accountId, status: 'active' }).lean();
+    if (!marketAssociate) throw new HttpError(403, 'Active Market Associate profile required', undefined, 'ACCESS_DENIED');
     const vendor = await MarketVendor.findOne({ ...idQuery(identifier), deletedAt: { $exists: false } }).lean({ virtuals: true });
     if (!vendor) throw new HttpError(404, 'Market vendor not found', undefined, 'NOT_FOUND');
-    await runnerContext(accountId, vendor.marketId);
+    await marketAssociateContext(accountId, vendor.marketId);
     await VendorInvitation.updateMany({ vendorId: vendor._id.toString(), status: 'pending' }, { $set: { status: 'cancelled', cancelledAt: new Date() } });
     const token = crypto.randomBytes(32).toString('base64url');
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
@@ -336,7 +336,7 @@ export class MarketVendorService {
       publicId: await nextPublicId('vendorInvitation'),
       vendorId: vendor._id.toString(),
       marketId: vendor.marketId,
-      invitedByRunnerId: runner._id.toString(),
+      invitedByMarketAssociateId: marketAssociate._id.toString(),
       email: vendor.email,
       tokenHash: crypto.createHash('sha256').update(token).digest('hex'),
       status: 'pending',
@@ -363,12 +363,12 @@ export class MarketVendorService {
   }
 
   async recordCollection(accountId: string, submissionIdentifier: string, input: any) {
-    const runner = await RunnerProfile.findOne({ accountId, status: 'active' }).lean();
-    if (!runner) throw new HttpError(403, 'Active Runner profile required', undefined, 'ACCESS_DENIED');
-    const submission = await ProductSubmission.findOne({ ...idQuery(submissionIdentifier), runnerId: runner._id.toString(), deletedAt: { $exists: false } }).lean({ virtuals: true });
+    const marketAssociate = await MarketAssociateProfile.findOne({ accountId, status: 'active' }).lean();
+    if (!marketAssociate) throw new HttpError(403, 'Active Market Associate profile required', undefined, 'ACCESS_DENIED');
+    const submission = await ProductSubmission.findOne({ ...idQuery(submissionIdentifier), marketAssociateId: marketAssociate._id.toString(), deletedAt: { $exists: false } }).lean({ virtuals: true });
     if (!submission) throw new HttpError(404, 'Product submission not found', undefined, 'NOT_FOUND');
     if (!submission.marketVendorId) throw new HttpError(409, 'This submission has no Market vendor', undefined, 'MARKET_VENDOR_REQUIRED');
-    const { market } = await runnerContext(accountId, submission.marketId);
+    const { market } = await marketAssociateContext(accountId, submission.marketId);
     const vendor = await MarketVendor.findOne({ _id: submission.marketVendorId, marketId: market._id.toString(), status: { $in: ['pending', 'active'] } }).lean({ virtuals: true });
     if (!vendor) throw new HttpError(409, 'The submission vendor is no longer available', undefined, 'MARKET_VENDOR_INVALID');
     const existing = await VendorCollection.findOne({ productSubmissionId: submission._id.toString(), deletedAt: { $exists: false } });
@@ -382,7 +382,7 @@ export class MarketVendorService {
           publicId: await nextPublicId('vendorCollection'),
           marketVendorId: vendor._id.toString(),
           marketId: market._id.toString(),
-          runnerId: runner._id.toString(),
+          marketAssociateId: marketAssociate._id.toString(),
           productSubmissionId: submission._id.toString(),
           productTitleSnapshot: submission.basicTitle,
           quantity: input.quantity,
@@ -401,7 +401,7 @@ export class MarketVendorService {
             collectionId: collection.id,
             marketVendorId: vendor._id.toString(),
             marketId: market._id.toString(),
-            runnerId: runner._id.toString(),
+            marketAssociateId: marketAssociate._id.toString(),
             amountMinor: input.payment.amountMinor,
             currency: 'NGN',
             method: input.payment.method,
@@ -419,11 +419,11 @@ export class MarketVendorService {
     return { collection, payment, vendor: safeVendor(vendor) };
   }
 
-  async runnerCollections(accountId: string, marketIdentifier?: string) {
-    const runner = await RunnerProfile.findOne({ accountId, status: 'active' }).lean();
-    if (!runner) throw new HttpError(403, 'Active Runner profile required', undefined, 'ACCESS_DENIED');
-    const filter: Record<string, unknown> = { runnerId: runner._id.toString(), deletedAt: { $exists: false } };
-    if (marketIdentifier) filter.marketId = (await runnerContext(accountId, marketIdentifier)).market._id.toString();
+  async marketAssociateCollections(accountId: string, marketIdentifier?: string) {
+    const marketAssociate = await MarketAssociateProfile.findOne({ accountId, status: 'active' }).lean();
+    if (!marketAssociate) throw new HttpError(403, 'Active Market Associate profile required', undefined, 'ACCESS_DENIED');
+    const filter: Record<string, unknown> = { marketAssociateId: marketAssociate._id.toString(), deletedAt: { $exists: false } };
+    if (marketIdentifier) filter.marketId = (await marketAssociateContext(accountId, marketIdentifier)).market._id.toString();
     return VendorCollection.find(filter).sort({ createdAt: -1 }).limit(100).lean({ virtuals: true });
   }
 
@@ -432,14 +432,14 @@ export class MarketVendorService {
     if (!market) throw new HttpError(404, 'Market not found', undefined, 'NOT_FOUND');
     const [vendors, assignments, submissions, products, collections, payments] = await Promise.all([
       MarketVendor.find({ marketId: market._id.toString(), deletedAt: { $exists: false } }).sort({ businessName: 1 }).lean({ virtuals: true }),
-      RunnerMarketAssignment.find({ marketId: market._id.toString(), status: 'active' }).lean({ virtuals: true }),
-      ProductSubmission.find({ marketId: market._id.toString(), deletedAt: { $exists: false } }).select('publicId basicTitle status marketVendorId runnerId availabilityStatus updatedAt').sort({ updatedAt: -1 }).limit(100).lean({ virtuals: true }),
-      Product.find({ marketId: market._id.toString(), deletedAt: { $exists: false } }).select('publicId title status availabilityStatus sourceMarketVendorId sourceRunnerId images mediaAssetIds updatedAt').sort({ updatedAt: -1 }).limit(100).lean({ virtuals: true }),
+      MarketAssociateMarketAssignment.find({ marketId: market._id.toString(), status: 'active' }).lean({ virtuals: true }),
+      ProductSubmission.find({ marketId: market._id.toString(), deletedAt: { $exists: false } }).select('publicId basicTitle status marketVendorId marketAssociateId availabilityStatus updatedAt').sort({ updatedAt: -1 }).limit(100).lean({ virtuals: true }),
+      Product.find({ marketId: market._id.toString(), deletedAt: { $exists: false } }).select('publicId title status availabilityStatus sourceMarketVendorId sourceMarketAssociateId images mediaAssetIds updatedAt').sort({ updatedAt: -1 }).limit(100).lean({ virtuals: true }),
       VendorCollection.find({ marketId: market._id.toString(), deletedAt: { $exists: false } }).sort({ createdAt: -1 }).limit(100).lean({ virtuals: true }),
       VendorPaymentRecord.find({ marketId: market._id.toString(), deletedAt: { $exists: false } }).select('publicId collectionId amountMinor currency method status reference recordedAt reconciledAt').lean({ virtuals: true }),
     ]);
-    const runnerIds = assignments.map((item: any) => item.runnerId);
-    const runners = await RunnerProfile.find({ _id: { $in: runnerIds } }).select('publicId accountId availability status stateIds hubIds').lean({ virtuals: true });
+    const marketAssociateIds = assignments.map((item: any) => item.marketAssociateId);
+    const marketAssociates = await MarketAssociateProfile.find({ _id: { $in: marketAssociateIds } }).select('publicId accountId availability status stateIds hubIds').lean({ virtuals: true });
     const vendorMap = new Map(vendors.map((vendor: any) => [String(vendor._id), vendor]));
     const paymentMap = new Map(payments.map((payment: any) => [String(payment.collectionId), payment]));
     const presentVendorReference = (record: any, field: 'marketVendorId' | 'sourceMarketVendorId') => {
@@ -454,7 +454,7 @@ export class MarketVendorService {
       market,
       vendors: vendors.map(safeVendor),
       assignments,
-      runners,
+      marketAssociates,
       submissions: submissions.map((submission: any) => presentVendorReference(submission, 'marketVendorId')),
       products: products.map((product: any) => presentVendorReference(product, 'sourceMarketVendorId')),
       collections: collections.map((collection: any) => ({
@@ -463,7 +463,7 @@ export class MarketVendorService {
       })),
       summary: {
         vendors: vendors.length,
-        assignedRunners: assignments.length,
+        assignedMarketAssociates: assignments.length,
         products: products.length,
         pendingAvailability: products.filter((item: any) => item.availabilityStatus === 'unconfirmed').length,
         collections: collections.length,
@@ -526,16 +526,16 @@ export class MarketVendorService {
   }
 
   async notifyAvailability(accountId: string, product: any) {
-    const runnerId = product.sourceRunnerId || product.commercialApproval?.sourceRunnerId;
+    const marketAssociateId = product.sourceMarketAssociateId || product.commercialApproval?.sourceMarketAssociateId;
     let accounts: string[] = [];
-    if (runnerId) {
-      const runner = await RunnerProfile.findById(runnerId).select('accountId status').lean();
-      if (runner?.status === 'active') accounts = [runner.accountId];
+    if (marketAssociateId) {
+      const marketAssociate = await MarketAssociateProfile.findById(marketAssociateId).select('accountId status').lean();
+      if (marketAssociate?.status === 'active') accounts = [marketAssociate.accountId];
     }
     if (!accounts.length && product.marketId) {
-      const assignments = await RunnerMarketAssignment.find({ marketId: product.marketId, status: 'active' }).select('runnerId').lean();
-      const runners = await RunnerProfile.find({ _id: { $in: assignments.map((item) => item.runnerId) }, status: 'active' }).select('accountId').lean();
-      accounts = runners.map((item) => item.accountId);
+      const assignments = await MarketAssociateMarketAssignment.find({ marketId: product.marketId, status: 'active' }).select('marketAssociateId').lean();
+      const marketAssociates = await MarketAssociateProfile.find({ _id: { $in: assignments.map((item) => item.marketAssociateId) }, status: 'active' }).select('accountId').lean();
+      accounts = marketAssociates.map((item) => item.accountId);
     }
     await Promise.all(accounts.map((accountIdValue) => notifyAccount(accountIdValue, 'Product availability check', `${product.title} needs a fresh availability check before it can be shown to customers.`, { productId: product.publicId, marketId: product.marketId })));
     return accounts.length;

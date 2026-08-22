@@ -3,15 +3,17 @@ import { z } from 'zod';
 import { PublicController } from '@controllers/public.controller';
 import { asyncHandler } from '@utils/http';
 import { validateBody } from '@middleware/validate';
-import { RunnerMarketVendorController } from '@controllers/market-vendor.controller';
+import { MarketAssociateMarketVendorController } from '@controllers/market-vendor.controller';
 import { PaymentLinkController } from '@controllers/payment-link.controller';
 import { paymentLinkInitializeSchema } from '@validations/commerce.schemas';
 
 export function createPublicRouter() {
   const router = Router();
   const controller = new PublicController();
-  const marketVendors = new RunnerMarketVendorController();
+  const marketVendors = new MarketAssociateMarketVendorController();
   const paymentLinks = new PaymentLinkController();
+
+  router.get('/public/legal/:type', asyncHandler(controller.getLegalContent));
 
   router.get('/public/payment-links/:token', asyncHandler(paymentLinks.detail));
   router.post('/public/payment-links/:token/initialize', validateBody(paymentLinkInitializeSchema), asyncHandler(paymentLinks.initialize));

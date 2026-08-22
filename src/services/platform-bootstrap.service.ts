@@ -36,7 +36,6 @@ const domains: Record<string, string[]> = {
   'delivery.pricing': ['view', 'manage', 'preview'],
   fulfilment: ['view', 'manage', 'assign', 'resolve', 'consolidate'],
   'fulfilment.hub': ['view', 'receive', 'qc'],
-  'fulfilment.runner': ['view', 'monitor', 'reassign'],
   logistics: ['view', 'book', 'manage', 'track'],
   returns: ['view', 'review', 'manage'],
   custody: ['view', 'manage'],
@@ -49,6 +48,15 @@ const domains: Record<string, string[]> = {
 
 export const PLATFORM_PERMISSION_KEYS = Object.entries(domains)
   .flatMap(([domain, actions]) => actions.map((action) => `${domain}.${action}`));
+
+/** Human-readable override for domains whose key no longer matches the display name. */
+const domainLabels: Record<string, string> = {
+  runners: 'market associates',
+};
+
+function domainLabel(domain: string) {
+  return domainLabels[domain] || domain;
+}
 
 const readPermissions = PLATFORM_PERMISSION_KEYS.filter((key) => key.endsWith('.view') && key !== 'market.payments.view');
 const operationsPermissions = PLATFORM_PERMISSION_KEYS.filter((key) =>
@@ -159,7 +167,9 @@ export async function ensurePlatformAccessCatalog() {
     return {
       updateOne: {
         filter: { key },
-        update: { $setOnInsert: { key, domain, description: `${action.replaceAll('_', ' ')} ${domain}`, isActive: true } },
+        update: {
+          $set: { key, domain, description: `${action.replaceAll('_', ' ')} ${domainLabel(domain)}`, isActive: true },
+        },
         upsert: true,
       },
     };

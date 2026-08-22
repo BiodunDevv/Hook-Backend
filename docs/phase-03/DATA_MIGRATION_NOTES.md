@@ -12,7 +12,7 @@ The configured development/QA dataset was explicitly reset on July 31, 2026 and 
 - Negotiations: 8 migrated, 0 legacy
 - Phase 3 submissions/variants/media/quotes: 6 / 255 / 14 / 0
 - Published Commercial products: 12
-- Markets and active Runner assignments: 3 / 3
+- Markets and active Market Associate assignments: 3 / 3
 - Verification: 0 invalid products, 0 products without variants, 0 duplicate product public IDs
 
 Execution converts Naira compatibility values to integer minor units, assigns public IDs, creates variants, tags public image URLs as legacy compatibility media, and evolves negotiations in place. Products become Commercial drafts and are never auto-published. Vendor references remain historical.

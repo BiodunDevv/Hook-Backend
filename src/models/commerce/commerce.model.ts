@@ -79,6 +79,7 @@ export interface CommerceSettings extends BaseEntity {
     displayOrder: number;
     isDefault: boolean;
   }>;
+  lowStockThreshold: number;
   activePolicyVersions: Record<string, string>;
   updatedBy?: string;
 }
@@ -257,6 +258,7 @@ const settingsSchema = createSchema<CommerceSettings>({
       { provider: "opay", enabled: false, displayOrder: 2, isDefault: false },
     ],
   },
+  lowStockThreshold: { type: Number, default: 5, min: 0, max: 100 },
   activePolicyVersions: { type: Object, default: {} },
   updatedBy: { type: String },
   deletedAt: { type: Date },

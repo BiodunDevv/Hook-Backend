@@ -1,14 +1,14 @@
 import { Category } from '@models/categories/category.model';
 import { Market } from '@models/platform/network.model';
 import { OperationState } from '@models/platform/geography.model';
-import { RunnerProfile } from '@models/platform/operations-accounts.model';
+import { MarketAssociateProfile } from '@models/platform/operations-accounts.model';
 import { CatalogMediaAsset } from '@models/catalog/catalog.model';
 import { MarketVendor } from '@models/catalog/market-vendor.model';
 import { Product } from '@models/products/product.model';
 import { CatalogMediaService } from './catalog-media.service';
 
 export async function presentSubmission(record: any) {
-  const [market, category, state, runner, rawMedia, product, marketVendor] = await Promise.all([
+  const [market, category, state, marketAssociate, rawMedia, product, marketVendor] = await Promise.all([
     record.market?.publicId
       ? record.market
       : Market.findById(record.marketId).select('publicId name').lean({ virtuals: true }),
@@ -16,9 +16,9 @@ export async function presentSubmission(record: any) {
       ? record.category
       : Category.findById(record.categorySuggestionId).select('publicId name slug').lean({ virtuals: true }),
     OperationState.findById(record.sourceStateId).select('publicId name code').lean({ virtuals: true }),
-    record.runner?.publicId
-      ? record.runner
-      : RunnerProfile.findById(record.runnerId).select('publicId').lean({ virtuals: true }),
+    record.marketAssociate?.publicId
+      ? record.marketAssociate
+      : MarketAssociateProfile.findById(record.marketAssociateId).select('publicId').lean({ virtuals: true }),
     record.media
       ? record.media
       : CatalogMediaAsset.find({
@@ -44,7 +44,7 @@ export async function presentSubmission(record: any) {
   return {
     id: record.publicId,
     publicId: record.publicId,
-    runner: runner ? { publicId: runner.publicId } : null,
+    marketAssociate: marketAssociate ? { publicId: marketAssociate.publicId } : null,
     marketId: market?.publicId,
     market: market ? { publicId: market.publicId, name: market.name } : null,
     sourceStateId: state?.publicId,

@@ -2,7 +2,7 @@ import { isValidObjectId } from 'mongoose';
 import { OperationCity, OperationState, ServiceZone } from '@models/platform/geography.model';
 import { DispatchHub, Market } from '@models/platform/network.model';
 import {
-  RunnerProfile,
+  MarketAssociateProfile,
   StaffProfile,
 } from '@models/platform/operations-accounts.model';
 import { User } from '@models/users/user.model';
@@ -19,7 +19,7 @@ const referenceModels = {
   zoneId: ServiceZone,
   hubId: DispatchHub,
   preferredHubId: DispatchHub,
-  runnerId: RunnerProfile,
+  marketAssociateId: MarketAssociateProfile,
   marketId: Market,
 } as const;
 

@@ -5,11 +5,11 @@ import { ProductAvailabilityStatus, ProductStatus, ProductSubmissionStatus } fro
 import { Category } from '@models/categories/category.model';
 import { CatalogMediaAsset, ProductSubmission, ProductVariant } from '@models/catalog/catalog.model';
 import { MarketVendor } from '@models/catalog/market-vendor.model';
-import { RunnerMarketAssignment, RunnerProfile } from '@models/platform/operations-accounts.model';
+import { MarketAssociateMarketAssignment, MarketAssociateProfile } from '@models/platform/operations-accounts.model';
 import { Product } from '@models/products/product.model';
 import { User } from '@models/users/user.model';
 import { nextPublicId } from '@services/public-id.service';
-import { productGallery, productOptions, RUNNER_PRODUCT_CATALOG } from '../seeds/runner-product-catalog';
+import { productGallery, productOptions, MARKET_ASSOCIATE_PRODUCT_CATALOG } from '../seeds/market-associate-product-catalog';
 
 dotenv.config({ quiet: true });
 
@@ -22,12 +22,12 @@ function slugify(value: string) {
 async function main() {
   await connectDatabase();
 
-  const runnerAccount = await User.findOne({ email: 'runner@gmail.com', isActive: true }).lean();
-  if (!runnerAccount) throw new Error('Active runner@gmail.com account was not found');
-  const runner = await RunnerProfile.findOne({ accountId: String(runnerAccount._id), status: 'active' }).lean();
-  if (!runner) throw new Error('Active Runner profile for runner@gmail.com was not found');
-  const assignment = await RunnerMarketAssignment.findOne({
-    runnerId: String(runner._id),
+  const marketAssociateAccount = await User.findOne({ email: 'runner@gmail.com', isActive: true }).lean();
+  if (!marketAssociateAccount) throw new Error('Active runner@gmail.com account was not found');
+  const marketAssociate = await MarketAssociateProfile.findOne({ accountId: String(marketAssociateAccount._id), status: 'active' }).lean();
+  if (!marketAssociate) throw new Error('Active Market Associate profile for runner@gmail.com was not found');
+  const assignment = await MarketAssociateMarketAssignment.findOne({
+    marketAssociateId: String(marketAssociate._id),
     status: 'active',
     activeFrom: { $lte: new Date() },
     $or: [{ activeTo: { $exists: false } }, { activeTo: null }, { activeTo: { $gt: new Date() } }],
@@ -38,16 +38,16 @@ async function main() {
 
   const admin = await User.findOne({ email: 'admin@gmail.com', isActive: true }).lean();
   if (!admin) throw new Error('Active admin@gmail.com account was not found');
-  const categories = await Category.find({ slug: { $in: RUNNER_PRODUCT_CATALOG.map((item) => item.categorySlug) }, isActive: true }).lean();
+  const categories = await Category.find({ slug: { $in: MARKET_ASSOCIATE_PRODUCT_CATALOG.map((item) => item.categorySlug) }, isActive: true }).lean();
   const categoryBySlug = new Map(categories.map((category) => [category.slug, category]));
-  const missingCategories = [...new Set(RUNNER_PRODUCT_CATALOG.map((item) => item.categorySlug))]
+  const missingCategories = [...new Set(MARKET_ASSOCIATE_PRODUCT_CATALOG.map((item) => item.categorySlug))]
     .filter((slug) => !categoryBySlug.has(slug));
   if (missingCategories.length) throw new Error(`Missing active categories: ${missingCategories.join(', ')}`);
 
-  const slugs = RUNNER_PRODUCT_CATALOG.map((item) => slugify(item.title));
+  const slugs = MARKET_ASSOCIATE_PRODUCT_CATALOG.map((item) => slugify(item.title));
   const existing = await Product.find({ slug: { $in: slugs } }).select('slug').lean();
   const existingSlugs = new Set(existing.map((item) => item.slug));
-  const pending = RUNNER_PRODUCT_CATALOG.filter((item) => !existingSlugs.has(slugify(item.title)));
+  const pending = MARKET_ASSOCIATE_PRODUCT_CATALOG.filter((item) => !existingSlugs.has(slugify(item.title)));
 
   console.log(`${execute ? 'Creating' : 'Dry run for'} ${pending.length} Product(s) for runner@gmail.com; ${existing.length} already exist`);
   if (!execute) {
@@ -64,13 +64,13 @@ async function main() {
         const now = new Date();
         const submission = await ProductSubmission.create([{
           publicId: await nextPublicId('submission'),
-          runnerId: String(runner._id),
+          marketAssociateId: String(marketAssociate._id),
           marketId: assignment.marketId,
           marketVendorId: String(vendor._id),
           sourceStateId: assignment.stateId,
           categorySuggestionId: String(category._id),
           basicTitle: item.title,
-          notes: `Runner capture approved for ${category.name}.`,
+          notes: `Market Associate capture approved for ${category.name}.`,
           mediaIds: [],
           basePriceMinor: item.costPrice * 100,
           currency: 'NGN',
@@ -97,7 +97,7 @@ async function main() {
           width: 1200,
           height: 1200,
           bytes: 1,
-          uploaderAccountId: String(runnerAccount._id),
+          uploaderAccountId: String(marketAssociateAccount._id),
           ownerType: 'submission',
           ownerId: String(submission._id),
           uploadIntentId: `seed-${slugify(item.title)}-${index + 1}`,
@@ -126,7 +126,7 @@ async function main() {
           marketId: assignment.marketId,
           sourceSubmissionId: String(submission._id),
           sourceMarketVendorId: String(vendor._id),
-          sourceRunnerId: String(runner._id),
+          sourceMarketAssociateId: String(marketAssociate._id),
           categoryId: String(category._id),
           quantity: item.quantity,
           reservedQuantity: 0,
@@ -174,13 +174,13 @@ async function main() {
     }
   }
 
-  const seededSlugs = RUNNER_PRODUCT_CATALOG.map((item) => slugify(item.title));
-  const seededProducts = await Product.find({ slug: { $in: seededSlugs }, sourceRunnerId: String(runner._id) })
+  const seededSlugs = MARKET_ASSOCIATE_PRODUCT_CATALOG.map((item) => slugify(item.title));
+  const seededProducts = await Product.find({ slug: { $in: seededSlugs }, sourceMarketAssociateId: String(marketAssociate._id) })
     .select('_id categoryId images status availabilityStatus')
     .lean();
   const productIds = seededProducts.map((item) => String(item._id));
   const [approvedCaptures, variants] = await Promise.all([
-    ProductSubmission.countDocuments({ runnerId: String(runner._id), productId: { $in: productIds }, status: ProductSubmissionStatus.APPROVED }),
+    ProductSubmission.countDocuments({ marketAssociateId: String(marketAssociate._id), productId: { $in: productIds }, status: ProductSubmissionStatus.APPROVED }),
     ProductVariant.countDocuments({ productId: { $in: productIds }, active: true }),
   ]);
   const counts = new Map<string, number>();

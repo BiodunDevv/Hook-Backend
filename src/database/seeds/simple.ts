@@ -26,8 +26,8 @@ import { DispatchHub, Market } from '@models/platform/network.model';
 import { Role } from '@models/platform/access.model';
 import {
   HookPartner,
-  RunnerMarketAssignment,
-  RunnerProfile,
+  MarketAssociateMarketAssignment,
+  MarketAssociateProfile,
   StaffProfile,
 } from '@models/platform/operations-accounts.model';
 import { OperationalState } from '@models/operations/operational-state.model';
@@ -37,7 +37,7 @@ import { ensurePlatformAccessCatalog } from '@services/platform-bootstrap.servic
 import { nextPublicIds, nextPublicId } from '@services/public-id.service';
 import { refreshNigerianLocationCatalog } from '@services/location-catalog.service';
 import { encryptVendorAccountNumber } from '@lib/vendor-payment-crypto';
-import { productGallery, productOptions, RUNNER_PRODUCT_CATALOG } from './runner-product-catalog';
+import { productGallery, productOptions, MARKET_ASSOCIATE_PRODUCT_CATALOG } from './market-associate-product-catalog';
 
 dotenv.config({ quiet: true });
 
@@ -250,34 +250,34 @@ async function seedStaffAccounts(states: any[], markets: any[], password: string
 
 async function seedNonStaffAccounts(adminId: string, markets: any[], password: string) {
   const market = markets[0];
-  if (!market) throw new Error('At least one market is required for Runner and Partner seed accounts');
+  if (!market) throw new Error('At least one market is required for Market Associate and Partner seed accounts');
 
-  const runnerPublicId = await nextPublicId('runner');
-  const runner = await User.create({
-    publicId: runnerPublicId,
+  const marketAssociatePublicId = await nextPublicId('marketAssociate');
+  const marketAssociateAccount = await User.create({
+    publicId: marketAssociatePublicId,
     email: 'runner@gmail.com',
     phone: '+2348020000001',
     password,
     firstName: 'Hook',
-    lastName: 'Runner',
-    role: UserRole.RUNNER,
-    accountType: AccountType.RUNNER,
+    lastName: 'Market Associate',
+    role: UserRole.MARKETASSOCIATE,
+    accountType: AccountType.MARKETASSOCIATE,
     accountStatus: AccountStatus.ACTIVE,
     isActive: true,
     isEmailVerified: true,
     isPhoneVerified: true,
     passwordChangedAt: new Date(),
   });
-  const runnerProfile = await RunnerProfile.create({
-    publicId: runnerPublicId,
-    accountId: idOf(runner),
+  const marketAssociateProfile = await MarketAssociateProfile.create({
+    publicId: marketAssociatePublicId,
+    accountId: idOf(marketAssociateAccount),
     stateIds: [String(market.stateId)],
     hubIds: market.hubId ? [String(market.hubId)] : [],
     availability: 'available',
     status: 'active',
   });
-  await RunnerMarketAssignment.create({
-    runnerId: idOf(runnerProfile),
+  await MarketAssociateMarketAssignment.create({
+    marketAssociateId: idOf(marketAssociateProfile),
     marketId: idOf(market),
     stateId: String(market.stateId),
     preferredHubId: market.hubId ? String(market.hubId) : undefined,
@@ -335,7 +335,7 @@ async function seedNonStaffAccounts(adminId: string, markets: any[], password: s
     passwordChangedAt: new Date(),
   });
 
-  return { runner, runnerProfile, partner, customer };
+  return { marketAssociateAccount, marketAssociateProfile, partner, customer };
 }
 
 async function seedCategories() {
@@ -377,7 +377,7 @@ async function seedNetwork(states: any[]) {
   return markets;
 }
 
-async function seedMarketVendors(markets: any[], runnerProfile: any) {
+async function seedMarketVendors(markets: any[], marketAssociateProfile: any) {
   const vendorIds = await nextPublicIds('marketVendor', markets.length + 2);
   const invitationIds = await nextPublicIds('vendorInvitation', markets.length + 2);
   const vendors: any[] = [];
@@ -410,14 +410,14 @@ async function seedMarketVendors(markets: any[], runnerProfile: any) {
         },
         status: vendorIndex === 0 ? 'active' : 'pending',
         consentAt: vendorIndex === 0 ? new Date() : undefined,
-        invitedByRunnerId: idOf(runnerProfile),
+        invitedByMarketAssociateId: idOf(marketAssociateProfile),
       });
       const token = crypto.randomBytes(32).toString('hex');
       await VendorInvitation.create({
         publicId: invitationIds[invitationIndex],
         vendorId: idOf(vendor),
         marketId: idOf(market),
-        invitedByRunnerId: idOf(runnerProfile),
+        invitedByMarketAssociateId: idOf(marketAssociateProfile),
         email: vendor.email,
         tokenHash: crypto.createHash('sha256').update(token).digest('hex'),
         status: vendorIndex === 0 ? 'accepted' : 'pending',
@@ -432,13 +432,13 @@ async function seedMarketVendors(markets: any[], runnerProfile: any) {
   return vendors;
 }
 
-async function seedProducts(categories: any[], markets: any[], states: any[], adminId: string, vendors: any[], runnerProfile: any) {
+async function seedProducts(categories: any[], markets: any[], states: any[], adminId: string, vendors: any[], marketAssociateProfile: any) {
   const categoryBySlug = new Map(categories.map((category) => [category.slug, category]));
   const stateById = new Map(states.map((state) => [idOf(state), state]));
-  const productIds = await nextPublicIds('product', RUNNER_PRODUCT_CATALOG.length);
+  const productIds = await nextPublicIds('product', MARKET_ASSOCIATE_PRODUCT_CATALOG.length);
   const products: any[] = [];
-  for (let index = 0; index < RUNNER_PRODUCT_CATALOG.length; index += 1) {
-    const seed = RUNNER_PRODUCT_CATALOG[index];
+  for (let index = 0; index < MARKET_ASSOCIATE_PRODUCT_CATALOG.length; index += 1) {
+    const seed = MARKET_ASSOCIATE_PRODUCT_CATALOG[index];
     const { title, costPrice: basePrice, sellingPrice, floorPrice, quantity, categorySlug } = seed;
     const market = markets[index % markets.length];
     const state = stateById.get(String(market.stateId));
@@ -449,13 +449,13 @@ async function seedProducts(categories: any[], markets: any[], states: any[], ad
     const discountMinor = index % 4 === 0 ? Math.round(sellingPriceMinor * 0.08) : 0;
     const submission = await ProductSubmission.create({
       publicId: await nextPublicId('submission'),
-      runnerId: idOf(runnerProfile),
+      marketAssociateId: idOf(marketAssociateProfile),
       marketId: idOf(market),
       marketVendorId: idOf(marketVendor),
       sourceStateId: idOf(state),
       categorySuggestionId: idOf(categoryBySlug.get(categorySlug)),
       basicTitle: title,
-      notes: 'Seeded Runner capture for development verification.',
+      notes: 'Seeded Market Associate capture for development verification.',
       mediaIds: [],
       basePriceMinor,
       currency: 'NGN',
@@ -480,7 +480,7 @@ async function seedProducts(categories: any[], markets: any[], states: any[], ad
       width: 1200,
       height: 1200,
       bytes: 1,
-      uploaderAccountId: String(runnerProfile.accountId),
+      uploaderAccountId: String(marketAssociateProfile.accountId),
       ownerType: 'submission',
       ownerId: idOf(submission),
       uploadIntentId: `seed-${slugify(title)}-${mediaIndex + 1}`,
@@ -509,7 +509,7 @@ async function seedProducts(categories: any[], markets: any[], states: any[], ad
       marketId: idOf(market),
       sourceSubmissionId: idOf(submission),
       sourceMarketVendorId: idOf(marketVendor),
-      sourceRunnerId: idOf(runnerProfile),
+      sourceMarketAssociateId: idOf(marketAssociateProfile),
       categoryId: idOf(categoryBySlug.get(categorySlug)),
       quantity,
       reservedQuantity: 0,
@@ -553,7 +553,7 @@ async function seedProducts(categories: any[], markets: any[], states: any[], ad
         publicId: await nextPublicId('vendorCollection'),
         marketVendorId: idOf(marketVendor),
         marketId: idOf(market),
-        runnerId: idOf(runnerProfile),
+        marketAssociateId: idOf(marketAssociateProfile),
         productSubmissionId: idOf(submission),
         productId: idOf(product),
         productTitleSnapshot: title,
@@ -570,7 +570,7 @@ async function seedProducts(categories: any[], markets: any[], states: any[], ad
         collectionId: idOf(collection),
         marketVendorId: idOf(marketVendor),
         marketId: idOf(market),
-        runnerId: idOf(runnerProfile),
+        marketAssociateId: idOf(marketAssociateProfile),
         amountMinor: collection.actualCostMinor,
         currency: 'NGN',
         method: index === 0 ? 'cash' : 'bank_transfer',
@@ -664,15 +664,15 @@ export async function runSimpleSeed() {
   }
   const staff = await seedStaffAccounts(states, markets, password);
   const accounts = await seedNonStaffAccounts(idOf(admin), markets, password);
-  const vendors = await seedMarketVendors(markets, accounts.runnerProfile);
-  const products = await seedProducts(categories, markets, states, idOf(admin), vendors, accounts.runnerProfile);
+  const vendors = await seedMarketVendors(markets, accounts.marketAssociateProfile);
+  const products = await seedProducts(categories, markets, states, idOf(admin), vendors, accounts.marketAssociateProfile);
   await seedCommerceDefaults(idOf(admin));
   await seedCustomerCart(accounts.customer, products);
 
   console.log('Hook seed completed');
   console.log(`  Admin: ${admin.email}`);
   console.log(`  Staff accounts: ${staff.length + 1}`);
-  console.log('  Runner: runner@gmail.com');
+  console.log('  Market Associate: runner@gmail.com');
   console.log('  Partner: partner@gmail.com');
   console.log('  Customer: customer@gmail.com');
   console.log('  Shared password: SEED_ADMIN_PASSWORD (or SEED_ADMIN_PASSWROD) from the environment');

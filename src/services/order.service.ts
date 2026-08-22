@@ -2,6 +2,7 @@ import type { MongoRepository as Repository } from '@lib/mongo-repository';
 import { AppDataSource } from '@config/data-source';
 import { AccountStatus, AccountType, DEFAULT_DELIVERY_FEE, DELIVERY_SLA_HOURS, OrderStatus, OrderType, PaymentMode, PaymentStatus, ProductStatus, ScopeType } from '@lib/constants';
 import { EmailService } from '@emails/email.service';
+import { getEmailSettings } from '@services/email-settings.service';
 import { Cart } from '@models/cart/cart.model';
 import { CartItem } from '@models/cart/cart-item.model';
 import { Logistics } from '@models/logistics/logistics.model';
@@ -36,7 +37,7 @@ function customerStatusLabel(status: unknown) {
     VERIFICATION_PENDING: 'Payment review',
     OPERATIONS_REVIEW: 'Order confirmed',
     APPROVED_FOR_FULFILMENT: 'Preparing your order',
-    IN_FULFILMENT: 'Runner is sourcing your items',
+    IN_FULFILMENT: 'Market Associate is sourcing your items',
     PARTIALLY_RECEIVED: 'Some items reached Hook Hub',
     READY_FOR_CONSOLIDATION: 'Checked at Hook Hub',
     READY_FOR_DISPATCH: 'Packed for delivery',
@@ -233,9 +234,20 @@ export class OrderService {
         orderCode: order.orderCode,
         amount: order.total,
         itemCount,
+        lines: cartItems.map((item) => ({
+          title: item.product?.title || 'Product',
+          quantity: Number(item.quantity || 0),
+          amount: Number(item.unitPrice || 0) * Number(item.quantity || 0),
+        })),
+        subtotal: order.subtotal,
+        deliveryFee: order.deliveryFee,
+        deliveryAddress: order.deliveryAddress?.formattedAddress,
+        expectedDeliveryDate: order.estimatedDeliveryAt
+          ? new Date(order.estimatedDeliveryAt).toLocaleDateString('en-NG', { dateStyle: 'medium' })
+          : undefined,
       });
     }
-    const hookOpsEmail = process.env.HOOK_OPS_EMAIL || process.env.BREVO_FROM_EMAIL;
+    const hookOpsEmail = (await getEmailSettings()).hookOpsEmail;
     if (hookOpsEmail && body.paymentMode === PaymentMode.PAY_ON_DELIVERY) {
       await this.email.sendHookNewOrder({
         to: hookOpsEmail,

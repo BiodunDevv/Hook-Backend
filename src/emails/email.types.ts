@@ -34,6 +34,12 @@ export interface CustomerAccountSetupEmailPayload {
   expiresInHours: number;
 }
 
+export interface OrderEmailLine {
+  title: string;
+  quantity: number;
+  amount: number;
+}
+
 export interface OrderEmailPayload {
   to: string;
   name?: string;
@@ -44,6 +50,13 @@ export interface OrderEmailPayload {
   vendorName?: string;
   status?: string;
   dashboardUrl?: string;
+  /** Optional itemised recap. Falls back to the summary rows when absent. */
+  lines?: OrderEmailLine[];
+  subtotal?: number;
+  deliveryFee?: number;
+  discount?: number;
+  deliveryAddress?: string;
+  expectedDeliveryDate?: string;
 }
 
 export interface VendorDecisionEmailPayload {

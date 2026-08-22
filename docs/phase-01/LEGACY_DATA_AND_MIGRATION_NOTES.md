@@ -13,7 +13,7 @@ Retained legacy structures include:
 Compatibility rules:
 
 - Active product creation is admin-owned and cannot assign a Vendor.
-- Active Runner APIs map to the persisted field-agent model and `field_agent` role.
+- Active Market Associate APIs map to the persisted field-agent model and `field_agent` role.
 - Historical finance records may still contain vendor settlement metadata but no active payout trigger is exposed.
 - Historical order/cart documents may contain booth fields; active customer flows do not create or require them.
 - Collections and enum values must not be renamed until a versioned, reversible migration and data-retention policy exist.

@@ -14,7 +14,7 @@ import {
 import { Product } from '@models/products/product.model';
 import { MarketVendor } from '@models/catalog/market-vendor.model';
 import { Market } from '@models/platform/network.model';
-import { RunnerMarketAssignment, RunnerProfile } from '@models/platform/operations-accounts.model';
+import { MarketAssociateMarketAssignment, MarketAssociateProfile } from '@models/platform/operations-accounts.model';
 import { User } from '@models/users/user.model';
 import { nextPublicId } from './public-id.service';
 import { CatalogMediaService } from './catalog-media.service';
@@ -57,14 +57,14 @@ function slugify(value: string) {
   return value.toLowerCase().normalize('NFKD').replace(/[^\w\s-]/g, '').trim().replace(/[\s_-]+/g, '-');
 }
 
-async function runnerContext(accountId: string, marketIdentifier?: string) {
-  const runner = await RunnerProfile.findOne({ accountId, status: 'active' }).lean({ virtuals: true });
-  if (!runner) throw new HttpError(403, 'Active Runner profile required', undefined, 'ACCESS_DENIED');
-  if (!marketIdentifier) return { runner };
+async function marketAssociateContext(accountId: string, marketIdentifier?: string) {
+  const marketAssociate = await MarketAssociateProfile.findOne({ accountId, status: 'active' }).lean({ virtuals: true });
+  if (!marketAssociate) throw new HttpError(403, 'Active Market Associate profile required', undefined, 'ACCESS_DENIED');
+  if (!marketIdentifier) return { marketAssociate };
   const market = await byIdentifier<any>(Market, marketIdentifier);
   if (market.status !== 'active') throw new HttpError(409, 'The selected Market is inactive', undefined, 'MARKET_INACTIVE');
-  const assignment = await RunnerMarketAssignment.findOne({
-    runnerId: runner._id.toString(),
+  const assignment = await MarketAssociateMarketAssignment.findOne({
+    marketAssociateId: marketAssociate._id.toString(),
     marketId: market._id.toString(),
     status: 'active',
     activeFrom: { $lte: new Date() },
@@ -73,7 +73,7 @@ async function runnerContext(accountId: string, marketIdentifier?: string) {
   if (!assignment) {
     throw new HttpError(403, 'An active Market assignment is required', undefined, 'RUNNER_MARKET_ASSIGNMENT_REQUIRED');
   }
-  return { runner, market, assignment };
+  return { marketAssociate, market, assignment };
 }
 
 async function ensureMarketVendor(identifier: string, marketId: string) {
@@ -130,17 +130,17 @@ function validateSubmissionReady(submission: any, mediaCount: number) {
   }
 }
 
-export class RunnerCatalogService {
+export class MarketAssociateCatalogService {
   async dashboard(accountId: string) {
-    const { runner } = await runnerContext(accountId);
-    const runnerId = runner._id.toString();
+    const { marketAssociate } = await marketAssociateContext(accountId);
+    const marketAssociateId = marketAssociate._id.toString();
     const [assignments, counts, recentPublished] = await Promise.all([
-      RunnerMarketAssignment.countDocuments({ runnerId, status: 'active' }),
+      MarketAssociateMarketAssignment.countDocuments({ marketAssociateId, status: 'active' }),
       ProductSubmission.aggregate([
-        { $match: { runnerId, deletedAt: { $exists: false } } },
+        { $match: { marketAssociateId, deletedAt: { $exists: false } } },
         { $group: { _id: '$status', count: { $sum: 1 } } },
       ]),
-      Product.find({ 'commercialApproval.sourceRunnerId': runnerId, status: ProductStatus.PUBLISHED })
+      Product.find({ 'commercialApproval.sourceMarketAssociateId': marketAssociateId, status: ProductStatus.PUBLISHED })
         .select('publicId title status publishedAt')
         .sort({ publishedAt: -1 })
         .limit(5)
@@ -158,9 +158,9 @@ export class RunnerCatalogService {
   }
 
   async list(accountId: string, query: Record<string, unknown>) {
-    const { runner } = await runnerContext(accountId);
+    const { marketAssociate } = await marketAssociateContext(accountId);
     const limit = Math.min(Math.max(Number(query.limit || 20), 1), 50);
-    const filter: Record<string, any> = { runnerId: runner._id.toString(), deletedAt: { $exists: false } };
+    const filter: Record<string, any> = { marketAssociateId: marketAssociate._id.toString(), deletedAt: { $exists: false } };
     if (query.status && Object.values(ProductSubmissionStatus).includes(query.status as ProductSubmissionStatus)) {
       filter.status = query.status;
     }
@@ -184,10 +184,10 @@ export class RunnerCatalogService {
   }
 
   async detail(accountId: string, identifier: string) {
-    const { runner } = await runnerContext(accountId);
+    const { marketAssociate } = await marketAssociateContext(accountId);
     const submission = await ProductSubmission.findOne({
       ...identifierQuery(identifier),
-      runnerId: runner._id.toString(),
+      marketAssociateId: marketAssociate._id.toString(),
       deletedAt: { $exists: false },
     }).lean({ virtuals: true });
     if (!submission) throw new HttpError(404, 'Submission not found', undefined, 'NOT_FOUND');
@@ -195,15 +195,15 @@ export class RunnerCatalogService {
   }
 
   async create(accountId: string, input: SubmissionInput) {
-    const [{ runner, market }] = await Promise.all([
-      runnerContext(accountId, input.marketId),
+    const [{ marketAssociate, market }] = await Promise.all([
+      marketAssociateContext(accountId, input.marketId),
       category(input.categorySuggestionId),
     ]);
     const vendor = await ensureMarketVendor(input.marketVendorId, market._id.toString());
     const publicId = await nextPublicId('submission');
     const submission = await ProductSubmission.create({
       publicId,
-      runnerId: runner._id.toString(),
+      marketAssociateId: marketAssociate._id.toString(),
       marketId: market._id.toString(),
       marketVendorId: vendor._id.toString(),
       sourceStateId: market.stateId,
@@ -231,7 +231,7 @@ export class RunnerCatalogService {
     }
     if (input.version !== current.version) throw new HttpError(409, 'This submission was updated elsewhere', undefined, 'STALE_VERSION');
     const [{ market }] = await Promise.all([
-      runnerContext(accountId, input.marketId),
+      marketAssociateContext(accountId, input.marketId),
       category(input.categorySuggestionId),
     ]);
     const vendor = await ensureMarketVendor(input.marketVendorId, market._id.toString());
@@ -268,7 +268,7 @@ export class RunnerCatalogService {
       throw new HttpError(409, 'This submission cannot be submitted in its current state', undefined, 'SUBMISSION_STATE_CONFLICT');
     }
     if (current.version !== version) throw new HttpError(409, 'This submission was updated elsewhere', undefined, 'STALE_VERSION');
-    await runnerContext(accountId, current.marketId);
+    await marketAssociateContext(accountId, current.marketId);
     await category(current.categorySuggestionId);
     const mediaCount = await CatalogMediaAsset.countDocuments({
       $or: [
@@ -303,19 +303,19 @@ export class RunnerCatalogService {
 export class CatalogReviewService {
   private readonly email = new EmailService();
 
-  private async notifySubmissionDecision(submissionId: string, runnerId: string | undefined, productTitle: string, decision: 'approved' | 'rejected' | 'changes_requested', reason?: string) {
-    if (!runnerId) return;
-    const runner = await RunnerProfile.findById(runnerId).select('accountId').lean() as any;
-    if (!runner?.accountId) return;
+  private async notifySubmissionDecision(submissionId: string, marketAssociateId: string | undefined, productTitle: string, decision: 'approved' | 'rejected' | 'changes_requested', reason?: string) {
+    if (!marketAssociateId) return;
+    const marketAssociate = await MarketAssociateProfile.findById(marketAssociateId).select('accountId').lean() as any;
+    if (!marketAssociate?.accountId) return;
     await createCommerceNotification({
       eventKey: `submission:${submissionId}:${decision}`,
-      userId: runner.accountId,
+      userId: marketAssociate.accountId,
       title: decision === 'approved' ? 'Your submission was approved' : decision === 'rejected' ? 'Your submission was not approved' : 'Changes requested on your submission',
       body: decision === 'approved' ? `${productTitle} was approved and is now live on Hook.` : decision === 'rejected' ? `${productTitle} was not approved.` : `${productTitle} needs a few changes before it can go live.`,
       type: 'submission_decision',
       data: { decision, productTitle },
     }).catch(() => undefined);
-    const account = await User.findById(runner.accountId).select('email firstName').lean() as any;
+    const account = await User.findById(marketAssociate.accountId).select('email firstName').lean() as any;
     if (account?.email) {
       await this.email.sendSubmissionDecision({
         to: account.email,
@@ -380,7 +380,7 @@ export class CatalogReviewService {
     if (query.status) filter.status = query.status;
     if (query.stateId) filter.sourceStateId = query.stateId;
     if (query.marketId) filter.marketId = query.marketId;
-    if (query.runnerId) filter.runnerId = query.runnerId;
+    if (query.marketAssociateId) filter.marketAssociateId = query.marketAssociateId;
     if (query.categoryId) filter.categorySuggestionId = query.categoryId;
     if (query.cursor) filter._id = { $lt: query.cursor };
     if (query.q) filter.$text = { $search: String(query.q) };
@@ -396,8 +396,8 @@ export class CatalogReviewService {
     if (stateIds?.length) filter.sourceStateId = { $in: stateIds };
     const submission = await ProductSubmission.findOne(filter).lean({ virtuals: true });
     if (!submission) throw new HttpError(404, 'Submission not found', undefined, 'NOT_FOUND');
-    const [runner, market, categoryRecord, media] = await Promise.all([
-      RunnerProfile.findById(submission.runnerId).select('publicId accountId').lean({ virtuals: true }),
+    const [marketAssociate, market, categoryRecord, media] = await Promise.all([
+      MarketAssociateProfile.findById(submission.marketAssociateId).select('publicId accountId').lean({ virtuals: true }),
       Market.findById(submission.marketId).select('publicId name stateId cityId hubId').lean({ virtuals: true }),
       Category.findById(submission.categorySuggestionId).select('publicId name slug').lean({ virtuals: true }),
       CatalogMediaAsset.find({
@@ -411,7 +411,7 @@ export class CatalogReviewService {
     const mediaService = new CatalogMediaService();
     return {
       ...submission,
-      runner,
+      marketAssociate,
       market,
       category: categoryRecord,
       media: media.map((asset) => ({
@@ -472,7 +472,7 @@ export class CatalogReviewService {
         { returnDocument: 'after' },
       ).lean({ virtuals: true });
       if (!updated) throw new HttpError(409, 'Another reviewer changed this submission', undefined, 'SUBMISSION_REVIEW_CONFLICT');
-      await this.notifySubmissionDecision(current._id.toString(), current.runnerId, current.basicTitle, action, input.reason);
+      await this.notifySubmissionDecision(current._id.toString(), current.marketAssociateId, current.basicTitle, action, input.reason);
       return updated;
     }
 
@@ -489,7 +489,7 @@ export class CatalogReviewService {
           hookId: productPublicId,
           sourceSubmissionId: current._id.toString(),
           sourceMarketVendorId: current.marketVendorId,
-          sourceRunnerId: current.runnerId,
+          sourceMarketAssociateId: current.marketAssociateId,
           marketId: current.marketId,
           sourceStateId: current.sourceStateId,
           categoryId: current.categorySuggestionId,
@@ -512,7 +512,7 @@ export class CatalogReviewService {
           availabilityStatus: current.availabilityStatus,
           customerAvailabilityNote: current.availabilityNote,
           negotiationRules: { enabled: false, maximumCustomerOffers: 3, acceptedQuoteExpiryMinutes: 30 },
-          commercialApproval: { approved: false, sourceRunnerId: current.runnerId },
+          commercialApproval: { approved: false, sourceMarketAssociateId: current.marketAssociateId },
           source: 'admin',
           viewCount: 0,
           orderCount: 0,
@@ -567,7 +567,7 @@ export class CatalogReviewService {
           { session: transaction },
         );
       });
-      await this.notifySubmissionDecision(current._id.toString(), current.runnerId, current.basicTitle, 'approved', input.reason);
+      await this.notifySubmissionDecision(current._id.toString(), current.marketAssociateId, current.basicTitle, 'approved', input.reason);
       return result;
     } finally {
       await transaction.endSession();

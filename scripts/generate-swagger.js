@@ -530,7 +530,7 @@ function op(tag, summary, options = {}) {
 const paths = {};
 
 Object.assign(schemas, {
-  RunnerSubmissionRequest: {
+  MarketAssociateSubmissionRequest: {
     type: 'object',
     required: ['marketId', 'marketVendorId', 'categorySuggestionId', 'basicTitle', 'basePriceMinor', 'currency', 'availabilityStatus'],
     properties: {
@@ -676,9 +676,9 @@ add('post', `${apiPrefix}/auth/signup/start`, op('Authentication', 'Start staged
 add('post', `${apiPrefix}/auth/signup/verify`, op('Authentication', 'Verify staged signup OTP', { public: true, requestBody: body('SignupVerifyRequest') }));
 add('post', `${apiPrefix}/auth/signup/complete`, op('Authentication', 'Complete staged signup and issue tokens', { public: true, requestBody: body('SignupCompleteRequest') }));
 add('post', `${apiPrefix}/auth/register`, op('Authentication', 'Register shopper account', { public: true, requestBody: body('RegisterRequest') }));
-add('post', `${apiPrefix}/auth/login`, op('Authentication', 'Sign in a customer, staff, Runner, or Hook Partner account', { public: true, requestBody: body('LoginRequest') }));
+add('post', `${apiPrefix}/auth/login`, op('Authentication', 'Sign in a customer, staff, Market Associate, or Hook Partner account', { public: true, requestBody: body('LoginRequest') }));
 add('post', `${apiPrefix}/auth/google`, op('Authentication', 'Login or create shopper account with a verified Google ID token', { public: true, requestBody: body('GoogleAuthRequest') }));
-add('post', `${apiPrefix}/auth/invitations/accept`, op('Authentication', 'Activate an invited Staff, Runner, or Partner account and create its password', { public: true, requestBody: body('AccountInvitationAcceptRequest') }));
+add('post', `${apiPrefix}/auth/invitations/accept`, op('Authentication', 'Activate an invited Staff, Market Associate, or Partner account and create its password', { public: true, requestBody: body('AccountInvitationAcceptRequest') }));
 add('post', `${apiPrefix}/auth/verify-otp`, op('Authentication', 'Verify email OTP', { public: true, requestBody: body('OtpRequest') }));
 add('post', `${apiPrefix}/auth/refresh`, op('Authentication', 'Refresh access token', { public: true, requestBody: body('RefreshRequest') }));
 add('post', `${apiPrefix}/auth/password/forgot`, op('Authentication', 'Request password reset code', { public: true, requestBody: body('PasswordForgotRequest') }));
@@ -785,12 +785,12 @@ add('post', `${apiPrefix}/admin/orders/{orderId}/fulfilments/{vendorId}/{decisio
 add('get', `${apiPrefix}/admin/dispatch/active`, op('Admin Dispatch', 'List active deliveries'));
 add('get', `${apiPrefix}/admin/dispatch`, op('Admin Dispatch', 'List delivery records', { parameters: [query('page', { type: 'integer' }), query('limit', { type: 'integer' })] }));
 add('get', `${apiPrefix}/admin/dispatch/drivers`, op('Admin Dispatch', 'List active drivers', { parameters: [query('stateCode')] }));
-add('get', `${apiPrefix}/admin/runners`, op('Admin Runners', 'List runners', { parameters: [query('page', { type: 'integer' }), query('limit', { type: 'integer' }), query('stateCode')] }));
-add('get', `${apiPrefix}/admin/runners/stats`, op('Admin Runners', 'Get runner operational statistics'));
-add('get', `${apiPrefix}/admin/runners/queue`, op('Admin Runners', 'List runner catalog review queue'));
-add('get', `${apiPrefix}/admin/runners/{id}`, op('Admin Runners', 'Get runner detail', { parameters: [param('id', 'Runner id')] }));
-add('patch', `${apiPrefix}/admin/runners/{id}/toggle`, op('Admin Runners', 'Toggle runner active status', { parameters: [param('id', 'Runner id')] }));
-add('patch', `${apiPrefix}/admin/runners/{id}/state`, op('Admin Runners', 'Assign runner to an active operating state', { parameters: [param('id', 'Runner id')], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['stateCode'], properties: { stateCode: { type: 'string', example: 'LA' } } } } } } }));
+add('get', `${apiPrefix}/admin/market-associates`, op('Admin Market Associates', 'List market associates', { parameters: [query('page', { type: 'integer' }), query('limit', { type: 'integer' }), query('stateCode')] }));
+add('get', `${apiPrefix}/admin/market-associates/stats`, op('Admin Market Associates', 'Get market associate operational statistics'));
+add('get', `${apiPrefix}/admin/market-associates/queue`, op('Admin Market Associates', 'List market associate catalog review queue'));
+add('get', `${apiPrefix}/admin/market-associates/{id}`, op('Admin Market Associates', 'Get market associate detail', { parameters: [param('id', 'Market Associate id')] }));
+add('patch', `${apiPrefix}/admin/market-associates/{id}/toggle`, op('Admin Market Associates', 'Toggle market associate active status', { parameters: [param('id', 'Market Associate id')] }));
+add('patch', `${apiPrefix}/admin/market-associates/{id}/state`, op('Admin Market Associates', 'Assign market associate to an active operating state', { parameters: [param('id', 'Market Associate id')], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['stateCode'], properties: { stateCode: { type: 'string', example: 'LA' } } } } } } }));
 add('get', `${apiPrefix}/admin/booths`, op('Admin Booths', 'List booths', { parameters: [query('page', { type: 'integer' }), query('limit', { type: 'integer' }), query('stateCode')] }));
 add('get', `${apiPrefix}/admin/booths/analytics`, op('Admin Booths', 'Get booth analytics'));
 add('get', `${apiPrefix}/admin/booths/{id}`, op('Admin Booths', 'Get booth detail', { parameters: [param('id', 'Booth id')] }));
@@ -845,7 +845,7 @@ const platformResources = [
   ['staff', 'Staff Accounts'], ['roles', 'Roles and Permissions'], ['permissions', 'Roles and Permissions'],
   ['states', 'Platform Geography'], ['cities', 'Platform Geography'], ['zones', 'Platform Geography'],
   ['markets', 'Operational Network'], ['hubs', 'Operational Network'], ['partners', 'Operational Network'],
-  ['runners', 'Operational Network'], ['runner-assignments', 'Operational Network'],
+  ['market-associates', 'Operational Network'], ['market-associate-assignments', 'Operational Network'],
   ['audit-logs', 'Platform Audit'],
 ];
 for (const [resource, tag] of platformResources) {
@@ -859,42 +859,42 @@ for (const [resource, tag] of platformResources) {
 }
 add('get', `${apiPrefix}/admin/public-id-counters`, op('Platform Governance', 'Inspect annual public Hook ID counters'));
 add('post', `${apiPrefix}/admin/public-id-counters/repair`, op('Platform Governance', 'Repair a public ID counter with mandatory reason and audit'));
-for (const resource of ['staff', 'runners', 'partners']) {
+for (const resource of ['staff', 'market-associates', 'partners']) {
   add('post', `${apiPrefix}/admin/${resource}/{id}/resend-invitation`, op('Platform Governance', `Revoke the previous token and resend a ${resource.slice(0, -1)} activation invitation`, {
     parameters: [param('id', 'Public Hook ID')],
   }));
 }
-add('get', `${apiPrefix}/runner/profile`, op('Runner Foundation', 'Get the authenticated Runner profile and scope'));
-add('get', `${apiPrefix}/runner/markets`, op('Runner Foundation', 'List only Markets assigned to the authenticated Runner'));
-add('get', `${apiPrefix}/runner/markets/{id}`, op('Market Supplier Operations', 'Get an assigned Market with suppliers, Products, submissions, and collections.', { parameters: [param('id', 'MAR public ID')] }));
-add('get', `${apiPrefix}/runner/markets/{id}/vendors`, op('Market Supplier Operations', 'List suppliers in an assigned Market.', { parameters: [param('id', 'MAR public ID'), query('q')] }));
-add('post', `${apiPrefix}/runner/markets/{id}/vendors`, op('Market Supplier Operations', 'Create a Market supplier and issue a single-use invitation.', { parameters: [param('id', 'MAR public ID')], requestBody: body('MarketVendorRequest') }));
-add('get', `${apiPrefix}/runner/market-vendors/{id}`, op('Market Supplier Operations', 'Get one supplier within the Runner Market scope.', { parameters: [param('id', 'MVD public ID')] }));
-add('patch', `${apiPrefix}/runner/market-vendors/{id}`, op('Market Supplier Operations', 'Update a supplier within the Runner Market scope.', { parameters: [param('id', 'MVD public ID')], requestBody: body('MarketVendorRequest', false) }));
-add('post', `${apiPrefix}/runner/market-vendors/{id}/invite`, op('Market Supplier Operations', 'Revoke pending invitations and issue a new single-use supplier invitation.', { parameters: [param('id', 'MVD public ID')] }));
-add('post', `${apiPrefix}/runner/product-submissions/{id}/collection`, op('Market Supplier Operations', 'Record collected quantity, procurement cost, and optional supplier payment.', { parameters: [param('id', 'SUB public ID')], requestBody: body('VendorCollectionRequest') }));
-add('get', `${apiPrefix}/runner/vendor-collections`, op('Market Supplier Operations', 'List collections recorded by the authenticated Runner.', { parameters: [query('marketId')] }));
-add('get', `${apiPrefix}/runner/availability-checks`, op('Catalog Availability', 'List source-owned or eligible fallback Market availability checks.'));
-add('post', `${apiPrefix}/runner/products/{id}/availability/confirm`, op('Catalog Availability', 'Confirm available or limited supplier availability with optimistic versioning.', { parameters: [param('id', 'PRD public ID')], requestBody: body('AvailabilityConfirmRequest') }));
-add('post', `${apiPrefix}/runner/products/{id}/availability/report`, op('Catalog Availability', 'Report a Product unavailable and keep it paused.', { parameters: [param('id', 'PRD public ID')], requestBody: body('AvailabilityReportRequest') }));
+add('get', `${apiPrefix}/market-associate/profile`, op('Market Associate Foundation', 'Get the authenticated Market Associate profile and scope'));
+add('get', `${apiPrefix}/market-associate/markets`, op('Market Associate Foundation', 'List only Markets assigned to the authenticated Market Associate'));
+add('get', `${apiPrefix}/market-associate/markets/{id}`, op('Market Supplier Operations', 'Get an assigned Market with suppliers, Products, submissions, and collections.', { parameters: [param('id', 'MAR public ID')] }));
+add('get', `${apiPrefix}/market-associate/markets/{id}/vendors`, op('Market Supplier Operations', 'List suppliers in an assigned Market.', { parameters: [param('id', 'MAR public ID'), query('q')] }));
+add('post', `${apiPrefix}/market-associate/markets/{id}/vendors`, op('Market Supplier Operations', 'Create a Market supplier and issue a single-use invitation.', { parameters: [param('id', 'MAR public ID')], requestBody: body('MarketVendorRequest') }));
+add('get', `${apiPrefix}/market-associate/market-vendors/{id}`, op('Market Supplier Operations', 'Get one supplier within the Market Associate Market scope.', { parameters: [param('id', 'MVD public ID')] }));
+add('patch', `${apiPrefix}/market-associate/market-vendors/{id}`, op('Market Supplier Operations', 'Update a supplier within the Market Associate Market scope.', { parameters: [param('id', 'MVD public ID')], requestBody: body('MarketVendorRequest', false) }));
+add('post', `${apiPrefix}/market-associate/market-vendors/{id}/invite`, op('Market Supplier Operations', 'Revoke pending invitations and issue a new single-use supplier invitation.', { parameters: [param('id', 'MVD public ID')] }));
+add('post', `${apiPrefix}/market-associate/product-submissions/{id}/collection`, op('Market Supplier Operations', 'Record collected quantity, procurement cost, and optional supplier payment.', { parameters: [param('id', 'SUB public ID')], requestBody: body('VendorCollectionRequest') }));
+add('get', `${apiPrefix}/market-associate/vendor-collections`, op('Market Supplier Operations', 'List collections recorded by the authenticated Market Associate.', { parameters: [query('marketId')] }));
+add('get', `${apiPrefix}/market-associate/availability-checks`, op('Catalog Availability', 'List source-owned or eligible fallback Market availability checks.'));
+add('post', `${apiPrefix}/market-associate/products/{id}/availability/confirm`, op('Catalog Availability', 'Confirm available or limited supplier availability with optimistic versioning.', { parameters: [param('id', 'PRD public ID')], requestBody: body('AvailabilityConfirmRequest') }));
+add('post', `${apiPrefix}/market-associate/products/{id}/availability/report`, op('Catalog Availability', 'Report a Product unavailable and keep it paused.', { parameters: [param('id', 'PRD public ID')], requestBody: body('AvailabilityReportRequest') }));
 add('post', `${apiPrefix}/public/vendor-invitations/{token}/accept`, op('Market Supplier Operations', 'Accept a single-use supplier consent invitation without creating a login.', { public: true, parameters: [param('token', 'Single-use invitation token')] }));
 add('get', `${apiPrefix}/partner/profile`, op('Partner Foundation', 'Get the authenticated Hook Partner profile'));
 add('get', `${apiPrefix}/partner/location`, op('Partner Foundation', 'Get only the authenticated Hook Partner location'));
 
-// Phase 3: Runner capture, Commercial Catalog, and deterministic negotiation.
-add('get', `${apiPrefix}/runner/dashboard`, op('Runner Catalog Capture', 'Get self-scoped catalog capture metrics.'));
-add('get', `${apiPrefix}/runner/product-submissions`, op('Runner Catalog Capture', 'List the authenticated Runner submissions with cursor pagination.'));
-add('post', `${apiPrefix}/runner/product-submissions`, op('Runner Catalog Capture', 'Create a Runner product-submission draft.', { requestBody: body('RunnerSubmissionRequest') }));
-add('get', `${apiPrefix}/runner/product-submissions/{id}`, op('Runner Catalog Capture', 'Get one owned submission.', { parameters: [param('id', 'SUB public ID')] }));
-add('patch', `${apiPrefix}/runner/product-submissions/{id}`, op('Runner Catalog Capture', 'Update an owned draft or requested-changes submission with optimistic versioning.', { parameters: [param('id', 'SUB public ID')], requestBody: body('RunnerSubmissionRequest') }));
-add('post', `${apiPrefix}/runner/product-submissions/{id}/submit`, op('Runner Catalog Capture', 'Submit a complete capture to Catalog Review.', { parameters: [param('id', 'SUB public ID')] }));
+// Phase 3: Market Associate capture, Commercial Catalog, and deterministic negotiation.
+add('get', `${apiPrefix}/market-associate/dashboard`, op('Market Associate Catalog Capture', 'Get self-scoped catalog capture metrics.'));
+add('get', `${apiPrefix}/market-associate/product-submissions`, op('Market Associate Catalog Capture', 'List the authenticated Market Associate submissions with cursor pagination.'));
+add('post', `${apiPrefix}/market-associate/product-submissions`, op('Market Associate Catalog Capture', 'Create a Market Associate product-submission draft.', { requestBody: body('MarketAssociateSubmissionRequest') }));
+add('get', `${apiPrefix}/market-associate/product-submissions/{id}`, op('Market Associate Catalog Capture', 'Get one owned submission.', { parameters: [param('id', 'SUB public ID')] }));
+add('patch', `${apiPrefix}/market-associate/product-submissions/{id}`, op('Market Associate Catalog Capture', 'Update an owned draft or requested-changes submission with optimistic versioning.', { parameters: [param('id', 'SUB public ID')], requestBody: body('MarketAssociateSubmissionRequest') }));
+add('post', `${apiPrefix}/market-associate/product-submissions/{id}/submit`, op('Market Associate Catalog Capture', 'Submit a complete capture to Catalog Review.', { parameters: [param('id', 'SUB public ID')] }));
 add('get', `${apiPrefix}/catalog/media/readiness`, op('Catalog Media', 'Check signed catalog media availability without exposing provider credentials.'));
 add('post', `${apiPrefix}/catalog/media/upload-intents`, op('Catalog Media', 'Create a signed authenticated Cloudinary upload intent. Returns MEDIA_PROVIDER_UNAVAILABLE when signed uploads are disabled or not configured.'));
 add('post', `${apiPrefix}/catalog/media/finalize`, op('Catalog Media', 'Verify provider metadata and finalize an owned catalog asset.'));
 
 add('get', `${apiPrefix}/admin/catalog/review/dashboard`, op('Catalog Review', 'Get scoped review metrics.'));
 add('get', `${apiPrefix}/admin/catalog/review`, op('Catalog Review', 'List scoped submission review queue.'));
-add('get', `${apiPrefix}/admin/catalog/review/{id}`, op('Catalog Review', 'Get submission evidence and immutable Runner snapshot.', { parameters: [param('id', 'SUB public ID')] }));
+add('get', `${apiPrefix}/admin/catalog/review/{id}`, op('Catalog Review', 'Get submission evidence and immutable Market Associate snapshot.', { parameters: [param('id', 'SUB public ID')] }));
 add('post', `${apiPrefix}/admin/catalog/review/{id}/start`, op('Catalog Review', 'Claim and start a versioned review.', { parameters: [param('id', 'SUB public ID')] }));
 for (const action of ['request-changes', 'approve', 'reject']) {
   add('post', `${apiPrefix}/admin/catalog/review/{id}/${action}`, op('Catalog Review', `${action.replace('-', ' ')} a submission with an audited reason.`, { parameters: [param('id', 'SUB public ID')], requestBody: body('CatalogReviewDecision') }));
@@ -911,7 +911,7 @@ add('get', `${apiPrefix}/admin/markets/{id}/vendors`, op('Market Supplier Operat
 add('get', `${apiPrefix}/admin/market-vendors/{id}`, op('Market Supplier Operations', 'Get a masked supplier operations record.', { parameters: [param('id', 'MVD public ID')] }));
 add('patch', `${apiPrefix}/admin/market-vendors/{id}`, op('Market Supplier Operations', 'Update a supplier with an audited reason.', { parameters: [param('id', 'MVD public ID')], requestBody: body('MarketVendorRequest', false) }));
 add('get', `${apiPrefix}/admin/market-vendors/{id}/payment-details`, op('Market Supplier Finance', 'View decrypted supplier bank details. Finance or Super Admin only; requires an audit reason.', { parameters: [param('id', 'MVD public ID'), query('reason')] }));
-add('get', `${apiPrefix}/admin/vendor-collections`, op('Market Supplier Operations', 'List State-scoped supplier collections.', { parameters: [query('marketId'), query('vendorId'), query('runnerId'), query('status')] }));
+add('get', `${apiPrefix}/admin/vendor-collections`, op('Market Supplier Operations', 'List State-scoped supplier collections.', { parameters: [query('marketId'), query('vendorId'), query('marketAssociateId'), query('status')] }));
 add('post', `${apiPrefix}/admin/vendor-collections/{id}/reconcile`, op('Market Supplier Finance', 'Reconcile or dispute a supplier payment with an audited reason.', { parameters: [param('id', 'VCL public ID')], requestBody: body('VendorReconcileRequest') }));
 add('get', `${apiPrefix}/admin/settings/catalog-availability`, op('Catalog Availability', 'Get the universal availability-check window and overdue count.'));
 add('patch', `${apiPrefix}/admin/settings/catalog-availability`, op('Catalog Availability', 'Update the universal availability-check window with an audited reason.'));
@@ -959,24 +959,24 @@ add('get', `${apiPrefix}/admin/commerce/outbox`, op('Commerce Operations', 'Insp
 add('get', `${apiPrefix}/admin/commerce/settings`, op('Commerce Operations', 'Get Super Admin commerce defaults.'));
 add('patch', `${apiPrefix}/admin/commerce/settings`, op('Commerce Operations', 'Update audited Super Admin commerce defaults.'));
 
-// Phase 5: Runner fulfilment, Hub custody, logistics, Partner collection, returns, and refunds.
-add('get', `${apiPrefix}/runner/fulfilments/dashboard`, op('Runner Fulfilment', 'Get self-scoped fulfilment metrics and SLA work.'));
-add('get', `${apiPrefix}/runner/fulfilments`, op('Runner Fulfilment', 'List fulfilment tasks assigned to the authenticated Runner.', { parameters: [query('status'), query('limit', { type: 'integer' })] }));
-add('get', `${apiPrefix}/runner/fulfilments/{id}`, op('Runner Fulfilment', 'Get one assigned fulfilment task and its customer-safe item details.', { parameters: [param('id', 'FUL public ID')] }));
+// Phase 5: Market Associate fulfilment, Hub custody, logistics, Partner collection, returns, and refunds.
+add('get', `${apiPrefix}/market-associate/fulfilments/dashboard`, op('Market Associate Fulfilment', 'Get self-scoped fulfilment metrics and SLA work.'));
+add('get', `${apiPrefix}/market-associate/fulfilments`, op('Market Associate Fulfilment', 'List fulfilment tasks assigned to the authenticated Market Associate.', { parameters: [query('status'), query('limit', { type: 'integer' })] }));
+add('get', `${apiPrefix}/market-associate/fulfilments/{id}`, op('Market Associate Fulfilment', 'Get one assigned fulfilment task and its customer-safe item details.', { parameters: [param('id', 'FUL public ID')] }));
 for (const action of ['accept', 'start_sourcing', 'secure', 'begin_packing', 'pack']) {
-  add('post', `${apiPrefix}/runner/fulfilments/{id}/${action}`, op('Runner Fulfilment', `Runner ${action.replaceAll('_', ' ')} action with optimistic versioning.`, { parameters: [param('id', 'FUL public ID')] }));
+  add('post', `${apiPrefix}/market-associate/fulfilments/{id}/${action}`, op('Market Associate Fulfilment', `Market Associate ${action.replaceAll('_', ' ')} action with optimistic versioning.`, { parameters: [param('id', 'FUL public ID')] }));
 }
-add('post', `${apiPrefix}/runner/fulfilments/{id}/issues`, op('Runner Fulfilment', 'Report a sourcing or fulfilment exception.', { parameters: [param('id', 'FUL public ID'), idempotencyHeader(false)] }));
+add('post', `${apiPrefix}/market-associate/fulfilments/{id}/issues`, op('Market Associate Fulfilment', 'Report a sourcing or fulfilment exception.', { parameters: [param('id', 'FUL public ID'), idempotencyHeader(false)] }));
 add('get', `${apiPrefix}/admin/fulfilment/control-tower`, op('Fulfilment Operations', 'View State/Hub-scoped fulfilment tasks, exceptions, shipments, and returns.'));
 add('get', `${apiPrefix}/admin/fulfilment/tasks/{id}`, op('Fulfilment Operations', 'Get a State/Hub-scoped fulfilment task, order summary, and assigned item snapshots.', { parameters: [param('id', 'FUL public ID')] }));
-add('get', `${apiPrefix}/admin/fulfilment/runners`, op('Fulfilment Operations', 'List active compatible Runner profiles for audited reassignment.', { parameters: [query('stateId'), query('limit', { type: 'integer' })] }));
+add('get', `${apiPrefix}/admin/fulfilment/market-associates`, op('Fulfilment Operations', 'List active compatible Market Associate profiles for audited reassignment.', { parameters: [query('stateId'), query('limit', { type: 'integer' })] }));
 add('get', `${apiPrefix}/admin/fulfilment/hubs`, op('Fulfilment Operations', 'List active compatible Dispatch Hubs for audited reassignment.', { parameters: [query('stateId'), query('limit', { type: 'integer' })] }));
-add('post', `${apiPrefix}/admin/fulfilment/tasks/{id}/reassign`, op('Fulfilment Operations', 'Reassign a task only to a compatible active Runner and Hub with an audited reason.', { parameters: [param('id', 'FUL public ID')] }));
+add('post', `${apiPrefix}/admin/fulfilment/tasks/{id}/reassign`, op('Fulfilment Operations', 'Reassign a task only to a compatible active Market Associate and Hub with an audited reason.', { parameters: [param('id', 'FUL public ID')] }));
 add('get', `${apiPrefix}/admin/fulfilment/exceptions`, op('Fulfilment Operations', 'List open State/Hub-scoped fulfilment exceptions.', { parameters: [query('stateId'), query('hubId')] }));
 add('patch', `${apiPrefix}/admin/fulfilment/exceptions/{id}`, op('Fulfilment Operations', 'Move an exception to in-progress, resolved, or dismissed with an audited reason.', { parameters: [param('id', 'EXC public ID')] }));
-add('get', `${apiPrefix}/admin/fulfilment/hub`, op('Hub Operations', 'View inbound Runner packages, Hub packages, exceptions, and consolidations.'));
+add('get', `${apiPrefix}/admin/fulfilment/hub`, op('Hub Operations', 'View inbound Market Associate packages, Hub packages, exceptions, and consolidations.'));
 add('get', `${apiPrefix}/admin/fulfilment/consolidations`, op('Hub Operations', 'List State/Hub-scoped consolidation records.', { parameters: [query('status'), query('stateId'), query('hubId'), query('limit', { type: 'integer' })] }));
-add('post', `${apiPrefix}/admin/fulfilment/packages/{id}/receive`, op('Hub Operations', 'Receive a Runner package after validating its one-time scan credential.', { parameters: [param('id', 'RPK public ID'), idempotencyHeader()] }));
+add('post', `${apiPrefix}/admin/fulfilment/packages/{id}/receive`, op('Hub Operations', 'Receive a Market Associate package after validating its one-time scan credential.', { parameters: [param('id', 'RPK public ID'), idempotencyHeader()] }));
 add('post', `${apiPrefix}/admin/fulfilment/packages/{id}/qc`, op('Hub Operations', 'Record a visible quality-check result with optimistic versioning.', { parameters: [param('id', 'HPK public ID')] }));
 add('post', `${apiPrefix}/admin/fulfilment/orders/{id}/consolidate`, op('Hub Operations', 'Create a single complete State Order consolidation; incomplete orders are rejected.', { parameters: [param('id', 'ORD public ID')] }));
 add('post', `${apiPrefix}/admin/fulfilment/consolidations/{id}/seal`, op('Hub Operations', 'Seal one complete customer parcel for dispatch.', { parameters: [param('id', 'CON public ID')] }));
@@ -989,7 +989,7 @@ add('get', `${apiPrefix}/partner/fulfilment/custody`, op('Partner Custody', 'Lis
 add('get', `${apiPrefix}/partner/fulfilment/custody/{orderId}`, op('Partner Custody', 'Get one Partner custody record without exposing the collection-code hash.', { parameters: [param('orderId', 'ORD public ID')] }));
 add('post', `${apiPrefix}/partner/fulfilment/custody/{id}/receive`, op('Partner Custody', 'Receive one package into the authenticated Partner location.', { parameters: [param('id', 'PCU public ID'), idempotencyHeader(false)] }));
 add('post', `${apiPrefix}/partner/fulfilment/custody/{id}/release`, op('Partner Custody', 'Release a package only after verified payment and a valid one-time collection code.', { parameters: [param('id', 'PCU public ID'), idempotencyHeader(false)] }));
-add('get', `${apiPrefix}/orders/{id}/fulfilment`, op('Customer Fulfilment', 'Return customer-safe Runner, Hub, shipment, Partner custody, return, and refund progress.', { parameters: [param('id', 'ORD public ID')] }));
+add('get', `${apiPrefix}/orders/{id}/fulfilment`, op('Customer Fulfilment', 'Return customer-safe Market Associate, Hub, shipment, Partner custody, return, and refund progress.', { parameters: [param('id', 'ORD public ID')] }));
 add('post', `${apiPrefix}/orders/{id}/returns`, op('Returns and Refunds', 'Create an eligible customer return issue within the delivery/collection window.', { parameters: [param('id', 'ORD public ID')] }));
 add('get', `${apiPrefix}/admin/fulfilment/returns`, op('Returns and Refunds', 'List State-scoped customer return requests.'));
 add('patch', `${apiPrefix}/admin/fulfilment/returns/{id}/review`, op('Returns and Refunds', 'Approve or reject a return with a mandatory reason.', { parameters: [param('id', 'RET public ID')] }));
@@ -1037,20 +1037,20 @@ const spec = {
     { url: 'https://hook-api.onrender.com', description: 'Production server' },
   ],
   tags: tags.filter((tag) => !inactiveTags.has(tag.name)).concat([
-    { name: 'Admin Runners', description: 'Admin Runner identity, scope, and assignment controls.' },
+    { name: 'Admin Market Associates', description: 'Admin Market Associate identity, scope, and assignment controls.' },
     { name: 'Public Geography', description: 'Safe public State, City, Zone, and Market configuration.' },
     { name: 'Staff Accounts', description: 'Staff identity, role, scope, and session controls.' },
     { name: 'Roles and Permissions', description: 'Live RBAC configuration.' },
     { name: 'Platform Geography', description: 'State, City, and Service Zone administration.' },
-    { name: 'Operational Network', description: 'Market, Dispatch Hub, Hook Partner, and Runner administration.' },
+    { name: 'Operational Network', description: 'Market, Dispatch Hub, Hook Partner, and Market Associate administration.' },
     { name: 'Platform Audit', description: 'Append-only sanitized operational audit events.' },
     { name: 'Platform Governance', description: 'Super-admin platform counter governance.' },
-    { name: 'Runner Foundation', description: 'Self-scoped Runner account foundation.' },
+    { name: 'Market Associate Foundation', description: 'Self-scoped Market Associate account foundation.' },
     { name: 'Partner Foundation', description: 'Self-scoped Hook Partner account foundation.' },
-    { name: 'Runner Catalog Capture', description: 'Self-scoped Runner Market catalog capture and submission workflow.' },
+    { name: 'Market Associate Catalog Capture', description: 'Self-scoped Market Associate Market catalog capture and submission workflow.' },
     { name: 'Market Supplier Operations', description: 'Market-scoped supplier invitations, sourcing collections, and masked operational records.' },
     { name: 'Market Supplier Finance', description: 'Finance-restricted supplier payment reconciliation and audited bank-detail access.' },
-    { name: 'Catalog Availability', description: 'Universal Product availability checks, Runner confirmation, and overdue escalation.' },
+    { name: 'Catalog Availability', description: 'Universal Product availability checks, Market Associate confirmation, and overdue escalation.' },
     { name: 'Catalog Media', description: 'Signed private catalog media upload and verification.' },
     { name: 'Catalog Review', description: 'Scoped submission review and approval workflow.' },
     { name: 'Commercial Catalog', description: 'Commercial content, pricing, negotiation rules, and publication lifecycle.' },
@@ -1060,9 +1060,9 @@ const spec = {
     { name: 'Payments', description: 'Provider-neutral payment lifecycle with active Paystack Hosted Checkout.' },
     { name: 'Partner Commerce', description: 'Self-scoped prepaid assisted ordering through Hook Partners.' },
     { name: 'Commerce Operations', description: 'State-scoped POD, payment evidence, settings, and outbox operations.' },
-    { name: 'Runner Fulfilment', description: 'Self-scoped Runner sourcing, packing, and issue workflows.' },
+    { name: 'Market Associate Fulfilment', description: 'Self-scoped Market Associate sourcing, packing, and issue workflows.' },
     { name: 'Fulfilment Operations', description: 'State/Hub-scoped fulfilment control and reassignment.' },
-    { name: 'Hub Operations', description: 'Runner package receipt, visible QC, consolidation, and sealing.' },
+    { name: 'Hub Operations', description: 'Market Associate package receipt, visible QC, consolidation, and sealing.' },
     { name: 'Fulfilment Logistics', description: 'Shipment booking, explicit transitions, and provider webhooks.' },
     { name: 'Partner Custody', description: 'Initiating Partner package custody and customer collection.' },
     { name: 'Customer Fulfilment', description: 'Customer-safe post-order fulfilment progress.' },

@@ -24,7 +24,7 @@ async function main() {
   const products = await Product.find({
     $or: [
       { sourceSubmissionId: { $in: submissionRefs } },
-      { sourceRunnerId: { $exists: true, $ne: null } },
+      { sourceMarketAssociateId: { $exists: true, $ne: null } },
     ],
   }).select('_id publicId mediaAssetIds').lean();
   const productRefs = unique(products.flatMap((item) => [item._id, item.publicId]));
@@ -44,12 +44,12 @@ async function main() {
     { label: 'Vendor collections', model: VendorCollection, filter: { productSubmissionId: { $in: submissionRefs } } },
     { label: 'Product variants', model: ProductVariant, filter: { productId: { $in: productRefs } } },
     { label: 'Product media records', model: CatalogMediaAsset, filter: { ownerType: 'product', ownerId: { $in: productRefs } } },
-    { label: 'Runner-created Products', model: Product, filter: { _id: { $in: products.map((item) => item._id) } } },
+    { label: 'Market Associate-created Products', model: Product, filter: { _id: { $in: products.map((item) => item._id) } } },
     { label: 'Submission media records', model: CatalogMediaAsset, filter: { ownerType: 'submission', ownerId: { $in: submissionRefs } } },
     { label: 'Product submissions', model: ProductSubmission, filter: { _id: { $in: submissions.map((item) => item._id) } } },
   ];
 
-  console.log(`${execute ? 'Clearing' : 'Dry run for'} ${submissions.length} Runner upload(s) and ${products.length} linked Product(s)`);
+  console.log(`${execute ? 'Clearing' : 'Dry run for'} ${submissions.length} Market Associate upload(s) and ${products.length} linked Product(s)`);
   for (const target of targets) {
     const count = await target.model.countDocuments(target.filter);
     if (!count) continue;

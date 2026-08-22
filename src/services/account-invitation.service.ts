@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { AccountStatus, AccountType } from '@lib/constants';
 import { hashPassword } from '@lib/security';
 import { AccountInvitation } from '@models/platform/account-invitation.model';
-import { HookPartner, RunnerProfile, StaffProfile } from '@models/platform/operations-accounts.model';
+import { HookPartner, MarketAssociateProfile, StaffProfile } from '@models/platform/operations-accounts.model';
 import { User } from '@models/users/user.model';
 import { HttpError } from '@utils/http';
 import { EmailService } from '@emails/email.service';
@@ -18,10 +18,17 @@ function tokenDigest(token: string) {
 }
 
 function activationPath(accountType: AccountType) {
-  if (accountType === AccountType.RUNNER) return '/runner/activate';
+  if (accountType === AccountType.MARKETASSOCIATE) return '/market-associate/activate';
   if (accountType === AccountType.PARTNER) return '/partner/activate';
   if (accountType === AccountType.CUSTOMER) return '/customer/activate';
   return '/activate';
+}
+
+function accountTypeLabel(accountType: AccountType) {
+  if (accountType === AccountType.MARKETASSOCIATE) return 'Market Associate';
+  if (accountType === AccountType.PARTNER) return 'Partner';
+  if (accountType === AccountType.STAFF) return 'Staff';
+  return 'Hook';
 }
 
 export async function issueAccountInvitation(input: {
@@ -50,7 +57,7 @@ export async function issueAccountInvitation(input: {
   const delivery = await email.sendAccountInvitation({
     email: input.email,
     name: input.name,
-    accountType: input.accountType,
+    accountType: accountTypeLabel(input.accountType),
     activationUrl,
     expiresInHours: invitationTtlHours,
   }).catch((error) => {
@@ -131,7 +138,7 @@ export async function acceptAccountInvitation(
     throw new HttpError(409, 'Account cannot be activated', undefined, 'INVALID_STATE_TRANSITION');
   }
   /**
-   * Staff/Runner/Partner invitees start life as INVITED. Customers created at
+   * Staff/Market Associate/Partner invitees start life as INVITED. Customers created at
    * a Partner's counter start PENDING_PASSWORD instead (they already have a
    * usable account, they just need a password) — both are valid pre-activation
    * states for this endpoint, anything else means the account already moved on.
@@ -155,8 +162,8 @@ export async function acceptAccountInvitation(
   const profileUpdate = { $set: { status: AccountStatus.ACTIVE } };
   if (invitation.accountType === AccountType.STAFF) {
     await StaffProfile.updateOne({ accountId: account.id }, profileUpdate);
-  } else if (invitation.accountType === AccountType.RUNNER) {
-    await RunnerProfile.updateOne({ accountId: account.id }, profileUpdate);
+  } else if (invitation.accountType === AccountType.MARKETASSOCIATE) {
+    await MarketAssociateProfile.updateOne({ accountId: account.id }, profileUpdate);
   } else if (invitation.accountType === AccountType.PARTNER) {
     await HookPartner.updateOne({ accountId: account.id }, profileUpdate);
   }
@@ -177,7 +184,7 @@ export async function acceptAccountInvitation(
     eventKey: `account:${account.id}:activated`,
     userId: account.id,
     title: "You're all set",
-    body: `Your Hook ${invitation.accountType.toLowerCase()} account is now active.`,
+    body: `Your Hook ${accountTypeLabel(invitation.accountType)} account is now active.`,
     type: 'account_activated',
     data: { accountType: invitation.accountType },
   }).catch(() => undefined);
@@ -185,7 +192,7 @@ export async function acceptAccountInvitation(
     await email.sendAccountActivated({
       email: account.email,
       name: account.firstName,
-      accountType: invitation.accountType,
+      accountType: accountTypeLabel(invitation.accountType),
     }).catch(() => undefined);
   }
   return { activated: true, accountType: invitation.accountType };

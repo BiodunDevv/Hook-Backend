@@ -1,12 +1,12 @@
 import { Request, Response } from 'express';
-import { RunnerCatalogService } from '@services/catalog.service';
+import { MarketAssociateCatalogService } from '@services/catalog.service';
 import { recordAudit } from '@services/platform-audit.service';
 import { routeParam } from '@lib/api-utils';
 import { sendCreated, sendSuccess } from '@utils/http';
 import { presentSubmission } from '@services/catalog-presentation.service';
 
-export class RunnerCatalogController {
-  private readonly catalog = new RunnerCatalogService();
+export class MarketAssociateCatalogController {
+  private readonly catalog = new MarketAssociateCatalogService();
 
   dashboard = async (req: Request, res: Response) => {
     sendSuccess(res, await this.catalog.dashboard(req.user!.sub));

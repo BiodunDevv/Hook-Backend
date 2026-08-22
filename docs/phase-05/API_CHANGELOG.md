@@ -1,18 +1,18 @@
 # Phase 5 API Changelog
 
-## Runner
+## Market Associate
 
-- `GET /api/v1/runner/fulfilments/dashboard`
-- `GET /api/v1/runner/fulfilments`
-- `GET /api/v1/runner/fulfilments/:id`
-- `POST /api/v1/runner/fulfilments/:id/{accept|start_sourcing|secure|begin_packing|pack}`
-- `POST /api/v1/runner/fulfilments/:id/issues`
+- `GET /api/v1/market-associate/fulfilments/dashboard`
+- `GET /api/v1/market-associate/fulfilments`
+- `GET /api/v1/market-associate/fulfilments/:id`
+- `POST /api/v1/market-associate/fulfilments/:id/{accept|start_sourcing|secure|begin_packing|pack}`
+- `POST /api/v1/market-associate/fulfilments/:id/issues`
 
 ## Admin
 
 - `GET /api/v1/admin/fulfilment/control-tower`
 - `GET /api/v1/admin/fulfilment/tasks/:id`
-- `GET /api/v1/admin/fulfilment/runners`
+- `GET /api/v1/admin/fulfilment/market-associates`
 - `GET /api/v1/admin/fulfilment/hubs`
 - `POST /api/v1/admin/fulfilment/tasks/:id/reassign`
 - `GET /api/v1/admin/fulfilment/exceptions`

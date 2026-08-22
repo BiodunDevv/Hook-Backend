@@ -2,7 +2,7 @@
 
 Added:
 
-- Runner dashboard, assigned Markets, submission list/detail/create/update/submit/resubmit.
+- Market Associate dashboard, assigned Markets, submission list/detail/create/update/submit/resubmit.
 - Signed catalog media readiness, upload intent, and finalize. Readiness exposes
   capability and upload limits without exposing provider credentials or secret
   configuration details. Upload attempts fail with the stable

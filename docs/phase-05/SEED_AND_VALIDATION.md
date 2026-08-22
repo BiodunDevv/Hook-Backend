@@ -10,7 +10,7 @@ historical references. The Phase 5 seed leaves one complete sealed consolidation
 without a shipment so the development-only logistics simulator has a safe,
 repeatable parcel to book.
 
-The reset runner refuses to drop a database when `NODE_ENV=production` unless
+The reset script refuses to drop a database when `NODE_ENV=production` unless
 `ALLOW_DESTRUCTIVE_SEED=true` is explicitly supplied. Use `npm run seed:dev` for
 the intended development reset path and verify `MONGODB_URI` before running it.
 

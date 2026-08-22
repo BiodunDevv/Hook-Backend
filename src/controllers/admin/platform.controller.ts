@@ -10,8 +10,8 @@ import { OperationCity, OperationState, ServiceZone } from '@models/platform/geo
 import { DispatchHub, Market } from '@models/platform/network.model';
 import {
   HookPartner,
-  RunnerMarketAssignment,
-  RunnerProfile,
+  MarketAssociateMarketAssignment,
+  MarketAssociateProfile,
   StaffProfile,
 } from '@models/platform/operations-accounts.model';
 import { User } from '@models/users/user.model';
@@ -242,14 +242,14 @@ async function resolveStaffScope(input: {
   return { roleIds, stateIds, hubIds };
 }
 
-async function resolveRunnerScope(stateIdentifiers: string[], hubIdentifiers: string[] = []) {
+async function resolveMarketAssociateScope(stateIdentifiers: string[], hubIdentifiers: string[] = []) {
   const states = await Promise.all(stateIdentifiers.map((id) => ensureState(id, true)));
   const stateIds = states.map((state) => state._id.toString());
   const selectedStateIds = new Set(states.flatMap((state) => [state._id.toString(), state.publicId]));
   const hubs = await Promise.all(hubIdentifiers.map(async (id) => {
     const hub = await byIdentifier(DispatchHub, id);
     if (hub.status !== 'active' || !selectedStateIds.has(String(hub.stateId))) {
-      throw new HttpError(409, 'Every selected Dispatch Hub must be active and belong to a Runner state', undefined, 'CONFLICT');
+      throw new HttpError(409, 'Every selected Dispatch Hub must be active and belong to a Market Associate state', undefined, 'CONFLICT');
     }
     return hub;
   }));
@@ -963,7 +963,7 @@ export class PlatformController {
       ...(await presentMarketRecords(market)),
       vendors: detail.vendors,
       assignments: detail.assignments,
-      runners: detail.runners,
+      marketAssociates: detail.marketAssociates,
       submissions: detail.submissions,
       products: detail.products,
       collections: detail.collections,
@@ -1206,185 +1206,314 @@ export class PlatformController {
     sendSuccess(res, { status: AccountStatus.DISABLED, revokedInvitations });
   };
 
-  listRunners = async (req: Request, res: Response) => {
+  listMarketAssociates = async (req: Request, res: Response) => {
     const context = await access(req, 'runners.view');
     const { stateId, hubId } = await stateAndHub(req);
     const { page, limit, skip } = getPagination(req.query);
-    const filter = context.scopeType === ScopeType.GLOBAL
+    const requestedStatus = String(req.query.status || '').trim().toLowerCase();
+    const requestedAvailability = String(req.query.availability || '').trim().toLowerCase();
+    const search = String(req.query.q || '').trim();
+    const filter: Record<string, unknown> = context.scopeType === ScopeType.GLOBAL
       ? { ...(stateId && { stateIds: stateId }), ...(hubId && { hubIds: hubId }) }
       : context.scopeType === ScopeType.HUB
         ? { hubIds: hubId || { $in: context.hubIds } }
         : { stateIds: stateId || { $in: context.stateIds } };
-    const [data, total] = await Promise.all([RunnerProfile.find(filter).skip(skip).limit(limit).lean({ virtuals: true }), RunnerProfile.countDocuments(filter)]);
-    sendSuccess(res, paginated(await presentPlatformRecords(data), total, page, limit));
-  };
-  runnerDetail = async (req: Request, res: Response) => {
-    const context = await access(req, 'runners.view');
-    const runner = await byIdentifier(RunnerProfile, routeParam(req.params.id));
-    if (context.scopeType !== ScopeType.GLOBAL && !runner.stateIds.some((stateId) => context.stateIds.includes(stateId))) {
-      throw new HttpError(403, 'Runner is outside your assigned operational scope', undefined, 'SCOPE_DENIED');
+    if (requestedStatus && Object.values(AccountStatus).includes(requestedStatus as AccountStatus)) {
+      filter.status = requestedStatus;
     }
-    for (const hubId of runner.hubIds) assertScope(context, undefined, hubId);
-    await sendPlatformSuccess(res, runner);
+    if (requestedAvailability) filter.availability = requestedAvailability;
+    if (search) {
+      const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const accounts = await User.find({
+        $or: [
+          { email: { $regex: escaped, $options: 'i' } },
+          { firstName: { $regex: escaped, $options: 'i' } },
+          { lastName: { $regex: escaped, $options: 'i' } },
+          { phone: { $regex: escaped, $options: 'i' } },
+          { publicId: { $regex: escaped, $options: 'i' } },
+        ],
+      }).select('_id').lean();
+      filter.accountId = { $in: accounts.map((account) => account._id.toString()) };
+    }
+    const [data, total] = await Promise.all([
+      MarketAssociateProfile.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean({ virtuals: true }),
+      MarketAssociateProfile.countDocuments(filter),
+    ]);
+    const accountIds = data.map((profile) => profile.accountId).filter(Boolean).map((id) => id.toString());
+    const profileIds = data.map((profile) => profile.id || (profile as any)._id?.toString()).filter(Boolean) as string[];
+    const [accounts, assignmentCounts] = await Promise.all([
+      User.find({ _id: { $in: accountIds } }).select('publicId email firstName lastName phone accountType accountStatus isActive isEmailVerified lastLoginAt').lean(),
+      profileIds.length
+        ? MarketAssociateMarketAssignment.aggregate([
+            { $match: { marketAssociateId: { $in: profileIds }, status: 'active' } },
+            { $group: { _id: '$marketAssociateId', count: { $sum: 1 } } },
+          ])
+        : [],
+    ]);
+    const accountMap = new Map(accounts.map((account) => [account._id.toString(), account]));
+    const assignmentCountMap = new Map((assignmentCounts as any[]).map((row) => [row._id, row.count]));
+    const presented = await presentPlatformRecords(data);
+    const rows = (presented as any[]).map((profile, index) => {
+      const source = data[index];
+      const account = accountMap.get(source.accountId?.toString());
+      return {
+        ...profile,
+        firstName: account?.firstName || '',
+        lastName: account?.lastName || '',
+        email: account?.email || '',
+        phone: account?.phone || '',
+        account: account ? {
+          id: account.publicId || account._id.toString(),
+          publicId: account.publicId,
+          email: account.email,
+          firstName: account.firstName,
+          lastName: account.lastName,
+          phone: account.phone,
+          accountType: account.accountType,
+          accountStatus: account.accountStatus,
+          isActive: account.isActive,
+          isEmailVerified: account.isEmailVerified,
+          lastLoginAt: account.lastLoginAt,
+        } : null,
+        lastLoginAt: account?.lastLoginAt,
+        activeMarketCount: assignmentCountMap.get(source.id || (source as any)._id?.toString()) || 0,
+      };
+    });
+    sendSuccess(res, paginated(rows, total, page, limit));
   };
-  createRunner = async (req: Request, res: Response) => {
+  marketAssociateDetail = async (req: Request, res: Response) => {
+    const context = await access(req, 'runners.view');
+    const marketAssociate = await byIdentifier(MarketAssociateProfile, routeParam(req.params.id));
+    if (context.scopeType !== ScopeType.GLOBAL && !marketAssociate.stateIds.some((stateId) => context.stateIds.includes(stateId))) {
+      throw new HttpError(403, 'Market Associate is outside your assigned operational scope', undefined, 'SCOPE_DENIED');
+    }
+    for (const hubId of marketAssociate.hubIds) assertScope(context, undefined, hubId);
+    const [account, states, hubs, assignments] = await Promise.all([
+      User.findById(marketAssociate.accountId).select('-password -refreshToken').lean({ virtuals: true }),
+      OperationState.find({ $or: marketAssociate.stateIds.flatMap((id) => [
+        { publicId: id },
+        ...(isValidObjectId(id) ? [{ _id: id }] : []),
+      ]) }).select('_id publicId name code status').lean(),
+      DispatchHub.find({ $or: marketAssociate.hubIds.flatMap((id) => [
+        { publicId: id },
+        ...(isValidObjectId(id) ? [{ _id: id }] : []),
+      ]) }).select('_id publicId name status').lean(),
+      MarketAssociateMarketAssignment.find({ marketAssociateId: marketAssociate.id || (marketAssociate as any)._id?.toString() })
+        .sort({ isPrimary: -1, createdAt: -1 })
+        .lean({ virtuals: true }),
+    ]);
+    const marketIds = [...new Set(assignments.map((assignment) => assignment.marketId).filter(Boolean))];
+    const markets = marketIds.length
+      ? await Market.find({ $or: marketIds.flatMap((id) => [
+          { publicId: id },
+          ...(isValidObjectId(id) ? [{ _id: id }] : []),
+        ]) }).select('_id publicId name stateId').lean()
+      : [];
+    const marketMap = new Map(markets.flatMap((market) => [[market._id.toString(), market], [market.publicId, market]]));
+    const presentedProfile = await presentPlatformRecords(marketAssociate);
+    sendSuccess(res, {
+      ...presentedProfile,
+      account: account ? {
+        id: account.publicId || account._id.toString(),
+        publicId: account.publicId,
+        email: account.email,
+        firstName: account.firstName,
+        lastName: account.lastName,
+        phone: account.phone,
+        accountType: account.accountType,
+        accountStatus: account.accountStatus,
+        isActive: account.isActive,
+        isEmailVerified: account.isEmailVerified,
+        lastLoginAt: account.lastLoginAt,
+        createdAt: account.createdAt,
+        updatedAt: account.updatedAt,
+      } : null,
+      states: states.map((state) => ({
+        id: state.publicId || state._id.toString(),
+        publicId: state.publicId,
+        name: state.name,
+        code: state.code,
+        status: state.status,
+      })),
+      hubs: hubs.map((hub) => ({
+        id: hub.publicId || hub._id.toString(),
+        publicId: hub.publicId,
+        name: hub.name,
+        status: hub.status,
+      })),
+      assignments: assignments.map((assignment) => {
+        const market = marketMap.get(assignment.marketId);
+        return {
+          id: assignment.publicId || (assignment as any)._id?.toString(),
+          publicId: assignment.publicId,
+          market: market ? { id: market.publicId || market._id.toString(), publicId: market.publicId, name: market.name } : null,
+          isPrimary: assignment.isPrimary,
+          priority: assignment.priority,
+          status: assignment.status,
+          activeFrom: assignment.activeFrom,
+          activeTo: assignment.activeTo,
+        };
+      }),
+    });
+  };
+  createMarketAssociate = async (req: Request, res: Response) => {
     const context = await access(req, 'runners.manage');
-    const scope = await resolveRunnerScope(req.body.stateIds, req.body.hubIds);
+    const scope = await resolveMarketAssociateScope(req.body.stateIds, req.body.hubIds);
     for (const stateId of scope.stateIds) assertScope(context, stateId);
     for (const hubId of scope.hubIds) assertScope(context, undefined, hubId);
-    const publicId = await nextPublicId('runner');
+    const publicId = await nextPublicId('marketAssociate');
     const account = await User.create({
-      publicId, accountType: AccountType.RUNNER, accountStatus: AccountStatus.INVITED,
+      publicId, accountType: AccountType.MARKETASSOCIATE, accountStatus: AccountStatus.INVITED,
       email: req.body.email, phone: req.body.phone, password: req.body.password ? await hashPassword(req.body.password) : undefined,
-      firstName: req.body.firstName, lastName: req.body.lastName, role: UserRole.RUNNER,
+      firstName: req.body.firstName, lastName: req.body.lastName, role: UserRole.MARKETASSOCIATE,
       isActive: true, isEmailVerified: false, isPhoneVerified: false, scopeType: ScopeType.SELF,
     });
-    const runner = await RunnerProfile.create({ publicId, accountId: account.id, stateIds: scope.stateIds, hubIds: scope.hubIds, availability: 'unavailable', status: 'invited' });
+    const marketAssociate = await MarketAssociateProfile.create({ publicId, accountId: account.id, stateIds: scope.stateIds, hubIds: scope.hubIds, availability: 'unavailable', status: 'invited' });
     const invitation = await issueAccountInvitation({
       accountId: account.id,
-      accountType: AccountType.RUNNER,
+      accountType: AccountType.MARKETASSOCIATE,
       email: account.email,
       name: `${account.firstName} ${account.lastName}`.trim(),
       invitedBy: req.user!.sub,
     });
-    await recordAudit(req, { action: 'runner.created', entityType: 'runner', entityId: runner.id, entityPublicId: publicId, after: runner.toObject() });
-    sendCreated(res, { ...await presentPlatformRecords(runner.toObject()), invitation });
+    await recordAudit(req, { action: 'marketassociate.created', entityType: 'marketassociate', entityId: marketAssociate.id, entityPublicId: publicId, after: marketAssociate.toObject() });
+    sendCreated(res, { ...await presentPlatformRecords(marketAssociate.toObject()), invitation });
   };
-  updateRunner = async (req: Request, res: Response) => {
+  updateMarketAssociate = async (req: Request, res: Response) => {
     const context = await access(req, 'runners.manage');
-    const runner = await byIdentifier(RunnerProfile, routeParam(req.params.id));
-    const scope = await resolveRunnerScope(req.body.stateIds || runner.stateIds, req.body.hubIds || runner.hubIds);
+    const marketAssociate = await byIdentifier(MarketAssociateProfile, routeParam(req.params.id));
+    const scope = await resolveMarketAssociateScope(req.body.stateIds || marketAssociate.stateIds, req.body.hubIds || marketAssociate.hubIds);
     for (const stateId of scope.stateIds) assertScope(context, stateId);
     for (const hubId of scope.hubIds) assertScope(context, undefined, hubId);
-    const updated = await RunnerProfile.findByIdAndUpdate(runner._id, {
+    const updated = await MarketAssociateProfile.findByIdAndUpdate(marketAssociate._id, {
       $set: { ...req.body, stateIds: scope.stateIds, hubIds: scope.hubIds },
     }, { returnDocument: 'after' }).lean({ virtuals: true });
-    await recordAudit(req, { action: 'runner.updated', entityType: 'runner', entityId: runner._id.toString(), entityPublicId: runner.publicId, before: runner, after: updated, reason: req.body.reason });
+    await recordAudit(req, { action: 'marketassociate.updated', entityType: 'marketassociate', entityId: marketAssociate._id.toString(), entityPublicId: marketAssociate.publicId, before: marketAssociate, after: updated, reason: req.body.reason });
     await sendPlatformSuccess(res, updated);
   };
-  runnerStatus = async (req: Request, res: Response) => {
+  marketAssociateStatus = async (req: Request, res: Response) => {
     const context = await access(req, 'runners.manage');
-    const runner = await byIdentifier(RunnerProfile, routeParam(req.params.id));
-    for (const stateId of runner.stateIds) assertScope(context, stateId);
-    for (const hubId of runner.hubIds) assertScope(context, undefined, hubId);
+    const marketAssociate = await byIdentifier(MarketAssociateProfile, routeParam(req.params.id));
+    for (const stateId of marketAssociate.stateIds) assertScope(context, stateId);
+    for (const hubId of marketAssociate.hubIds) assertScope(context, undefined, hubId);
     const status = req.path.endsWith('/activate') || req.path.endsWith('/reactivate') ? 'active' : 'suspended';
     await Promise.all([
-      RunnerProfile.updateOne({ _id: runner._id }, { $set: { status } }),
-      User.updateOne({ _id: runner.accountId }, { $set: { accountStatus: status, isActive: status === 'active' } }),
-      status === 'active' ? Promise.resolve() : revokeAccountSessions(runner.accountId, 'runner_suspended', req.user!.sub),
+      MarketAssociateProfile.updateOne({ _id: marketAssociate._id }, { $set: { status } }),
+      User.updateOne({ _id: marketAssociate.accountId }, { $set: { accountStatus: status, isActive: status === 'active' } }),
+      status === 'active' ? Promise.resolve() : revokeAccountSessions(marketAssociate.accountId, 'marketassociate_suspended', req.user!.sub),
     ]);
-    await recordAudit(req, { action: `runner.${status}`, entityType: 'runner', entityId: runner._id.toString(), entityPublicId: runner.publicId, before: { status: runner.status }, after: { status }, reason: req.body.reason });
+    await recordAudit(req, { action: `marketassociate.${status}`, entityType: 'marketassociate', entityId: marketAssociate._id.toString(), entityPublicId: marketAssociate.publicId, before: { status: marketAssociate.status }, after: { status }, reason: req.body.reason });
     sendSuccess(res, { status });
   };
 
-  resendRunnerInvitation = async (req: Request, res: Response) => {
+  resendMarketAssociateInvitation = async (req: Request, res: Response) => {
     const context = await access(req, 'runners.manage');
-    const runner = await byIdentifier(RunnerProfile, routeParam(req.params.id));
-    for (const stateId of runner.stateIds) assertScope(context, stateId);
-    for (const hubId of runner.hubIds) assertScope(context, undefined, hubId);
-    const account = await User.findById(runner.accountId);
-    if (!account || runner.status !== AccountStatus.INVITED) {
-      throw new HttpError(409, 'Only invited Runner accounts can receive a new invitation', undefined, 'CONFLICT');
+    const marketAssociate = await byIdentifier(MarketAssociateProfile, routeParam(req.params.id));
+    for (const stateId of marketAssociate.stateIds) assertScope(context, stateId);
+    for (const hubId of marketAssociate.hubIds) assertScope(context, undefined, hubId);
+    const account = await User.findById(marketAssociate.accountId);
+    if (!account || marketAssociate.status !== AccountStatus.INVITED) {
+      throw new HttpError(409, 'Only invited Market Associate accounts can receive a new invitation', undefined, 'CONFLICT');
     }
     const invitation = await issueAccountInvitation({
       accountId: account.id,
-      accountType: AccountType.RUNNER,
+      accountType: AccountType.MARKETASSOCIATE,
       email: account.email,
       name: `${account.firstName} ${account.lastName}`.trim(),
       invitedBy: req.user!.sub,
     });
-    await recordAudit(req, { action: 'runner.invitation_resent', entityType: 'runner', entityId: runner._id.toString(), entityPublicId: runner.publicId });
+    await recordAudit(req, { action: 'marketassociate.invitation_resent', entityType: 'marketassociate', entityId: marketAssociate._id.toString(), entityPublicId: marketAssociate.publicId });
     sendSuccess(res, invitation);
   };
 
-  cancelRunnerInvitation = async (req: Request, res: Response) => {
+  cancelMarketAssociateInvitation = async (req: Request, res: Response) => {
     const context = await access(req, 'runners.manage');
-    const runner = await byIdentifier(RunnerProfile, routeParam(req.params.id));
-    for (const stateId of runner.stateIds) assertScope(context, stateId);
-    for (const hubId of runner.hubIds) assertScope(context, undefined, hubId);
-    if (runner.status !== AccountStatus.INVITED) {
-      throw new HttpError(409, 'Only pending Runner invitations can be cancelled', undefined, 'INVALID_STATE_TRANSITION');
+    const marketAssociate = await byIdentifier(MarketAssociateProfile, routeParam(req.params.id));
+    for (const stateId of marketAssociate.stateIds) assertScope(context, stateId);
+    for (const hubId of marketAssociate.hubIds) assertScope(context, undefined, hubId);
+    if (marketAssociate.status !== AccountStatus.INVITED) {
+      throw new HttpError(409, 'Only pending Market Associate invitations can be cancelled', undefined, 'INVALID_STATE_TRANSITION');
     }
-    const revokedInvitations = await revokeAccountInvitations(runner.accountId);
+    const revokedInvitations = await revokeAccountInvitations(marketAssociate.accountId);
     await Promise.all([
-      RunnerProfile.updateOne({ _id: runner._id }, { $set: { status: AccountStatus.DISABLED } }),
-      User.updateOne({ _id: runner.accountId }, { $set: { accountStatus: AccountStatus.DISABLED, isActive: false } }),
+      MarketAssociateProfile.updateOne({ _id: marketAssociate._id }, { $set: { status: AccountStatus.DISABLED } }),
+      User.updateOne({ _id: marketAssociate.accountId }, { $set: { accountStatus: AccountStatus.DISABLED, isActive: false } }),
     ]);
     await recordAudit(req, {
-      action: 'runner.invitation_cancelled',
-      entityType: 'runner',
-      entityId: runner._id.toString(),
-      entityPublicId: runner.publicId,
-      before: { status: runner.status },
+      action: 'marketassociate.invitation_cancelled',
+      entityType: 'marketassociate',
+      entityId: marketAssociate._id.toString(),
+      entityPublicId: marketAssociate.publicId,
+      before: { status: marketAssociate.status },
       after: { status: AccountStatus.DISABLED, revokedInvitations },
       reason: req.body.reason,
     });
     sendSuccess(res, { status: AccountStatus.DISABLED, revokedInvitations });
   };
 
-  listAssignments = async (req: Request, res: Response) => sendSuccess(res, await listScoped(req, RunnerMarketAssignment, 'runners.assign'));
-  assignmentDetail = async (req: Request, res: Response) => sendSuccess(res, await detailScoped(req, RunnerMarketAssignment, 'runners.assign'));
+  listAssignments = async (req: Request, res: Response) => sendSuccess(res, await listScoped(req, MarketAssociateMarketAssignment, 'runners.assign'));
+  assignmentDetail = async (req: Request, res: Response) => sendSuccess(res, await detailScoped(req, MarketAssociateMarketAssignment, 'runners.assign'));
   createAssignment = async (req: Request, res: Response) => {
     const context = await access(req, 'runners.assign');
-    const runner = await byIdentifier(RunnerProfile, req.body.runnerId);
+    const marketAssociate = await byIdentifier(MarketAssociateProfile, req.body.marketAssociateId);
     const market = await byIdentifier(Market, req.body.marketId);
     const preferredHub = req.body.preferredHubId
       ? await ensureHub(req.body.preferredHubId, market.stateId)
       : undefined;
     assertScope(context, market.stateId, preferredHub?._id.toString());
-    if (!runner.stateIds.includes(market.stateId)) throw new HttpError(409, 'Runner is not assigned to the Market state', undefined, 'CONFLICT');
-    const assignment = await RunnerMarketAssignment.create({
+    if (!marketAssociate.stateIds.includes(market.stateId)) throw new HttpError(409, 'Market Associate is not assigned to the Market state', undefined, 'CONFLICT');
+    const assignment = await MarketAssociateMarketAssignment.create({
       ...req.body,
       stateId: market.stateId,
-      runnerId: runner._id.toString(),
+      marketAssociateId: marketAssociate._id.toString(),
       marketId: market._id.toString(),
       ...(preferredHub && { preferredHubId: preferredHub._id.toString() }),
       createdBy: req.user!.sub,
       history: [{ action: 'created', at: new Date(), actorId: req.user!.sub }],
     });
-    await recordAudit(req, { action: 'runner_assignment.created', entityType: 'runner_assignment', entityId: assignment.id, stateId: assignment.stateId, hubId: assignment.preferredHubId, after: assignment.toObject() });
+    await recordAudit(req, { action: 'marketassociate_assignment.created', entityType: 'marketassociate_assignment', entityId: assignment.id, stateId: assignment.stateId, hubId: assignment.preferredHubId, after: assignment.toObject() });
     await sendPlatformCreated(res, assignment.toObject());
   };
   updateAssignment = async (req: Request, res: Response) => {
     await access(req, 'runners.assign');
-    const assignment = await byIdentifier(RunnerMarketAssignment, routeParam(req.params.id));
+    const assignment = await byIdentifier(MarketAssociateMarketAssignment, routeParam(req.params.id));
     const context = await resolveAccessContext(req.user!.sub); assertScope(context, assignment.stateId, assignment.preferredHubId);
-    const runner = await byIdentifier(RunnerProfile, req.body.runnerId || assignment.runnerId);
+    const marketAssociate = await byIdentifier(MarketAssociateProfile, req.body.marketAssociateId || assignment.marketAssociateId);
     const market = await byIdentifier(Market, req.body.marketId || assignment.marketId);
     const preferredHub = req.body.preferredHubId
       ? await ensureHub(req.body.preferredHubId, market.stateId)
       : assignment.preferredHubId
         ? await ensureHub(assignment.preferredHubId, market.stateId)
         : undefined;
-    if (!runner.stateIds.includes(market.stateId)) {
-      throw new HttpError(409, 'Runner is not assigned to the Market state', undefined, 'CONFLICT');
+    if (!marketAssociate.stateIds.includes(market.stateId)) {
+      throw new HttpError(409, 'Market Associate is not assigned to the Market state', undefined, 'CONFLICT');
     }
     assertScope(context, market.stateId, preferredHub?._id.toString());
-    const updated = await RunnerMarketAssignment.findByIdAndUpdate(assignment._id, {
+    const updated = await MarketAssociateMarketAssignment.findByIdAndUpdate(assignment._id, {
       $set: {
         ...req.body,
-        runnerId: runner._id.toString(),
+        marketAssociateId: marketAssociate._id.toString(),
         marketId: market._id.toString(),
         stateId: market.stateId,
         ...(preferredHub && { preferredHubId: preferredHub._id.toString() }),
         updatedBy: req.user!.sub,
       },
-      $push: { history: { action: 'updated', at: new Date(), actorId: req.user!.sub, reason: req.body.reason } },
+      $push: { history: { action: 'updated', at: new Date(), actorId: req.user!.sub, reason: req.body.assignmentReason } },
     }, { returnDocument: 'after' }).lean({ virtuals: true });
-    await recordAudit(req, { action: 'runner_assignment.updated', entityType: 'runner_assignment', entityId: assignment._id.toString(), stateId: assignment.stateId, hubId: assignment.preferredHubId, before: assignment, after: updated, reason: req.body.reason });
+    await recordAudit(req, { action: 'marketassociate_assignment.updated', entityType: 'marketassociate_assignment', entityId: assignment._id.toString(), stateId: assignment.stateId, hubId: assignment.preferredHubId, before: assignment, after: updated, reason: req.body.assignmentReason });
     await sendPlatformSuccess(res, updated);
   };
   assignmentStatus = async (req: Request, res: Response) => {
     await access(req, 'runners.assign');
-    const assignment = await byIdentifier(RunnerMarketAssignment, routeParam(req.params.id));
+    const assignment = await byIdentifier(MarketAssociateMarketAssignment, routeParam(req.params.id));
     const context = await resolveAccessContext(req.user!.sub);
     assertScope(context, assignment.stateId, assignment.preferredHubId);
     const status = req.path.endsWith('/activate') ? 'active' : req.path.endsWith('/pause') ? 'paused' : 'ended';
-    const updated = await RunnerMarketAssignment.findByIdAndUpdate(assignment._id, {
+    const updated = await MarketAssociateMarketAssignment.findByIdAndUpdate(assignment._id, {
       $set: { status, updatedBy: req.user!.sub, ...(status === 'ended' && { activeTo: new Date() }) },
       $push: { history: { action: status, at: new Date(), actorId: req.user!.sub, reason: req.body.reason } },
     }, { returnDocument: 'after' }).lean({ virtuals: true });
-    await recordAudit(req, { action: `runner_assignment.${status}`, entityType: 'runner_assignment', entityId: assignment._id.toString(), stateId: assignment.stateId, hubId: assignment.preferredHubId, before: { status: assignment.status }, after: { status }, reason: req.body.reason });
+    await recordAudit(req, { action: `marketassociate_assignment.${status}`, entityType: 'marketassociate_assignment', entityId: assignment._id.toString(), stateId: assignment.stateId, hubId: assignment.preferredHubId, before: { status: assignment.status }, after: { status }, reason: req.body.reason });
     await sendPlatformSuccess(res, updated);
   };
 
@@ -1399,15 +1528,51 @@ export class PlatformController {
       ...(req.query.from && { $gte: new Date(String(req.query.from)) }),
       ...(req.query.to && { $lte: new Date(String(req.query.to)) }),
     };
+    const search = String(req.query.q || '').trim();
+    if (search) {
+      const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      filter.$or = [
+        { action: { $regex: escaped, $options: 'i' } },
+        { entityType: { $regex: escaped, $options: 'i' } },
+        { entityPublicId: { $regex: escaped, $options: 'i' } },
+        { actorPublicId: { $regex: escaped, $options: 'i' } },
+        { reason: { $regex: escaped, $options: 'i' } },
+      ];
+    }
     const [data, total] = await Promise.all([
       PlatformAuditLog.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean({ virtuals: true }),
       PlatformAuditLog.countDocuments(filter),
     ]);
-    sendSuccess(res, paginated(data, total, page, limit));
+    const actorIds = [...new Set(data.map((event) => event.actorId).filter(Boolean))];
+    const actors = actorIds.length
+      ? await User.find({ _id: { $in: actorIds.filter((id) => isValidObjectId(id)) } })
+          .select('publicId firstName lastName email accountType')
+          .lean()
+      : [];
+    const actorMap = new Map(actors.map((actor) => [actor._id.toString(), actor]));
+    const rows = data.map((event) => {
+      const actor = actorMap.get(event.actorId);
+      return {
+        ...event,
+        actorName: actor ? [actor.firstName, actor.lastName].filter(Boolean).join(' ').trim() || actor.email : null,
+        actorEmail: actor?.email || null,
+        actorAccountType: actor?.accountType || event.actorType,
+      };
+    });
+    sendSuccess(res, paginated(rows, total, page, limit));
   };
   auditDetail = async (req: Request, res: Response) => {
     await access(req, 'audit.view');
-    sendSuccess(res, await byIdentifier(PlatformAuditLog, routeParam(req.params.id)));
+    const event = await byIdentifier(PlatformAuditLog, routeParam(req.params.id));
+    const actor = isValidObjectId(event.actorId)
+      ? await User.findById(event.actorId).select('publicId firstName lastName email accountType').lean()
+      : null;
+    sendSuccess(res, {
+      ...event,
+      actorName: actor ? [actor.firstName, actor.lastName].filter(Boolean).join(' ').trim() || actor.email : null,
+      actorEmail: actor?.email || null,
+      actorAccountType: actor?.accountType || event.actorType,
+    });
   };
 
   counters = async (_req: Request, res: Response) => sendSuccess(res, await PublicIdCounter.find().sort({ year: -1, prefix: 1 }).lean({ virtuals: true }));

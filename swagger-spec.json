@@ -105,8 +105,8 @@
       "description": "Vendor fulfilment, booth inventory, refunds, deletion, and checkout operations."
     },
     {
-      "name": "Admin Runners",
-      "description": "Admin Runner identity, scope, and assignment controls."
+      "name": "Admin Market Associates",
+      "description": "Admin Market Associate identity, scope, and assignment controls."
     },
     {
       "name": "Public Geography",
@@ -126,7 +126,7 @@
     },
     {
       "name": "Operational Network",
-      "description": "Market, Dispatch Hub, Hook Partner, and Runner administration."
+      "description": "Market, Dispatch Hub, Hook Partner, and Market Associate administration."
     },
     {
       "name": "Platform Audit",
@@ -137,16 +137,16 @@
       "description": "Super-admin platform counter governance."
     },
     {
-      "name": "Runner Foundation",
-      "description": "Self-scoped Runner account foundation."
+      "name": "Market Associate Foundation",
+      "description": "Self-scoped Market Associate account foundation."
     },
     {
       "name": "Partner Foundation",
       "description": "Self-scoped Hook Partner account foundation."
     },
     {
-      "name": "Runner Catalog Capture",
-      "description": "Self-scoped Runner Market catalog capture and submission workflow."
+      "name": "Market Associate Catalog Capture",
+      "description": "Self-scoped Market Associate Market catalog capture and submission workflow."
     },
     {
       "name": "Market Supplier Operations",
@@ -158,7 +158,7 @@
     },
     {
       "name": "Catalog Availability",
-      "description": "Universal Product availability checks, Runner confirmation, and overdue escalation."
+      "description": "Universal Product availability checks, Market Associate confirmation, and overdue escalation."
     },
     {
       "name": "Catalog Media",
@@ -197,8 +197,8 @@
       "description": "State-scoped POD, payment evidence, settings, and outbox operations."
     },
     {
-      "name": "Runner Fulfilment",
-      "description": "Self-scoped Runner sourcing, packing, and issue workflows."
+      "name": "Market Associate Fulfilment",
+      "description": "Self-scoped Market Associate sourcing, packing, and issue workflows."
     },
     {
       "name": "Fulfilment Operations",
@@ -206,7 +206,7 @@
     },
     {
       "name": "Hub Operations",
-      "description": "Runner package receipt, visible QC, consolidation, and sealing."
+      "description": "Market Associate package receipt, visible QC, consolidation, and sealing."
     },
     {
       "name": "Fulfilment Logistics",
@@ -719,8 +719,8 @@
         "tags": [
           "Authentication"
         ],
-        "summary": "Sign in a customer, staff, Runner, or Hook Partner account",
-        "description": "Sign in a customer, staff, Runner, or Hook Partner account",
+        "summary": "Sign in a customer, staff, Market Associate, or Hook Partner account",
+        "description": "Sign in a customer, staff, Market Associate, or Hook Partner account",
         "security": [],
         "parameters": [],
         "requestBody": {
@@ -885,8 +885,8 @@
         "tags": [
           "Authentication"
         ],
-        "summary": "Activate an invited Staff, Runner, or Partner account and create its password",
-        "description": "Activate an invited Staff, Runner, or Partner account and create its password",
+        "summary": "Activate an invited Staff, Market Associate, or Partner account and create its password",
+        "description": "Activate an invited Staff, Market Associate, or Partner account and create its password",
         "security": [],
         "parameters": [],
         "requestBody": {
@@ -6791,13 +6791,13 @@
         }
       }
     },
-    "/api/v1/admin/runners": {
+    "/api/v1/admin/market-associates": {
       "get": {
         "tags": [
           "Operational Network"
         ],
-        "summary": "List runners",
-        "description": "List runners",
+        "summary": "List market associates",
+        "description": "List market associates",
         "security": [
           {
             "bearerAuth": []
@@ -6871,8 +6871,8 @@
         "tags": [
           "Operational Network"
         ],
-        "summary": "Create runners",
-        "description": "Create runners",
+        "summary": "Create market associates",
+        "description": "Create market associates",
         "security": [
           {
             "bearerAuth": []
@@ -6943,13 +6943,13 @@
         }
       }
     },
-    "/api/v1/admin/runners/stats": {
+    "/api/v1/admin/market-associates/stats": {
       "get": {
         "tags": [
-          "Admin Runners"
+          "Admin Market Associates"
         ],
-        "summary": "Get runner operational statistics",
-        "description": "Get runner operational statistics",
+        "summary": "Get market associate operational statistics",
+        "description": "Get market associate operational statistics",
         "security": [
           {
             "bearerAuth": []
@@ -7020,13 +7020,13 @@
         }
       }
     },
-    "/api/v1/admin/runners/queue": {
+    "/api/v1/admin/market-associates/queue": {
       "get": {
         "tags": [
-          "Admin Runners"
+          "Admin Market Associates"
         ],
-        "summary": "List runner catalog review queue",
-        "description": "List runner catalog review queue",
+        "summary": "List market associate catalog review queue",
+        "description": "List market associate catalog review queue",
         "security": [
           {
             "bearerAuth": []
@@ -7097,13 +7097,13 @@
         }
       }
     },
-    "/api/v1/admin/runners/{id}": {
+    "/api/v1/admin/market-associates/{id}": {
       "get": {
         "tags": [
           "Operational Network"
         ],
-        "summary": "Get runners by public Hook ID",
-        "description": "Get runners by public Hook ID",
+        "summary": "Get market associates by public Hook ID",
+        "description": "Get market associates by public Hook ID",
         "security": [
           {
             "bearerAuth": []
@@ -7184,13 +7184,13 @@
         }
       }
     },
-    "/api/v1/admin/runners/{id}/toggle": {
+    "/api/v1/admin/market-associates/{id}/toggle": {
       "patch": {
         "tags": [
-          "Admin Runners"
+          "Admin Market Associates"
         ],
-        "summary": "Toggle runner active status",
-        "description": "Toggle runner active status",
+        "summary": "Toggle market associate active status",
+        "description": "Toggle market associate active status",
         "security": [
           {
             "bearerAuth": []
@@ -7204,7 +7204,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Runner id"
+            "description": "Market Associate id"
           }
         ],
         "responses": {
@@ -7271,13 +7271,13 @@
         }
       }
     },
-    "/api/v1/admin/runners/{id}/state": {
+    "/api/v1/admin/market-associates/{id}/state": {
       "patch": {
         "tags": [
-          "Admin Runners"
+          "Admin Market Associates"
         ],
-        "summary": "Assign runner to an active operating state",
-        "description": "Assign runner to an active operating state",
+        "summary": "Assign market associate to an active operating state",
+        "description": "Assign market associate to an active operating state",
         "security": [
           {
             "bearerAuth": []
@@ -7291,7 +7291,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Runner id"
+            "description": "Market Associate id"
           }
         ],
         "requestBody": {
@@ -12385,13 +12385,13 @@
         }
       }
     },
-    "/api/v1/admin/runner-assignments": {
+    "/api/v1/admin/market-associate-assignments": {
       "get": {
         "tags": [
           "Operational Network"
         ],
-        "summary": "List runner assignments",
-        "description": "List runner assignments",
+        "summary": "List market associate assignments",
+        "description": "List market associate assignments",
         "security": [
           {
             "bearerAuth": []
@@ -12465,8 +12465,8 @@
         "tags": [
           "Operational Network"
         ],
-        "summary": "Create runner assignments",
-        "description": "Create runner assignments",
+        "summary": "Create market associate assignments",
+        "description": "Create market associate assignments",
         "security": [
           {
             "bearerAuth": []
@@ -12537,13 +12537,13 @@
         }
       }
     },
-    "/api/v1/admin/runner-assignments/{id}": {
+    "/api/v1/admin/market-associate-assignments/{id}": {
       "get": {
         "tags": [
           "Operational Network"
         ],
-        "summary": "Get runner assignments by public Hook ID",
-        "description": "Get runner assignments by public Hook ID",
+        "summary": "Get market associate assignments by public Hook ID",
+        "description": "Get market associate assignments by public Hook ID",
         "security": [
           {
             "bearerAuth": []
@@ -13029,13 +13029,13 @@
         }
       }
     },
-    "/api/v1/admin/runners/{id}/resend-invitation": {
+    "/api/v1/admin/market-associates/{id}/resend-invitation": {
       "post": {
         "tags": [
           "Platform Governance"
         ],
-        "summary": "Revoke the previous token and resend a runner activation invitation",
-        "description": "Revoke the previous token and resend a runner activation invitation",
+        "summary": "Revoke the previous token and resend a market-associate activation invitation",
+        "description": "Revoke the previous token and resend a market-associate activation invitation",
         "security": [
           {
             "bearerAuth": []
@@ -13203,13 +13203,13 @@
         }
       }
     },
-    "/api/v1/runner/profile": {
+    "/api/v1/market-associate/profile": {
       "get": {
         "tags": [
-          "Runner Foundation"
+          "Market Associate Foundation"
         ],
-        "summary": "Get the authenticated Runner profile and scope",
-        "description": "Get the authenticated Runner profile and scope",
+        "summary": "Get the authenticated Market Associate profile and scope",
+        "description": "Get the authenticated Market Associate profile and scope",
         "security": [
           {
             "bearerAuth": []
@@ -13280,13 +13280,13 @@
         }
       }
     },
-    "/api/v1/runner/markets": {
+    "/api/v1/market-associate/markets": {
       "get": {
         "tags": [
-          "Runner Foundation"
+          "Market Associate Foundation"
         ],
-        "summary": "List only Markets assigned to the authenticated Runner",
-        "description": "List only Markets assigned to the authenticated Runner",
+        "summary": "List only Markets assigned to the authenticated Market Associate",
+        "description": "List only Markets assigned to the authenticated Market Associate",
         "security": [
           {
             "bearerAuth": []
@@ -13357,7 +13357,7 @@
         }
       }
     },
-    "/api/v1/runner/markets/{id}": {
+    "/api/v1/market-associate/markets/{id}": {
       "get": {
         "tags": [
           "Market Supplier Operations"
@@ -13444,7 +13444,7 @@
         }
       }
     },
-    "/api/v1/runner/markets/{id}/vendors": {
+    "/api/v1/market-associate/markets/{id}/vendors": {
       "get": {
         "tags": [
           "Market Supplier Operations"
@@ -13635,13 +13635,13 @@
         }
       }
     },
-    "/api/v1/runner/market-vendors/{id}": {
+    "/api/v1/market-associate/market-vendors/{id}": {
       "get": {
         "tags": [
           "Market Supplier Operations"
         ],
-        "summary": "Get one supplier within the Runner Market scope.",
-        "description": "Get one supplier within the Runner Market scope.",
+        "summary": "Get one supplier within the Market Associate Market scope.",
+        "description": "Get one supplier within the Market Associate Market scope.",
         "security": [
           {
             "bearerAuth": []
@@ -13725,8 +13725,8 @@
         "tags": [
           "Market Supplier Operations"
         ],
-        "summary": "Update a supplier within the Runner Market scope.",
-        "description": "Update a supplier within the Runner Market scope.",
+        "summary": "Update a supplier within the Market Associate Market scope.",
+        "description": "Update a supplier within the Market Associate Market scope.",
         "security": [
           {
             "bearerAuth": []
@@ -13817,7 +13817,7 @@
         }
       }
     },
-    "/api/v1/runner/market-vendors/{id}/invite": {
+    "/api/v1/market-associate/market-vendors/{id}/invite": {
       "post": {
         "tags": [
           "Market Supplier Operations"
@@ -13904,7 +13904,7 @@
         }
       }
     },
-    "/api/v1/runner/product-submissions/{id}/collection": {
+    "/api/v1/market-associate/product-submissions/{id}/collection": {
       "post": {
         "tags": [
           "Market Supplier Operations"
@@ -14001,13 +14001,13 @@
         }
       }
     },
-    "/api/v1/runner/vendor-collections": {
+    "/api/v1/market-associate/vendor-collections": {
       "get": {
         "tags": [
           "Market Supplier Operations"
         ],
-        "summary": "List collections recorded by the authenticated Runner.",
-        "description": "List collections recorded by the authenticated Runner.",
+        "summary": "List collections recorded by the authenticated Market Associate.",
+        "description": "List collections recorded by the authenticated Market Associate.",
         "security": [
           {
             "bearerAuth": []
@@ -14088,7 +14088,7 @@
         }
       }
     },
-    "/api/v1/runner/availability-checks": {
+    "/api/v1/market-associate/availability-checks": {
       "get": {
         "tags": [
           "Catalog Availability"
@@ -14165,7 +14165,7 @@
         }
       }
     },
-    "/api/v1/runner/products/{id}/availability/confirm": {
+    "/api/v1/market-associate/products/{id}/availability/confirm": {
       "post": {
         "tags": [
           "Catalog Availability"
@@ -14262,7 +14262,7 @@
         }
       }
     },
-    "/api/v1/runner/products/{id}/availability/report": {
+    "/api/v1/market-associate/products/{id}/availability/report": {
       "post": {
         "tags": [
           "Catalog Availability"
@@ -14596,10 +14596,10 @@
         }
       }
     },
-    "/api/v1/runner/dashboard": {
+    "/api/v1/market-associate/dashboard": {
       "get": {
         "tags": [
-          "Runner Catalog Capture"
+          "Market Associate Catalog Capture"
         ],
         "summary": "Get self-scoped catalog capture metrics.",
         "description": "Get self-scoped catalog capture metrics.",
@@ -14673,13 +14673,13 @@
         }
       }
     },
-    "/api/v1/runner/product-submissions": {
+    "/api/v1/market-associate/product-submissions": {
       "get": {
         "tags": [
-          "Runner Catalog Capture"
+          "Market Associate Catalog Capture"
         ],
-        "summary": "List the authenticated Runner submissions with cursor pagination.",
-        "description": "List the authenticated Runner submissions with cursor pagination.",
+        "summary": "List the authenticated Market Associate submissions with cursor pagination.",
+        "description": "List the authenticated Market Associate submissions with cursor pagination.",
         "security": [
           {
             "bearerAuth": []
@@ -14751,10 +14751,10 @@
       },
       "post": {
         "tags": [
-          "Runner Catalog Capture"
+          "Market Associate Catalog Capture"
         ],
-        "summary": "Create a Runner product-submission draft.",
-        "description": "Create a Runner product-submission draft.",
+        "summary": "Create a Market Associate product-submission draft.",
+        "description": "Create a Market Associate product-submission draft.",
         "security": [
           {
             "bearerAuth": []
@@ -14766,7 +14766,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RunnerSubmissionRequest"
+                "$ref": "#/components/schemas/MarketAssociateSubmissionRequest"
               }
             }
           }
@@ -14835,10 +14835,10 @@
         }
       }
     },
-    "/api/v1/runner/product-submissions/{id}": {
+    "/api/v1/market-associate/product-submissions/{id}": {
       "get": {
         "tags": [
-          "Runner Catalog Capture"
+          "Market Associate Catalog Capture"
         ],
         "summary": "Get one owned submission.",
         "description": "Get one owned submission.",
@@ -14923,7 +14923,7 @@
       },
       "patch": {
         "tags": [
-          "Runner Catalog Capture"
+          "Market Associate Catalog Capture"
         ],
         "summary": "Update an owned draft or requested-changes submission with optimistic versioning.",
         "description": "Update an owned draft or requested-changes submission with optimistic versioning.",
@@ -14948,7 +14948,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RunnerSubmissionRequest"
+                "$ref": "#/components/schemas/MarketAssociateSubmissionRequest"
               }
             }
           }
@@ -15017,10 +15017,10 @@
         }
       }
     },
-    "/api/v1/runner/product-submissions/{id}/submit": {
+    "/api/v1/market-associate/product-submissions/{id}/submit": {
       "post": {
         "tags": [
-          "Runner Catalog Capture"
+          "Market Associate Catalog Capture"
         ],
         "summary": "Submit a complete capture to Catalog Review.",
         "description": "Submit a complete capture to Catalog Review.",
@@ -15494,8 +15494,8 @@
         "tags": [
           "Catalog Review"
         ],
-        "summary": "Get submission evidence and immutable Runner snapshot.",
-        "description": "Get submission evidence and immutable Runner snapshot.",
+        "summary": "Get submission evidence and immutable Market Associate snapshot.",
+        "description": "Get submission evidence and immutable Market Associate snapshot.",
         "security": [
           {
             "bearerAuth": []
@@ -17124,13 +17124,13 @@
             "description": "vendorId filter"
           },
           {
-            "name": "runnerId",
+            "name": "marketAssociateId",
             "in": "query",
             "required": false,
             "schema": {
               "type": "string"
             },
-            "description": "runnerId filter"
+            "description": "marketAssociateId filter"
           },
           {
             "name": "status",
@@ -20832,10 +20832,10 @@
         }
       }
     },
-    "/api/v1/runner/fulfilments/dashboard": {
+    "/api/v1/market-associate/fulfilments/dashboard": {
       "get": {
         "tags": [
-          "Runner Fulfilment"
+          "Market Associate Fulfilment"
         ],
         "summary": "Get self-scoped fulfilment metrics and SLA work.",
         "description": "Get self-scoped fulfilment metrics and SLA work.",
@@ -20909,13 +20909,13 @@
         }
       }
     },
-    "/api/v1/runner/fulfilments": {
+    "/api/v1/market-associate/fulfilments": {
       "get": {
         "tags": [
-          "Runner Fulfilment"
+          "Market Associate Fulfilment"
         ],
-        "summary": "List fulfilment tasks assigned to the authenticated Runner.",
-        "description": "List fulfilment tasks assigned to the authenticated Runner.",
+        "summary": "List fulfilment tasks assigned to the authenticated Market Associate.",
+        "description": "List fulfilment tasks assigned to the authenticated Market Associate.",
         "security": [
           {
             "bearerAuth": []
@@ -21005,10 +21005,10 @@
         }
       }
     },
-    "/api/v1/runner/fulfilments/{id}": {
+    "/api/v1/market-associate/fulfilments/{id}": {
       "get": {
         "tags": [
-          "Runner Fulfilment"
+          "Market Associate Fulfilment"
         ],
         "summary": "Get one assigned fulfilment task and its customer-safe item details.",
         "description": "Get one assigned fulfilment task and its customer-safe item details.",
@@ -21092,13 +21092,13 @@
         }
       }
     },
-    "/api/v1/runner/fulfilments/{id}/accept": {
+    "/api/v1/market-associate/fulfilments/{id}/accept": {
       "post": {
         "tags": [
-          "Runner Fulfilment"
+          "Market Associate Fulfilment"
         ],
-        "summary": "Runner accept action with optimistic versioning.",
-        "description": "Runner accept action with optimistic versioning.",
+        "summary": "Market Associate accept action with optimistic versioning.",
+        "description": "Market Associate accept action with optimistic versioning.",
         "security": [
           {
             "bearerAuth": []
@@ -21179,13 +21179,13 @@
         }
       }
     },
-    "/api/v1/runner/fulfilments/{id}/start_sourcing": {
+    "/api/v1/market-associate/fulfilments/{id}/start_sourcing": {
       "post": {
         "tags": [
-          "Runner Fulfilment"
+          "Market Associate Fulfilment"
         ],
-        "summary": "Runner start sourcing action with optimistic versioning.",
-        "description": "Runner start sourcing action with optimistic versioning.",
+        "summary": "Market Associate start sourcing action with optimistic versioning.",
+        "description": "Market Associate start sourcing action with optimistic versioning.",
         "security": [
           {
             "bearerAuth": []
@@ -21266,13 +21266,13 @@
         }
       }
     },
-    "/api/v1/runner/fulfilments/{id}/secure": {
+    "/api/v1/market-associate/fulfilments/{id}/secure": {
       "post": {
         "tags": [
-          "Runner Fulfilment"
+          "Market Associate Fulfilment"
         ],
-        "summary": "Runner secure action with optimistic versioning.",
-        "description": "Runner secure action with optimistic versioning.",
+        "summary": "Market Associate secure action with optimistic versioning.",
+        "description": "Market Associate secure action with optimistic versioning.",
         "security": [
           {
             "bearerAuth": []
@@ -21353,13 +21353,13 @@
         }
       }
     },
-    "/api/v1/runner/fulfilments/{id}/begin_packing": {
+    "/api/v1/market-associate/fulfilments/{id}/begin_packing": {
       "post": {
         "tags": [
-          "Runner Fulfilment"
+          "Market Associate Fulfilment"
         ],
-        "summary": "Runner begin packing action with optimistic versioning.",
-        "description": "Runner begin packing action with optimistic versioning.",
+        "summary": "Market Associate begin packing action with optimistic versioning.",
+        "description": "Market Associate begin packing action with optimistic versioning.",
         "security": [
           {
             "bearerAuth": []
@@ -21440,13 +21440,13 @@
         }
       }
     },
-    "/api/v1/runner/fulfilments/{id}/pack": {
+    "/api/v1/market-associate/fulfilments/{id}/pack": {
       "post": {
         "tags": [
-          "Runner Fulfilment"
+          "Market Associate Fulfilment"
         ],
-        "summary": "Runner pack action with optimistic versioning.",
-        "description": "Runner pack action with optimistic versioning.",
+        "summary": "Market Associate pack action with optimistic versioning.",
+        "description": "Market Associate pack action with optimistic versioning.",
         "security": [
           {
             "bearerAuth": []
@@ -21527,10 +21527,10 @@
         }
       }
     },
-    "/api/v1/runner/fulfilments/{id}/issues": {
+    "/api/v1/market-associate/fulfilments/{id}/issues": {
       "post": {
         "tags": [
-          "Runner Fulfilment"
+          "Market Associate Fulfilment"
         ],
         "summary": "Report a sourcing or fulfilment exception.",
         "description": "Report a sourcing or fulfilment exception.",
@@ -21789,13 +21789,13 @@
         }
       }
     },
-    "/api/v1/admin/fulfilment/runners": {
+    "/api/v1/admin/fulfilment/market-associates": {
       "get": {
         "tags": [
           "Fulfilment Operations"
         ],
-        "summary": "List active compatible Runner profiles for audited reassignment.",
-        "description": "List active compatible Runner profiles for audited reassignment.",
+        "summary": "List active compatible Market Associate profiles for audited reassignment.",
+        "description": "List active compatible Market Associate profiles for audited reassignment.",
         "security": [
           {
             "bearerAuth": []
@@ -21986,8 +21986,8 @@
         "tags": [
           "Fulfilment Operations"
         ],
-        "summary": "Reassign a task only to a compatible active Runner and Hub with an audited reason.",
-        "description": "Reassign a task only to a compatible active Runner and Hub with an audited reason.",
+        "summary": "Reassign a task only to a compatible active Market Associate and Hub with an audited reason.",
+        "description": "Reassign a task only to a compatible active Market Associate and Hub with an audited reason.",
         "security": [
           {
             "bearerAuth": []
@@ -22256,8 +22256,8 @@
         "tags": [
           "Hub Operations"
         ],
-        "summary": "View inbound Runner packages, Hub packages, exceptions, and consolidations.",
-        "description": "View inbound Runner packages, Hub packages, exceptions, and consolidations.",
+        "summary": "View inbound Market Associate packages, Hub packages, exceptions, and consolidations.",
+        "description": "View inbound Market Associate packages, Hub packages, exceptions, and consolidations.",
         "security": [
           {
             "bearerAuth": []
@@ -22447,8 +22447,8 @@
         "tags": [
           "Hub Operations"
         ],
-        "summary": "Receive a Runner package after validating its one-time scan credential.",
-        "description": "Receive a Runner package after validating its one-time scan credential.",
+        "summary": "Receive a Market Associate package after validating its one-time scan credential.",
+        "description": "Receive a Market Associate package after validating its one-time scan credential.",
         "security": [
           {
             "bearerAuth": []
@@ -23604,8 +23604,8 @@
         "tags": [
           "Customer Fulfilment"
         ],
-        "summary": "Return customer-safe Runner, Hub, shipment, Partner custody, return, and refund progress.",
-        "description": "Return customer-safe Runner, Hub, shipment, Partner custody, return, and refund progress.",
+        "summary": "Return customer-safe Market Associate, Hub, shipment, Partner custody, return, and refund progress.",
+        "description": "Return customer-safe Market Associate, Hub, shipment, Partner custody, return, and refund progress.",
         "security": [
           {
             "bearerAuth": []
@@ -25160,7 +25160,7 @@
           }
         }
       },
-      "RunnerSubmissionRequest": {
+      "MarketAssociateSubmissionRequest": {
         "type": "object",
         "required": [
           "marketId",

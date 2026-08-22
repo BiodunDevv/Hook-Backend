@@ -1,2 +1,43 @@
 <!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>{{emailStyles}}</style></head><body><div class="wrap"><div class="card"><div class="brand">hook<span class="brand-dot">.</span></div><div class="icon">ORD</div><h1>Your order has been received</h1><p class="lead">Hi {{name}}, we have received your order and the operations team is preparing the next steps.</p><div class="panel"><div class="row"><span class="label">Order ID</span><span class="value">{{orderCode}}</span></div><div class="row"><span class="label">Items</span><span class="value">{{itemCount}}</span></div><div class="row"><span class="label">Total</span><span class="value">{{amount}}</span></div></div><div class="notice">You will receive another email when the order status changes.</div></div><p class="footer">Thanks for shopping with Hook.</p></div></body></html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      {{emailStyles}}
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <div class="banner">
+          <div class="brand">hook<span class="brand-dot">.</span></div>
+          <p class="greeting">Hello {{name}}</p>
+          <h1>Your order is confirmed</h1>
+        </div>
+        <div class="body">
+          <h2>Great news from {{appName}}</h2>
+          <p>
+            We have received your order <strong>{{orderCode}}</strong> and the
+            operations team is preparing the next steps. You will get another
+            email as soon as it is on the move.
+          </p>
+          <h2 style="margin-top: 30px">Here&#39;s a recap of your purchase</h2>
+          <div class="panel">
+            {{{lines}}}{{{subtotalRow}}}{{{discountRow}}}{{{deliveryRow}}}
+            <div class="row row-total">
+              <span class="label">Total amount</span
+              ><span class="value">{{amount}}</span>
+            </div>
+          </div>
+        </div>
+        {{{deliveryBlock}}}
+      </div>
+      <p class="footer">
+        <span class="footer-brand">hook<span>.</span></span
+        ><br />Thanks for shopping with Hook.<br />Need help? Contact
+        {{supportEmail}}
+      </p>
+    </div>
+  </body>
+</html>

@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { DELIVERY_SLA_HOURS, OrderStatus, PaymentStatus } from "@lib/constants";
 import { auditAdminAction } from "@lib/audit";
 import { EmailService } from "@emails/email.service";
+import { getEmailSettings } from "@services/email-settings.service";
 import { HttpError, sendCreated, sendSuccess } from "@utils/http";
 import {
   adminRepos,
@@ -377,8 +378,7 @@ export class AdminOrdersController {
         itemCount,
       });
     }
-    const hookOpsEmail =
-      process.env.HOOK_OPS_EMAIL || process.env.BREVO_FROM_EMAIL;
+    const hookOpsEmail = (await getEmailSettings()).hookOpsEmail;
     if (hookOpsEmail) {
       await this.email.sendHookNewOrder({
         to: hookOpsEmail,

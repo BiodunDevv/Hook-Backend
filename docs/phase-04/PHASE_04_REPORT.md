@@ -22,7 +22,7 @@ Automated tests, fixtures-as-tests, snapshots, coverage, and test frameworks wer
 - Backend `npm run docs:swagger`: passed; generated 190 paths.
 - Backend non-fixing ESLint: passed with 0 errors and 360 existing warnings, primarily legacy `no-explicit-any` findings.
 - Backend `npm run seed`: passed from a full drop of database `hook` through the complete Phase 1-4 dataset.
-- Seed verification output confirmed 37 States, 3 Markets, 3 Runner assignments, 1 active Hook Partner account/location, 6 catalog submissions, 12 published products, 255 variants, active policy versions, Commerce Settings, delivery coverage, a verified customer, and a default address.
+- Seed verification output confirmed 37 States, 3 Markets, 3 Market Associate assignments, 1 active Hook Partner account/location, 6 catalog submissions, 12 published products, 255 variants, active policy versions, Commerce Settings, delivery coverage, a verified customer, and a default address.
 - Admin `npx tsc --noEmit`: passed after removing stale generated Next.js route metadata.
 - Admin `npm run lint`: passed.
 - Admin `npm run build`: passed; 56 routes generated and the retired arbitrary Order-creation route is absent.

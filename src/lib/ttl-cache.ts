@@ -45,3 +45,5 @@ export const adminStaffCache = new TtlCache<any>(10_000);
 export const adminAccessCatalogCache = new TtlCache<any>(60_000);
 export const adminDeliveryCache = new TtlCache<any>(10_000);
 export const platformReferenceCache = new TtlCache<Map<string, string>>(30_000);
+export const emailSettingsCache = new TtlCache<any>(30_000);
+export const inventorySettingsCache = new TtlCache<any>(30_000);

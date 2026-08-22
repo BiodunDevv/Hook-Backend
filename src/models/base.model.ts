@@ -51,6 +51,6 @@ export function createSchema<T>(definition: SchemaDefinition<T>): Schema<T> {
   return schema;
 }
 
-export function createModel<T>(name: string, schema: Schema<T>) {
-  return (models[name] || model<T>(name, schema)) as Model<T>;
+export function createModel<T>(name: string, schema: Schema<T>, collectionName?: string) {
+  return (models[name] || model<T>(name, schema, collectionName)) as Model<T>;
 }

@@ -7,6 +7,7 @@ import {
   NegotiationAcceptedEmailPayload,
   NegotiationOfferEmailPayload,
   OrderCancelledEmailPayload,
+  OrderEmailLine,
   OrderEmailPayload,
   OtpEmailPayload,
   PaymentConfirmedEmailPayload,
@@ -31,6 +32,19 @@ function readTemplateFile(fileName: string) {
 
 const emailStyles = readTemplateFile('base.css');
 
+/**
+ * Set once per send by EmailService before any render*Template() call, from
+ * the DB-backed admin Email Configuration settings. Kept as a plain module
+ * variable (not threaded through all 19 render functions' signatures) so
+ * baseValues() stays synchronous — EmailService is the only place that needs
+ * to know settings are DB-backed at all.
+ */
+let resolvedEmailSettings: { appName?: string; appUrl?: string; supportEmail?: string } = {};
+
+export function setResolvedEmailSettings(values: { appName?: string; appUrl?: string; supportEmail?: string }) {
+  resolvedEmailSettings = values;
+}
+
 function escapeHtml(value: unknown) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -50,17 +64,56 @@ function money(value = 0) {
 
 function renderTemplate(fileName: string, values: Record<string, unknown>) {
   const html = readTemplateFile(fileName);
-  return html.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_match, key) => {
-    if (key === 'emailStyles') return emailStyles;
-    return escapeHtml(values[key]);
-  });
+  return html
+    // Triple braces inject trusted, internally-generated markup (e.g. the
+    // order line-item rows built by orderLinesHtml below). Never use this
+    // for values that originate from user input.
+    .replace(/\{\{\{\s*([a-zA-Z0-9_]+)\s*\}\}\}/g, (_match, key) => String(values[key] ?? ''))
+    .replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_match, key) => {
+      if (key === 'emailStyles') return emailStyles;
+      return escapeHtml(values[key]);
+    });
+}
+
+/**
+ * Builds the itemised recap rows. Every value is escaped here because the
+ * result is injected raw via the triple-brace token.
+ */
+function orderLinesHtml(lines?: OrderEmailLine[]) {
+  if (!lines?.length) return '';
+  return lines
+    .map((line) => `<div class="line-item"><span class="line-title">${escapeHtml(line.title)}</span><span class="line-qty">Quantity ${escapeHtml(line.quantity)}</span><span class="line-price">${escapeHtml(money(line.amount))}</span></div>`)
+    .join('');
+}
+
+/** Optional summary rows, omitted entirely when the caller has no value. */
+function optionalRowHtml(label: string, value?: number) {
+  if (value === undefined || value === null) return '';
+  return `<div class="row"><span class="label">${escapeHtml(label)}</span><span class="value">${escapeHtml(money(value))}</span></div>`;
+}
+
+/**
+ * The dark delivery block. Rendered whole (or not at all) because the template
+ * engine only substitutes values — it has no conditionals.
+ */
+function deliveryBlockHtml(payload: { deliveryAddress?: string; expectedDeliveryDate?: string; appUrl: string }) {
+  if (!payload.deliveryAddress && !payload.expectedDeliveryDate) return '';
+  const columns = [
+    payload.deliveryAddress
+      ? `<div class="dark-col"><div class="dark-heading">Shipping to</div><div class="dark-value">${escapeHtml(payload.deliveryAddress)}</div></div>`
+      : '',
+    payload.expectedDeliveryDate
+      ? `<div class="dark-col"><div class="dark-heading">Expected delivery</div><div class="dark-value">${escapeHtml(payload.expectedDeliveryDate)}</div></div>`
+      : '',
+  ].join('');
+  return `<div class="dark-block"><div class="dark-cols">${columns}</div><p style="text-align:center"><a class="button button-light" href="${escapeHtml(payload.appUrl)}">Track your order</a></p></div>`;
 }
 
 function baseValues(values: Record<string, unknown> = {}) {
   return {
-    appName: process.env.APP_NAME || 'Hook',
-    appUrl: process.env.APP_URL || 'http://localhost:3000',
-    supportEmail: process.env.SUPPORT_EMAIL || process.env.BREVO_FROM_EMAIL || 'support@hook.africa',
+    appName: resolvedEmailSettings.appName || process.env.APP_NAME || 'Hook',
+    appUrl: resolvedEmailSettings.appUrl || process.env.APP_URL || 'http://localhost:3000',
+    supportEmail: resolvedEmailSettings.supportEmail || process.env.SUPPORT_EMAIL || process.env.BREVO_FROM_EMAIL || 'support@hook.africa',
     year: new Date().getFullYear(),
     ...values,
   };
@@ -137,6 +190,15 @@ export function orderConfirmationEmailTemplate(payload: OrderEmailPayload) {
       orderCode: payload.orderCode,
       amount: money(payload.amount),
       itemCount: payload.itemCount || 0,
+      lines: orderLinesHtml(payload.lines),
+      subtotalRow: optionalRowHtml('Subtotal', payload.subtotal),
+      discountRow: optionalRowHtml('Discount', payload.discount),
+      deliveryRow: optionalRowHtml('Delivery', payload.deliveryFee),
+      deliveryBlock: deliveryBlockHtml({
+        deliveryAddress: payload.deliveryAddress,
+        expectedDeliveryDate: payload.expectedDeliveryDate,
+        appUrl: resolvedEmailSettings.appUrl || process.env.APP_URL || 'http://localhost:3000',
+      }),
     })),
     text: `Your Hook order ${payload.orderCode} has been received. Total: ${money(payload.amount)}.`,
   };

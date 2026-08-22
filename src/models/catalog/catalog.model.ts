@@ -23,7 +23,7 @@ export interface ReviewNote {
 
 export interface ProductSubmission extends BaseEntity {
   publicId: string;
-  runnerId: string;
+  marketAssociateId: string;
   marketId: string;
   marketVendorId?: string;
   sourceStateId: string;
@@ -100,7 +100,7 @@ export interface NegotiatedQuote extends BaseEntity {
 
 const submissionSchema = createSchema<ProductSubmission>({
   publicId: { type: String, required: true, unique: true, index: true },
-  runnerId: { type: String, required: true, index: true },
+  marketAssociateId: { type: String, required: true, index: true },
   marketId: { type: String, required: true, index: true },
   marketVendorId: { type: String, index: true },
   sourceStateId: { type: String, required: true, index: true },
@@ -134,7 +134,7 @@ const submissionSchema = createSchema<ProductSubmission>({
   version: { type: Number, default: 1, min: 1 },
   deletedAt: { type: Date },
 });
-submissionSchema.index({ runnerId: 1, status: 1, updatedAt: -1 });
+submissionSchema.index({ marketAssociateId: 1, status: 1, updatedAt: -1 });
 submissionSchema.index({ sourceStateId: 1, marketId: 1, status: 1 });
 submissionSchema.index({ basicTitle: 'text', publicId: 'text' });
 

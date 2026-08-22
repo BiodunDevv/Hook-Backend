@@ -30,7 +30,7 @@ export interface MarketVendor extends BaseEntity {
   paymentProfile?: VendorPaymentProfile;
   status: MarketVendorStatus;
   consentAt?: Date;
-  invitedByRunnerId?: string;
+  invitedByMarketAssociateId?: string;
   lastContactedAt?: Date;
   notes?: string;
 }
@@ -39,7 +39,7 @@ export interface VendorInvitation extends BaseEntity {
   publicId: string;
   vendorId: string;
   marketId: string;
-  invitedByRunnerId: string;
+  invitedByMarketAssociateId: string;
   email?: string;
   tokenHash: string;
   status: VendorInvitationStatus;
@@ -53,7 +53,7 @@ export interface VendorCollection extends BaseEntity {
   publicId: string;
   marketVendorId: string;
   marketId: string;
-  runnerId: string;
+  marketAssociateId: string;
   productSubmissionId: string;
   productId?: string;
   productTitleSnapshot: string;
@@ -72,7 +72,7 @@ export interface VendorPaymentRecord extends BaseEntity {
   collectionId: string;
   marketVendorId: string;
   marketId: string;
-  runnerId: string;
+  marketAssociateId: string;
   amountMinor: number;
   currency: string;
   method: 'cash' | 'bank_transfer' | 'other';
@@ -110,7 +110,7 @@ const vendorSchema = createSchema<MarketVendor>({
   paymentProfile: { type: paymentProfile },
   status: { type: String, enum: ['pending', 'active', 'inactive', 'blocked'], default: 'pending', index: true },
   consentAt: { type: Date },
-  invitedByRunnerId: { type: String, index: true },
+  invitedByMarketAssociateId: { type: String, index: true },
   lastContactedAt: { type: Date },
   notes: { type: String, maxlength: 1000 },
   deletedAt: { type: Date },
@@ -123,7 +123,7 @@ const invitationSchema = createSchema<VendorInvitation>({
   publicId: { type: String, required: true, unique: true, index: true },
   vendorId: { type: String, required: true, index: true },
   marketId: { type: String, required: true, index: true },
-  invitedByRunnerId: { type: String, required: true, index: true },
+  invitedByMarketAssociateId: { type: String, required: true, index: true },
   email: { type: String, lowercase: true },
   tokenHash: { type: String, required: true, unique: true, select: false },
   status: { type: String, enum: ['pending', 'accepted', 'expired', 'cancelled'], default: 'pending', index: true },
@@ -139,7 +139,7 @@ const collectionSchema = createSchema<VendorCollection>({
   publicId: { type: String, required: true, unique: true, index: true },
   marketVendorId: { type: String, required: true, index: true },
   marketId: { type: String, required: true, index: true },
-  runnerId: { type: String, required: true, index: true },
+  marketAssociateId: { type: String, required: true, index: true },
   productSubmissionId: { type: String, required: true, unique: true, index: true },
   productId: { type: String, index: true },
   productTitleSnapshot: { type: String, required: true },
@@ -160,7 +160,7 @@ const paymentSchema = createSchema<VendorPaymentRecord>({
   collectionId: { type: String, required: true, unique: true, index: true },
   marketVendorId: { type: String, required: true, index: true },
   marketId: { type: String, required: true, index: true },
-  runnerId: { type: String, required: true, index: true },
+  marketAssociateId: { type: String, required: true, index: true },
   amountMinor: { type: Number, required: true, min: 0 },
   currency: { type: String, default: 'NGN', uppercase: true },
   method: { type: String, enum: ['cash', 'bank_transfer', 'other'], required: true },

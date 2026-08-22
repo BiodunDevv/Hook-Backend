@@ -15,9 +15,10 @@
     "lint": "eslint \"src/**/*.ts\"",
     "seed": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/seeds/index.ts",
     "db:clear-orders": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/clear-orders.ts",
-    "db:clear-runner-uploads": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/clear-runner-uploads.ts",
-    "db:seed-runner-products": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/seed-runner-products.ts",
-    "db:sync-runner-product-options": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/sync-runner-product-options.ts"
+    "db:clear-market-associate-uploads": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/clear-market-associate-uploads.ts",
+    "db:seed-market-associate-products": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/seed-market-associate-products.ts",
+    "db:sync-market-associate-product-options": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/sync-market-associate-product-options.ts",
+    "db:seed-legal-content": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/seed-legal-content.ts"
   },
   "dependencies": {
     "@types/cors": "^2.8.19",

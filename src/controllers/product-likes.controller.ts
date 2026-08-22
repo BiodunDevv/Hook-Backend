@@ -59,7 +59,7 @@ export class ProductLikesController {
       publishedAt: { $exists: true, $lte: new Date() },
       deletedAt: { $exists: false },
     })
-      .select('publicId title slug description images mediaAssetIds marketId sourceStateId categoryId sellingPriceMinor discountMinor currency negotiationRules status availabilityStatus customerAvailabilityNote publishedAt')
+      .select('publicId title slug description images mediaAssetIds marketId sourceStateId categoryId sellingPriceMinor discountMinor currency negotiationRules status availabilityStatus customerAvailabilityNote publishedAt quantity reservedQuantity')
       .lean({ virtuals: true });
     const presentations = await publicProductRepresentations(products as any[], { compact: true });
     const productMap = new Map(

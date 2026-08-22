@@ -15,7 +15,7 @@ import { OrderItem } from '@models/orders/order-item.model';
 import { OrderFulfilmentGroup } from '@models/orders/order-fulfilment-group.model';
 import { Payment } from '@models/payments/payment.model';
 import { Market, DispatchHub } from '@models/platform/network.model';
-import { HookPartner, RunnerMarketAssignment, RunnerProfile } from '@models/platform/operations-accounts.model';
+import { HookPartner, MarketAssociateMarketAssignment, MarketAssociateProfile } from '@models/platform/operations-accounts.model';
 import { User } from '@models/users/user.model';
 import { PlatformAuditLog } from '@models/platform/audit-log.model';
 import { nextPublicId } from '@services/public-id.service';
@@ -94,10 +94,10 @@ async function orderByIdentifier(value: string) {
   return order as any;
 }
 
-async function runnerContext(accountId: string) {
-  const runner = await RunnerProfile.findOne({ accountId, status: 'active' }).lean({ virtuals: true });
-  if (!runner) throw new HttpError(403, 'Active Runner profile required', undefined, 'ACCESS_DENIED');
-  return runner as any;
+async function marketAssociateContext(accountId: string) {
+  const marketAssociate = await MarketAssociateProfile.findOne({ accountId, status: 'active' }).lean({ virtuals: true });
+  if (!marketAssociate) throw new HttpError(403, 'Active Market Associate profile required', undefined, 'ACCESS_DENIED');
+  return marketAssociate as any;
 }
 
 async function assertStaffScope(actor: Actor, stateId?: string, hubId?: string) {
@@ -147,7 +147,7 @@ export class FulfilmentService {
     for (const group of groups.values()) {
       const marketId = group[0].marketId;
       const stateId = group[0].stateId || order.sourceStateId;
-      const assignment = marketId ? await RunnerMarketAssignment.findOne({ marketId, stateId, status: 'active', isPrimary: true, activeFrom: { $lte: new Date() }, $or: [{ activeTo: { $exists: false } }, { activeTo: null }, { activeTo: { $gt: new Date() } }] }).sort({ priority: 1 }).lean({ virtuals: true }) : null;
+      const assignment = marketId ? await MarketAssociateMarketAssignment.findOne({ marketId, stateId, status: 'active', isPrimary: true, activeFrom: { $lte: new Date() }, $or: [{ activeTo: { $exists: false } }, { activeTo: null }, { activeTo: { $gt: new Date() } }] }).sort({ priority: 1 }).lean({ virtuals: true }) : null;
       const market = marketId ? await Market.findOne(identifier(marketId)).lean({ virtuals: true }) : null;
       const hubId = (assignment as any)?.preferredHubId || (market as any)?.hubId;
       const hub = hubId ? await DispatchHub.findOne(identifier(hubId)).lean({ virtuals: true }) : null;
@@ -161,7 +161,7 @@ export class FulfilmentService {
           $setOnInsert: {
             publicId: await nextPublicId('fulfilment'), orderId: order._id.toString(), sourceStateId: stateId,
             marketId: marketId || 'UNASSIGNED', hubId: hub ? (hub as any).publicId || hub._id.toString() : undefined,
-            runnerId: assignment?.runnerId, orderItemIds: group.map((item) => item._id.toString()),
+            marketAssociateId: assignment?.marketAssociateId, orderItemIds: group.map((item) => item._id.toString()),
             status: groupBlocked ? FulfilmentTaskStatus.BLOCKED : FulfilmentTaskStatus.ALERTED, version: 1, idempotencyKey,
             alertedAt: groupBlocked ? undefined : new Date(), acceptanceDueAt: new Date(Date.now() + 15 * 60 * 1000),
             sourcingDueAt: new Date(Date.now() + 4 * 60 * 60 * 1000), hubHandoverDueAt: new Date(Date.now() + 6 * 60 * 60 * 1000),
@@ -171,12 +171,12 @@ export class FulfilmentService {
         { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
       ).lean({ virtuals: true });
       await OrderItem.updateMany({ _id: { $in: group.map((item) => item._id) } }, { $set: { fulfilmentTaskId: (task as any)._id.toString(), fulfilmentStatus: 'PENDING' } });
-      if (!groupBlocked && assignment?.runnerId && (task as any).status === FulfilmentTaskStatus.ALERTED) {
-        const runnerProfile = await RunnerProfile.findById(assignment.runnerId).select('accountId').lean();
-        if (runnerProfile?.accountId)
+      if (!groupBlocked && assignment?.marketAssociateId && (task as any).status === FulfilmentTaskStatus.ALERTED) {
+        const marketAssociateProfile = await MarketAssociateProfile.findById(assignment.marketAssociateId).select('accountId').lean();
+        if (marketAssociateProfile?.accountId)
           await createCommerceNotification({
             eventKey: `fulfilment:${(task as any).publicId}:alerted`,
-            userId: runnerProfile.accountId,
+            userId: marketAssociateProfile.accountId,
             title: "New order to fulfil",
             body: `A new order needs pickup from ${market?.name || "your assigned Market"}. Accept within 15 minutes.`,
             type: "order_assigned",
@@ -186,12 +186,12 @@ export class FulfilmentService {
       if (groupBlocked) {
         await FulfilmentException.findOneAndUpdate(
           { idempotencyKey: `assignment:${idempotencyKey}` },
-          { $setOnInsert: { publicId: await nextPublicId('exception'), orderId: order._id.toString(), taskId: (task as any)._id.toString(), sourceStateId: stateId, type: !assignment ? 'ASSIGNMENT_MISSING' : 'HUB_MISSING', severity: 'HIGH', status: 'OPEN', summary: !assignment ? 'No active Runner assignment for Market' : 'No compatible Dispatch Hub configured', details: { marketId, stateId }, idempotencyKey: `assignment:${idempotencyKey}` } },
+          { $setOnInsert: { publicId: await nextPublicId('exception'), orderId: order._id.toString(), taskId: (task as any)._id.toString(), sourceStateId: stateId, type: !assignment ? 'ASSIGNMENT_MISSING' : 'HUB_MISSING', severity: 'HIGH', status: 'OPEN', summary: !assignment ? 'No active Market Associate assignment for Market' : 'No compatible Dispatch Hub configured', details: { marketId, stateId }, idempotencyKey: `assignment:${idempotencyKey}` } },
           { upsert: true, returnDocument: 'after' },
         );
       }
     }
-    await Order.updateOne({ _id: order._id }, { $set: { commerceStatus: CommerceOrderStatus.IN_FULFILMENT, status: 'confirmed', fulfilmentSummary: { taskCount: groups.size, blocked }, customerProgress: [{ key: 'fulfilment', label: blocked ? 'Operations review required' : 'Runner sourcing started', at: new Date() }] }, $push: { timeline: { status: 'IN_FULFILMENT', actor: 'SYSTEM', at: new Date(), blocked } } });
+    await Order.updateOne({ _id: order._id }, { $set: { commerceStatus: CommerceOrderStatus.IN_FULFILMENT, status: 'confirmed', fulfilmentSummary: { taskCount: groups.size, blocked }, customerProgress: [{ key: 'fulfilment', label: blocked ? 'Operations review required' : 'Market Associate sourcing started', at: new Date() }] }, $push: { timeline: { status: 'IN_FULFILMENT', actor: 'SYSTEM', at: new Date(), blocked } } });
     await this.publishOrderUpdate(order._id.toString(), order.sourceStateId);
     await audit('fulfilment.tasks.created', 'order', order._id.toString(), 'SYSTEM', { taskCount: groups.size, blocked }, undefined, order.sourceStateId);
     return { taskCount: groups.size, blocked };
@@ -218,9 +218,9 @@ export class FulfilmentService {
     return results;
   }
 
-  async runnerTasks(accountId: string, query: Record<string, unknown>) {
-    const runner = await runnerContext(accountId);
-    const filter: Record<string, unknown> = { runnerId: (runner as any)._id.toString() };
+  async marketAssociateTasks(accountId: string, query: Record<string, unknown>) {
+    const marketAssociate = await marketAssociateContext(accountId);
+    const filter: Record<string, unknown> = { marketAssociateId: (marketAssociate as any)._id.toString() };
     if (query.status) filter.status = query.status;
     const data = await FulfilmentTask.find(filter).sort({ acceptanceDueAt: 1, createdAt: -1 }).limit(Math.min(Number(query.limit || 50), 100)).lean({ virtuals: true });
     return { data, total: data.length };
@@ -240,13 +240,13 @@ export class FulfilmentService {
     return { task, order, items };
   }
 
-  async assignmentRunners(actor: Actor, query: Record<string, unknown>) {
+  async assignmentMarketAssociates(actor: Actor, query: Record<string, unknown>) {
     await assertStaffScope(actor, query.stateId as string | undefined);
     const stateId = query.stateId ? String(query.stateId) : undefined;
     const filter: Record<string, unknown> = { status: 'active' };
     if (stateId) filter.stateIds = stateId;
     else if (actor.stateIds?.length) filter.stateIds = { $in: actor.stateIds };
-    const profiles = await RunnerProfile.find(filter)
+    const profiles = await MarketAssociateProfile.find(filter)
       .select('publicId accountId stateIds hubIds availability status')
       .sort({ createdAt: 1 })
       .limit(200)
@@ -289,14 +289,14 @@ export class FulfilmentService {
       throw new HttpError(409, 'This fulfilment task can no longer be reassigned', undefined, 'INVALID_STATE_TRANSITION');
     }
 
-    const runnerQuery = /^[a-f\d]{24}$/i.test(String(body.runnerId))
-      ? { $or: [{ _id: body.runnerId }, { publicId: body.runnerId }] }
-      : { publicId: String(body.runnerId) };
-    const runner = await RunnerProfile.findOne({ ...runnerQuery, status: 'active', stateIds: task.sourceStateId }).lean({ virtuals: true }) as any;
-    if (!runner) throw new HttpError(409, 'The selected Runner is not active in this State', undefined, 'SCOPE_DENIED');
+    const marketAssociateQuery = /^[a-f\d]{24}$/i.test(String(body.marketAssociateId))
+      ? { $or: [{ _id: body.marketAssociateId }, { publicId: body.marketAssociateId }] }
+      : { publicId: String(body.marketAssociateId) };
+    const marketAssociate = await MarketAssociateProfile.findOne({ ...marketAssociateQuery, status: 'active', stateIds: task.sourceStateId }).lean({ virtuals: true }) as any;
+    if (!marketAssociate) throw new HttpError(409, 'The selected Market Associate is not active in this State', undefined, 'SCOPE_DENIED');
 
-    const assignment = await RunnerMarketAssignment.findOne({
-      runnerId: runner._id.toString(),
+    const assignment = await MarketAssociateMarketAssignment.findOne({
+      marketAssociateId: marketAssociate._id.toString(),
       marketId: task.marketId,
       stateId: task.sourceStateId,
       status: 'active',
@@ -304,7 +304,7 @@ export class FulfilmentService {
       activeFrom: { $lte: new Date() },
       $or: [{ activeTo: { $exists: false } }, { activeTo: null }, { activeTo: { $gt: new Date() } }],
     }).lean({ virtuals: true });
-    if (!assignment) throw new HttpError(409, 'The selected Runner is not assigned to this Market', undefined, 'RUNNER_MARKET_ASSIGNMENT_REQUIRED');
+    if (!assignment) throw new HttpError(409, 'The selected Market Associate is not assigned to this Market', undefined, 'RUNNER_MARKET_ASSIGNMENT_REQUIRED');
 
     const hubQuery = /^[a-f\d]{24}$/i.test(String(body.hubId))
       ? { $or: [{ _id: body.hubId }, { publicId: body.hubId }] }
@@ -318,7 +318,7 @@ export class FulfilmentService {
       { _id: task._id, version: body.version ?? task.version },
       {
         $set: {
-          runnerId: runner._id.toString(),
+          marketAssociateId: marketAssociate._id.toString(),
           hubId: hub.publicId || hub._id.toString(),
           status: FulfilmentTaskStatus.ALERTED,
           alertedAt: now,
@@ -327,8 +327,8 @@ export class FulfilmentService {
         $push: {
           assignmentHistory: {
             action: 'REASSIGNED',
-            fromRunnerId: task.runnerId,
-            toRunnerId: runner.publicId || runner._id.toString(),
+            fromMarketAssociateId: task.marketAssociateId,
+            toMarketAssociateId: marketAssociate.publicId || marketAssociate._id.toString(),
             fromHubId: task.hubId,
             toHubId: hub.publicId || hub._id.toString(),
             reason: String(body.reason).trim(),
@@ -340,7 +340,7 @@ export class FulfilmentService {
       { returnDocument: 'after' },
     ).lean({ virtuals: true });
     if (!updated) throw new HttpError(409, 'This task changed. Refresh and try again.', undefined, 'STALE_VERSION');
-    await audit('fulfilment.task.reassigned', 'fulfilment_task', task.publicId || task._id.toString(), actor.accountId, { runnerId: runner.publicId || runner._id.toString(), hubId: hub.publicId || hub._id.toString() }, String(body.reason).trim(), task.sourceStateId, hub._id.toString());
+    await audit('fulfilment.task.reassigned', 'fulfilment_task', task.publicId || task._id.toString(), actor.accountId, { marketAssociateId: marketAssociate.publicId || marketAssociate._id.toString(), hubId: hub.publicId || hub._id.toString() }, String(body.reason).trim(), task.sourceStateId, hub._id.toString());
     await this.publishOrderUpdate(task.orderId, task.sourceStateId, hub.publicId || hub._id.toString());
     return updated;
   }
@@ -460,10 +460,10 @@ export class FulfilmentService {
     return { taskExceptions, custodyExceptions };
   }
 
-  async runnerTask(accountId: string, taskIdentifier: string) {
-    const runner = await runnerContext(accountId);
+  async marketAssociateTask(accountId: string, taskIdentifier: string) {
+    const marketAssociate = await marketAssociateContext(accountId);
     const task = await taskByIdentifier(taskIdentifier);
-    if (task.runnerId !== (runner as any)._id.toString()) throw new HttpError(404, 'Fulfilment task not found', undefined, 'NOT_FOUND');
+    if (task.marketAssociateId !== (marketAssociate as any)._id.toString()) throw new HttpError(404, 'Fulfilment task not found', undefined, 'NOT_FOUND');
     const [items, market, hub, pack] = await Promise.all([
       OrderItem.find({ _id: { $in: task.orderItemIds } }).lean({ virtuals: true }),
       Market.findOne(identifier(task.marketId)).lean({ virtuals: true }),
@@ -474,9 +474,9 @@ export class FulfilmentService {
   }
 
   async verifyItem(accountId: string, taskIdentifier: string, orderItemId: string, body: Record<string, any>) {
-    const runner = await runnerContext(accountId);
+    const marketAssociate = await marketAssociateContext(accountId);
     const task = await taskByIdentifier(taskIdentifier);
-    if (task.runnerId !== (runner as any)._id.toString()) throw new HttpError(404, 'Fulfilment task not found', undefined, 'NOT_FOUND');
+    if (task.marketAssociateId !== (marketAssociate as any)._id.toString()) throw new HttpError(404, 'Fulfilment task not found', undefined, 'NOT_FOUND');
     if (!task.orderItemIds.map(String).includes(String(orderItemId))) throw new HttpError(404, 'Order item not found on this task', undefined, 'NOT_FOUND');
     if (![FulfilmentTaskStatus.PRODUCT_SECURED, FulfilmentTaskStatus.PACKING].includes(task.status)) {
       throw new HttpError(409, 'Items can only be verified after sourcing is secured and before packing is complete', { current: task.status }, 'INVALID_STATE_TRANSITION');
@@ -512,17 +512,17 @@ export class FulfilmentService {
     }
     if (!updated) throw new HttpError(404, 'Fulfilment task not found', undefined, 'NOT_FOUND');
     await OrderItem.updateOne({ _id: orderItemId }, { $set: { fulfilmentStatus: matched ? 'SECURED' : 'EXCEPTION' } });
-    await audit('fulfilment.runner.item_verified', 'fulfilment_task', task._id.toString(), accountId, { orderItemId, matched }, undefined, task.sourceStateId, task.hubId);
+    await audit('fulfilment.marketassociate.item_verified', 'fulfilment_task', task._id.toString(), accountId, { orderItemId, matched }, undefined, task.sourceStateId, task.hubId);
     await this.publishOrderUpdate(task.orderId, task.sourceStateId, task.hubId);
     const verifications = (updated as any).itemVerifications || [];
     const verifiedCount = task.orderItemIds.filter((id: string) => verifications.some((v: any) => String(v.orderItemId) === String(id) && v.matched)).length;
     return { taskId: (updated as any).publicId || (updated as any)._id.toString(), orderItemId, matched, verifiedCount, totalCount: task.orderItemIds.length };
   }
 
-  async runnerTransition(accountId: string, taskIdentifier: string, action: string, version: number, body: Record<string, any> = {}) {
-    const runner = await runnerContext(accountId);
+  async marketAssociateTransition(accountId: string, taskIdentifier: string, action: string, version: number, body: Record<string, any> = {}) {
+    const marketAssociate = await marketAssociateContext(accountId);
     const task = await taskByIdentifier(taskIdentifier);
-    if (task.runnerId !== (runner as any)._id.toString()) throw new HttpError(404, 'Fulfilment task not found', undefined, 'NOT_FOUND');
+    if (task.marketAssociateId !== (marketAssociate as any)._id.toString()) throw new HttpError(404, 'Fulfilment task not found', undefined, 'NOT_FOUND');
     if (action === 'pack' && task.status === FulfilmentTaskStatus.READY_FOR_HUB) {
       const existingPackage = await RunnerPackage.findOne({ taskId: task._id }).select('-scanCredentialHash').lean({ virtuals: true });
       if (existingPackage) return { ...task, package: existingPackage };
@@ -542,30 +542,30 @@ export class FulfilmentService {
       set.status = FulfilmentTaskStatus.READY_FOR_HUB; set.packedAt = now; set.hubArrivedAt = body.arrivedAt ? new Date(body.arrivedAt) : undefined;
       const existingPackage = await RunnerPackage.findOne({ taskId: task._id }).select('-scanCredentialHash').lean({ virtuals: true });
       const rawCredential = existingPackage ? undefined : String(randomInt(100000, 999999));
-      const created = existingPackage || await RunnerPackage.findOneAndUpdate({ taskId: task._id }, { $setOnInsert: { publicId: await nextPublicId('runnerPackage'), orderId: task.orderId, taskId: task._id.toString(), runnerId: task.runnerId, hubId: task.hubId, status: RunnerPackageStatus.READY_FOR_HUB, scanCredentialHash: digest(rawCredential as string), scanCredentialHint: hint(rawCredential as string), itemIds: task.orderItemIds, packedAt: now, evidence: evidence(body.evidence), version: 1 } }, { upsert: true, returnDocument: 'after' }).select('-scanCredentialHash').lean({ virtuals: true });
+      const created = existingPackage || await RunnerPackage.findOneAndUpdate({ taskId: task._id }, { $setOnInsert: { publicId: await nextPublicId('runnerPackage'), orderId: task.orderId, taskId: task._id.toString(), marketAssociateId: task.marketAssociateId, hubId: task.hubId, status: RunnerPackageStatus.READY_FOR_HUB, scanCredentialHash: digest(rawCredential as string), scanCredentialHint: hint(rawCredential as string), itemIds: task.orderItemIds, packedAt: now, evidence: evidence(body.evidence), version: 1 } }, { upsert: true, returnDocument: 'after' }).select('-scanCredentialHash').lean({ virtuals: true });
       const packSet = { ...set };
       delete packSet.version;
       const updatedTask = await FulfilmentTask.findOneAndUpdate({ _id: task._id, version }, { $set: { ...packSet, status: FulfilmentTaskStatus.READY_FOR_HUB, packedAt: now }, $inc: { version: 1 } }, { returnDocument: 'after' }).lean({ virtuals: true });
       if (!updatedTask) throw new HttpError(409, 'This task changed. Refresh and try again.', undefined, 'STALE_VERSION');
       await OrderItem.updateMany({ _id: { $in: task.orderItemIds } }, { $set: { fulfilmentStatus: 'PACKED', runnerPackageId: (created as any)._id.toString() } });
-      await audit('fulfilment.runner.package_created', 'runner_package', (created as any).id, accountId, { publicId: (created as any).publicId }, undefined, task.sourceStateId, task.hubId);
+      await audit('fulfilment.marketassociate.package_created', 'runner_package', (created as any).id, accountId, { publicId: (created as any).publicId }, undefined, task.sourceStateId, task.hubId);
       await this.publishOrderUpdate(task.orderId, task.sourceStateId, task.hubId);
       return { ...(updatedTask as any), package: { ...(created as any), ...(rawCredential ? { scanCredential: rawCredential } : {}) } };
     }
     const updated = await FulfilmentTask.findOneAndUpdate({ _id: task._id, version }, { $set: set }, { returnDocument: 'after' }).lean({ virtuals: true });
     if (!updated) throw new HttpError(409, 'This task changed. Refresh and try again.', undefined, 'STALE_VERSION');
-    await audit(`fulfilment.runner.${action}`, 'fulfilment_task', task._id.toString(), accountId, { status: (updated as any).status }, undefined, task.sourceStateId, task.hubId);
+    await audit(`fulfilment.marketassociate.${action}`, 'fulfilment_task', task._id.toString(), accountId, { status: (updated as any).status }, undefined, task.sourceStateId, task.hubId);
     await this.publishOrderUpdate(task.orderId, task.sourceStateId, task.hubId);
     return updated;
   }
 
-  async runnerIssue(accountId: string, taskIdentifier: string, body: Record<string, any>) {
-    const runner = await runnerContext(accountId); const task = await taskByIdentifier(taskIdentifier);
-    if (task.runnerId !== (runner as any)._id.toString()) throw new HttpError(404, 'Fulfilment task not found', undefined, 'NOT_FOUND');
-    const idempotencyKey = String(body.idempotencyKey || `runner-issue:${task._id}:${task.version}:${body.type || 'ITEM_UNAVAILABLE'}`);
+  async marketAssociateIssue(accountId: string, taskIdentifier: string, body: Record<string, any>) {
+    const marketAssociate = await marketAssociateContext(accountId); const task = await taskByIdentifier(taskIdentifier);
+    if (task.marketAssociateId !== (marketAssociate as any)._id.toString()) throw new HttpError(404, 'Fulfilment task not found', undefined, 'NOT_FOUND');
+    const idempotencyKey = String(body.idempotencyKey || `marketassociate-issue:${task._id}:${task.version}:${body.type || 'ITEM_UNAVAILABLE'}`);
     const existing = await FulfilmentException.findOne({ idempotencyKey }).lean({ virtuals: true });
     if (existing) return existing;
-    const exception = await FulfilmentException.create({ publicId: await nextPublicId('exception'), orderId: task.orderId, taskId: task._id.toString(), sourceStateId: task.sourceStateId, hubId: task.hubId, type: body.type || 'ITEM_UNAVAILABLE', severity: body.severity || 'HIGH', status: 'OPEN', summary: String(body.summary || 'Runner reported a fulfilment issue'), details: { evidence: body.evidence || [], ...(body.orderItemId ? { orderItemId: String(body.orderItemId) } : {}) }, openedBy: accountId, idempotencyKey });
+    const exception = await FulfilmentException.create({ publicId: await nextPublicId('exception'), orderId: task.orderId, taskId: task._id.toString(), sourceStateId: task.sourceStateId, hubId: task.hubId, type: body.type || 'ITEM_UNAVAILABLE', severity: body.severity || 'HIGH', status: 'OPEN', summary: String(body.summary || 'Market Associate reported a fulfilment issue'), details: { evidence: body.evidence || [], ...(body.orderItemId ? { orderItemId: String(body.orderItemId) } : {}) }, openedBy: accountId, idempotencyKey });
     const taskUpdate = await FulfilmentTask.updateOne({ _id: task._id, version: task.version }, { $set: { status: FulfilmentTaskStatus.BLOCKED, issue: { exceptionId: exception.publicId } }, $inc: { version: 1 } });
     if (!taskUpdate.modifiedCount) throw new HttpError(409, 'This fulfilment task changed. Refresh and try again.', undefined, 'STALE_VERSION');
     await this.publishOrderUpdate(task.orderId, task.sourceStateId, task.hubId);
@@ -644,9 +644,9 @@ export class FulfilmentService {
   async receivePackage(actor: Actor, packageIdentifier: string, body: Record<string, any>) {
     await assertStaffScope(actor, body.stateId, body.hubId);
     const runnerPackage = await RunnerPackage.findOne(identifier(packageIdentifier)).select('+scanCredentialHash').lean({ virtuals: true }) as any;
-    if (!runnerPackage) throw new HttpError(404, 'Runner package not found', undefined, 'NOT_FOUND');
+    if (!runnerPackage) throw new HttpError(404, 'Market Associate package not found', undefined, 'NOT_FOUND');
     const task = await FulfilmentTask.findById(runnerPackage.taskId).select('sourceStateId hubId').lean() as any;
-    if (!task) throw new HttpError(404, 'Runner package not found', undefined, 'NOT_FOUND');
+    if (!task) throw new HttpError(404, 'Market Associate package not found', undefined, 'NOT_FOUND');
     await assertStaffScope(actor, task.sourceStateId, runnerPackage.hubId);
     if (body.stateId && String(body.stateId) !== String(task.sourceStateId)) throw new HttpError(403, 'Package is outside the requested State', undefined, 'SCOPE_DENIED');
     const existing = body.idempotencyKey ? await HubPackage.findOne({ receiveIdempotencyKey: body.idempotencyKey }).lean({ virtuals: true }) : null;
@@ -657,7 +657,7 @@ export class FulfilmentService {
     if (runnerPackage.status !== RunnerPackageStatus.READY_FOR_HUB) throw new HttpError(409, 'Package is not ready for Hub receiving', undefined, 'INVALID_STATE_TRANSITION');
     if (body.hubId && body.hubId !== runnerPackage.hubId) throw new HttpError(403, 'Package is assigned to another Hub', undefined, 'SCOPE_DENIED');
     if (!body.scanCredential || digest(String(body.scanCredential)) !== runnerPackage.scanCredentialHash) throw new HttpError(403, 'Invalid package scan credential', undefined, 'ACCESS_DENIED');
-    const received = await HubPackage.create({ publicId: await nextPublicId('hubPackage'), orderId: runnerPackage.orderId, taskId: runnerPackage.taskId, runnerPackageId: runnerPackage._id.toString(), hubId: runnerPackage.hubId, runnerId: runnerPackage.runnerId, status: HubPackageStatus.QC_PENDING, itemIds: runnerPackage.itemIds, receivedAt: new Date(), receivedBy: actor.accountId, qualityChecks: [], custodyHistory: [{ action: 'RECEIVED', actorId: actor.accountId, at: new Date() }], evidence: evidence(body.evidence), version: 1, receiveIdempotencyKey: body.idempotencyKey });
+    const received = await HubPackage.create({ publicId: await nextPublicId('hubPackage'), orderId: runnerPackage.orderId, taskId: runnerPackage.taskId, runnerPackageId: runnerPackage._id.toString(), hubId: runnerPackage.hubId, marketAssociateId: runnerPackage.marketAssociateId, status: HubPackageStatus.QC_PENDING, itemIds: runnerPackage.itemIds, receivedAt: new Date(), receivedBy: actor.accountId, qualityChecks: [], custodyHistory: [{ action: 'RECEIVED', actorId: actor.accountId, at: new Date() }], evidence: evidence(body.evidence), version: 1, receiveIdempotencyKey: body.idempotencyKey });
     await RunnerPackage.updateOne({ _id: runnerPackage._id }, { $set: { status: RunnerPackageStatus.HUB_RECEIVED, handedOverAt: new Date() } });
     await FulfilmentTask.updateOne({ _id: runnerPackage.taskId }, { $set: { status: FulfilmentTaskStatus.HUB_RECEIVED, hubReceivedAt: new Date() }, $inc: { version: 1 } });
     await OrderItem.updateMany({ _id: { $in: runnerPackage.itemIds } }, { $set: { fulfilmentStatus: 'RECEIVED', hubPackageId: received.id } });
@@ -713,12 +713,12 @@ export class FulfilmentService {
         }).catch(() => undefined);
       }
     }
-    if (pack.runnerId) {
-      const runnerProfile = await RunnerProfile.findById(pack.runnerId).select('accountId').lean() as any;
-      if (runnerProfile?.accountId) {
+    if (pack.marketAssociateId) {
+      const marketAssociateProfile = await MarketAssociateProfile.findById(pack.marketAssociateId).select('accountId').lean() as any;
+      if (marketAssociateProfile?.accountId) {
         await createCommerceNotification({
           eventKey: `runner-package:${pack.publicId}:qc-passed`,
-          userId: runnerProfile.accountId,
+          userId: marketAssociateProfile.accountId,
           title: 'Package passed Hub QC',
           body: 'The items you sourced passed quality check at the Hub.',
           type: 'hub_qc_passed',

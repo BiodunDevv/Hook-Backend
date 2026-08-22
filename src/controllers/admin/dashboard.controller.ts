@@ -11,6 +11,7 @@ import { sendSuccess } from '@utils/http';
 import { adminRepos } from './admin.helpers';
 import { adminDashboardCache } from '@lib/ttl-cache';
 import { User } from '@models/users/user.model';
+import { MarketAssociateProfile } from '@models/platform/operations-accounts.model';
 
 const activeOrderStatuses = [
   OrderStatus.PENDING,
@@ -51,7 +52,6 @@ export class AdminDashboardController {
     const products = adminRepos.products();
     const orders = adminRepos.orders();
     const logistics = adminRepos.logistics();
-    const runners = adminRepos.fieldAgents();
     const negotiations = adminRepos.negotiations();
 
     const [
@@ -59,7 +59,7 @@ export class AdminDashboardController {
       yesterdayActiveOrders,
       totalNegotiations,
       acceptedNegotiations,
-      activeRunners,
+      activeMarketAssociates,
       publishedProducts,
       revenue,
       grossMerchandise,
@@ -76,7 +76,7 @@ export class AdminDashboardController {
       orders.count({ where: { createdAt: mongoBetween(yesterdayStart, todayStart), status: mongoIn(activeOrderStatuses) } }),
       negotiations.count(),
       negotiations.count({ where: { status: NegotiationStatus.ACCEPTED } }),
-      runners.count({ where: { isActive: true } }),
+      MarketAssociateProfile.countDocuments({ status: 'active' }),
       products.count({ where: { status: ProductStatus.APPROVED } }),
       sum(orders, { status: OrderStatus.DELIVERED }, 'total'),
       sum(orders, {}, 'total'),
@@ -155,7 +155,7 @@ export class AdminDashboardController {
         change: 0,
         caption: `from ${Number(productRatings?.reviews || 0).toLocaleString('en')} reviews`,
       },
-      activeRunners: { value: activeRunners, change: 0, caption: 'market-side operations' },
+      activeMarketAssociates: { value: activeMarketAssociates, change: 0, caption: 'market-side operations' },
       publishedProducts: { value: publishedProducts, change: 0, caption: 'commercially approved' },
     };
     adminDashboardCache.set(cacheKey, response);

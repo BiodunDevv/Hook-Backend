@@ -61,6 +61,7 @@ export function assertSafeEnvironment() {
       }
     }
     requireEnv('PAYSTACK_SECRET_KEY');
+    requireEnv('GOOGLE_WEB_CLIENT_ID');
     const opayConfigured = [
       process.env.OPAY_PAYIN_PUBLIC_KEY,
       process.env.OPAY_PAYIN_SECRET_KEY,

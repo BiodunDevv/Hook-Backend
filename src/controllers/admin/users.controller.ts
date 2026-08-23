@@ -1,9 +1,13 @@
 import { Request, Response } from 'express';
-import { AccountType, UserRole } from '@lib/constants';
+import { AccountStatus, AccountType, PaymentStatus, UserRole } from '@lib/constants';
+import { auditAdminAction } from '@lib/audit';
 import { hashPassword } from '@lib/security';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
 import { adminRepos, getPagination, paginated, routeParam } from './admin.helpers';
 import { User } from '@models/users/user.model';
+import { Order } from '@models/orders/order.model';
+import { CustomerAddress } from '@models/commerce/commerce.model';
+import { revokeAccountSessions } from '@services/account-session.service';
 
 const USER_LIST_FIELDS = 'publicId email phone firstName lastName role accountType accountStatus scopeType assignedStateIds assignedHubIds assignedCategoryIds isEmailVerified isPhoneVerified isActive lastLoginAt createdAt updatedAt';
 
@@ -74,7 +78,26 @@ export class AdminUsersController {
   detail = async (req: Request, res: Response) => {
     const user = await adminRepos.users().findOne({ where: { id: routeParam(req.params.id) } });
     if (!user) throw new HttpError(404, 'User not found');
-    sendSuccess(res, safeUser(user));
+    const customerId = user.id;
+    const [defaultAddress, spendAgg, recentOrders] = await Promise.all([
+      CustomerAddress.findOne({ customerId, status: 'active' }).sort({ isDefault: -1, createdAt: -1 }).lean(),
+      Order.aggregate([
+        { $match: { userId: customerId, paymentStatus: PaymentStatus.SUCCESSFUL } },
+        { $group: { _id: null, totalSpentMinor: { $sum: '$totalMinor' }, orderCount: { $sum: 1 } } },
+      ]),
+      Order.find({ userId: customerId })
+        .select('publicId orderCode totalMinor status paymentStatus createdAt')
+        .sort({ createdAt: -1 })
+        .limit(10)
+        .lean({ virtuals: true }),
+    ]);
+    sendSuccess(res, {
+      ...safeUser(user),
+      defaultAddress: defaultAddress || null,
+      totalSpentMinor: spendAgg[0]?.totalSpentMinor || 0,
+      orderCount: spendAgg[0]?.orderCount || 0,
+      recentOrders,
+    });
   };
 
   create = async (req: Request, res: Response) => {
@@ -109,5 +132,64 @@ export class AdminUsersController {
     user.role = req.body.role;
     await users.save(user);
     sendSuccess(res, { id: user.id, email: user.email, role: user.role });
+  };
+
+  /**
+   * Reversible: the account is deactivated and flagged for deletion, but
+   * every field and every order/address record is kept exactly as-is so an
+   * admin (or the customer, if they change their mind) can be restored.
+   */
+  softDelete = async (req: Request, res: Response) => {
+    const users = adminRepos.users();
+    const user = await users.findOne({ where: { id: routeParam(req.params.id) } });
+    if (!user) throw new HttpError(404, 'User not found');
+    const reason = String(req.body?.reason || '').trim();
+    if (reason.length < 3) throw new HttpError(400, 'A reason is required to delete this account', undefined, 'VALIDATION_ERROR');
+    user.isActive = false;
+    user.accountStatus = AccountStatus.DELETION_REQUESTED;
+    await users.save(user);
+    await revokeAccountSessions(user.id, 'admin_soft_delete', req.user?.sub);
+    await auditAdminAction(req, 'customer.soft_delete', 'user', user.id, { reason });
+    sendSuccess(res, { id: user.id, accountStatus: user.accountStatus });
+  };
+
+  restore = async (req: Request, res: Response) => {
+    const users = adminRepos.users();
+    const user = await users.findOne({ where: { id: routeParam(req.params.id) } });
+    if (!user) throw new HttpError(404, 'User not found');
+    user.isActive = true;
+    user.accountStatus = AccountStatus.ACTIVE;
+    await users.save(user);
+    await auditAdminAction(req, 'customer.restore', 'user', user.id, {});
+    sendSuccess(res, { id: user.id, accountStatus: user.accountStatus });
+  };
+
+  /**
+   * Irreversible. The User document and their saved addresses are deleted
+   * from the database entirely. Past Orders keep their own customerSnapshot
+   * captured at checkout time, so order history still displays correctly —
+   * only the live link to an account record is gone, which is the expected
+   * result of a real deletion. The client must send the exact confirmation
+   * phrase; this is re-validated here rather than trusted from the UI
+   * alone, since a destructive action like this must never rely solely on
+   * client-side gating.
+   */
+  hardDelete = async (req: Request, res: Response) => {
+    const users = adminRepos.users();
+    const user = await users.findOne({ where: { id: routeParam(req.params.id) } });
+    if (!user) throw new HttpError(404, 'User not found');
+    const reason = String(req.body?.reason || '').trim();
+    if (reason.length < 3) throw new HttpError(400, 'A reason is required to permanently delete this account', undefined, 'VALIDATION_ERROR');
+    const expectedConfirmation = `DELETE ${user.publicId || user.id}`;
+    if (String(req.body?.confirmation || '').trim() !== expectedConfirmation) {
+      throw new HttpError(400, `Type "${expectedConfirmation}" exactly to confirm permanent deletion`, undefined, 'VALIDATION_ERROR');
+    }
+    await revokeAccountSessions(user.id, 'admin_hard_delete', req.user?.sub);
+    // Logged before the document is removed — nothing would be left to
+    // attach an audit entry to afterward.
+    await auditAdminAction(req, 'customer.hard_delete', 'user', user.id, { reason, email: user.email });
+    await CustomerAddress.deleteMany({ customerId: user.id });
+    await User.deleteOne({ _id: user.id });
+    sendSuccess(res, { id: user.id, deleted: true });
   };
 }

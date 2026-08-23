@@ -1385,9 +1385,22 @@ export class PlatformController {
     const scope = await resolveMarketAssociateScope(req.body.stateIds || marketAssociate.stateIds, req.body.hubIds || marketAssociate.hubIds);
     for (const stateId of scope.stateIds) assertScope(context, stateId);
     for (const hubId of scope.hubIds) assertScope(context, undefined, hubId);
-    const updated = await MarketAssociateProfile.findByIdAndUpdate(marketAssociate._id, {
-      $set: { ...req.body, stateIds: scope.stateIds, hubIds: scope.hubIds },
-    }, { returnDocument: 'after' }).lean({ virtuals: true });
+    const [updated] = await Promise.all([
+      MarketAssociateProfile.findByIdAndUpdate(marketAssociate._id, {
+        $set: {
+          ...(req.body.availability !== undefined && { availability: req.body.availability }),
+          stateIds: scope.stateIds,
+          hubIds: scope.hubIds,
+        },
+      }, { returnDocument: 'after' }).lean({ virtuals: true }),
+      User.updateOne({ _id: marketAssociate.accountId }, {
+        $set: {
+          ...(req.body.firstName !== undefined && { firstName: req.body.firstName }),
+          ...(req.body.lastName !== undefined && { lastName: req.body.lastName }),
+          ...(req.body.phone !== undefined && { phone: req.body.phone }),
+        },
+      }),
+    ]);
     await recordAudit(req, { action: 'marketassociate.updated', entityType: 'marketassociate', entityId: marketAssociate._id.toString(), entityPublicId: marketAssociate.publicId, before: marketAssociate, after: updated, reason: req.body.reason });
     await sendPlatformSuccess(res, updated);
   };

@@ -1,36 +1,70 @@
 import { Request, Response } from 'express';
-import { UserRole } from '@lib/constants';
+import { AccountType, ScopeType, UserRole } from '@lib/constants';
 import { sendSuccess } from '@utils/http';
 import { Order } from '@models/orders/order.model';
 import { Product } from '@models/products/product.model';
 import { User } from '@models/users/user.model';
+import { Category } from '@models/categories/category.model';
+import { DispatchHub, Market } from '@models/platform/network.model';
+import { HookPartner, MarketAssociateProfile } from '@models/platform/operations-accounts.model';
 
 const STAFF_ROLES = [UserRole.SUPPORT, UserRole.ADMIN, UserRole.SUPER_ADMIN];
 
-function userHasPermission(req: Request, permission: string): boolean {
+/**
+ * Search results must respect exactly the same permission model as every
+ * other admin endpoint — a permission the caller actually has (or Super
+ * Admin), not "any ADMIN-role account gets everything." The old check here
+ * auto-granted orders/products search to every ADMIN role regardless of
+ * their real permission array, which is inconsistent with how every other
+ * controller in this codebase enforces access via assertPermission().
+ */
+function can(req: Request, permission: string): boolean {
   const user = req.user;
   if (!user) return false;
-  if (user.role === UserRole.SUPER_ADMIN || user.role === UserRole.ADMIN) return true;
-  if (user.role === UserRole.SUPPORT) return user.permissions.includes(permission);
-  return false;
+  if (user.roleKeys?.includes('SUPER_ADMIN') || user.role === UserRole.SUPER_ADMIN) return true;
+  return Array.isArray(user.permissions) && user.permissions.includes(permission);
+}
+
+function inScope(req: Request) {
+  const user = req.user;
+  const scopeType = user?.scopeType || ScopeType.SELF;
+  const stateIds = user?.assignedStateIds || [];
+  const hubIds = user?.assignedHubIds || [];
+  const isGlobal = user?.roleKeys?.includes('SUPER_ADMIN') || user?.role === UserRole.SUPER_ADMIN || scopeType === ScopeType.GLOBAL;
+  return {
+    /** Adds a state/hub scope clause to a filter, or returns it unchanged for global scope. */
+    state(filter: Record<string, unknown>, field = 'stateId') {
+      if (isGlobal) return filter;
+      return { ...filter, [field]: { $in: stateIds } };
+    },
+    hub(filter: Record<string, unknown>, field = 'hubId') {
+      if (isGlobal || scopeType !== ScopeType.HUB) return filter;
+      return { ...filter, [field]: { $in: hubIds } };
+    },
+  };
 }
 
 export class AdminSearchController {
   global = async (req: Request, res: Response) => {
     const q = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : '';
     const limit = Math.min(parseInt(String(req.query.limit || '5'), 10), 10);
+    const empty = { query: q, orders: [], products: [], customers: [], staff: [], marketAssociates: [], partners: [], markets: [], hubs: [], categories: [], total: 0 };
 
-    if (q.length < 2) {
-      return sendSuccess(res, { query: q, orders: [], products: [], customers: [], staff: [], total: 0 });
-    }
+    if (q.length < 2) return sendSuccess(res, empty);
 
-    const isSuperAdmin = req.user?.role === UserRole.SUPER_ADMIN;
-    const canOrders    = userHasPermission(req, 'orders.view');
-    const canProducts  = userHasPermission(req, 'products.view');
-    const canCustomers = userHasPermission(req, 'customers.view');
+    const canOrders = can(req, 'orders.view');
+    const canProducts = can(req, 'products.view');
+    const canCustomers = can(req, 'customers.view');
+    const canStaff = can(req, 'staff.view');
+    const canMarketAssociates = can(req, 'runners.view');
+    const canPartners = can(req, 'partners.view');
+    const canMarkets = can(req, 'markets.view');
+    const canHubs = can(req, 'hubs.view');
+    const canCategories = can(req, 'categories.view');
+    const scope = inScope(req);
     const expression = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
 
-    const userMatches = (canCustomers || isSuperAdmin)
+    const userMatches = (canCustomers || canStaff)
       ? await User.find({
           $or: [
             { email: expression },
@@ -40,7 +74,7 @@ export class AdminSearchController {
           ],
           role: { $in: [UserRole.SHOPPER, ...STAFF_ROLES] },
         })
-          .select('firstName lastName email role isActive isEmailVerified permissions')
+          .select('firstName lastName email role isActive isEmailVerified permissions publicId')
           .sort({ createdAt: -1 })
           .limit(limit * 4)
           .lean({ virtuals: true })
@@ -57,7 +91,34 @@ export class AdminSearchController {
       ],
     };
 
-    const [ordersRows, productsRows] = await Promise.all([
+    // Market Associates and Partners have their own account (name/email), so
+    // matching requires the same two-step User lookup used by their list
+    // endpoints — the profile document itself has no name field to search.
+    const accountMatches = (canMarketAssociates || canPartners)
+      ? await User.find({
+          $or: [{ email: expression }, { firstName: expression }, { lastName: expression }],
+          accountType: { $in: [AccountType.MARKETASSOCIATE, AccountType.PARTNER] },
+        })
+          .select('firstName lastName email accountType')
+          .limit(limit * 4)
+          .lean()
+      : [];
+    const marketAssociateAccountIds = (accountMatches as any[])
+      .filter((account) => account.accountType === AccountType.MARKETASSOCIATE)
+      .map((account) => String(account._id));
+    const partnerAccountIds = (accountMatches as any[])
+      .filter((account) => account.accountType === AccountType.PARTNER)
+      .map((account) => String(account._id));
+
+    const [
+      ordersRows,
+      productsRows,
+      marketAssociateRows,
+      partnerRows,
+      marketRows,
+      hubRows,
+      categoryRows,
+    ] = await Promise.all([
       canOrders
         ? Order.find(orderFilter)
           .select('publicId orderCode userId guestEmail guestName status paymentStatus total createdAt')
@@ -78,9 +139,56 @@ export class AdminSearchController {
           .limit(limit)
           .lean({ virtuals: true })
         : [],
+      canMarketAssociates
+        ? MarketAssociateProfile.find(scope.state({
+            $or: [
+              { publicId: expression },
+              ...(marketAssociateAccountIds.length ? [{ accountId: { $in: marketAssociateAccountIds } }] : []),
+            ],
+          }))
+          .select('publicId accountId stateIds status')
+          .limit(limit)
+          .lean({ virtuals: true })
+        : [],
+      canPartners
+        ? HookPartner.find(scope.state({
+            $or: [
+              { name: expression },
+              { address: expression },
+              { publicId: expression },
+              ...(partnerAccountIds.length ? [{ accountId: { $in: partnerAccountIds } }] : []),
+            ],
+          }))
+          .select('publicId name address stateId status')
+          .limit(limit)
+          .lean({ virtuals: true })
+        : [],
+      canMarkets
+        ? Market.find(scope.state({
+            $or: [{ name: expression }, { address: expression }, { publicId: expression }],
+          }))
+          .select('publicId name address stateId status')
+          .limit(limit)
+          .lean({ virtuals: true })
+        : [],
+      canHubs
+        ? DispatchHub.find(scope.hub(scope.state({
+            $or: [{ name: expression }, { address: expression }, { publicId: expression }],
+          }), '_id'))
+          .select('publicId name address stateId status')
+          .limit(limit)
+          .lean({ virtuals: true })
+        : [],
+      canCategories
+        ? Category.find({ $or: [{ name: expression }, { publicId: expression }] })
+          .select('publicId name isActive')
+          .limit(limit)
+          .lean({ virtuals: true })
+        : [],
     ]);
 
     const userMap = new Map((userMatches as any[]).map((user) => [String(user._id || user.id), user]));
+    const accountMap = new Map((accountMatches as any[]).map((account) => [String(account._id), account]));
     const orders = (ordersRows as any[]).map((o) => {
       const user = userMap.get(String(o.userId));
       return {
@@ -128,8 +236,47 @@ export class AdminSearchController {
         permissions: Array.isArray(u.permissions) ? u.permissions : [],
       }));
 
-    const total = orders.length + products.length + customers.length + staff.length;
+    const marketAssociates = (marketAssociateRows as any[]).map((profile) => {
+      const account = accountMap.get(String(profile.accountId));
+      return {
+        id: profile.publicId,
+        firstName: account?.firstName,
+        lastName: account?.lastName,
+        email: account?.email,
+        status: profile.status,
+      };
+    });
 
-    return sendSuccess(res, { query: q, orders, products, customers, staff, total });
+    const partners = (partnerRows as any[]).map((partner) => ({
+      id: partner.publicId,
+      name: partner.name,
+      address: partner.address,
+      status: partner.status,
+    }));
+
+    const markets = (marketRows as any[]).map((market) => ({
+      id: market.publicId,
+      name: market.name,
+      address: market.address,
+      status: market.status,
+    }));
+
+    const hubs = (hubRows as any[]).map((hub) => ({
+      id: hub.publicId,
+      name: hub.name,
+      address: hub.address,
+      status: hub.status,
+    }));
+
+    const categories = (categoryRows as any[]).map((category) => ({
+      id: category.publicId || String(category._id),
+      name: category.name,
+      isActive: category.isActive,
+    }));
+
+    const total = orders.length + products.length + customers.length + staff.length
+      + marketAssociates.length + partners.length + markets.length + hubs.length + categories.length;
+
+    return sendSuccess(res, { query: q, orders, products, customers, staff, marketAssociates, partners, markets, hubs, categories, total });
   };
 }

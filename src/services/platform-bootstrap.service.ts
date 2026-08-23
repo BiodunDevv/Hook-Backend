@@ -184,7 +184,10 @@ export async function ensurePlatformAccessCatalog() {
           description: `${role.name} platform role`,
           permissionKeys: role.permissions,
           defaultScopeType: role.scope,
-          isSystem: true,
+          // Only SUPER_ADMIN is a true system role that can never be edited
+          // or deleted — every other seeded role is just a sensible default
+          // an admin should be free to customize like any role they create.
+          isSystem: role.key === 'SUPER_ADMIN',
           isActive: true,
         },
       },

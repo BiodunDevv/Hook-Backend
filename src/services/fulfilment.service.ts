@@ -106,6 +106,58 @@ async function assertStaffScope(actor: Actor, stateId?: string, hubId?: string) 
   if (hubId && actor.hubIds?.length && !actor.hubIds.includes(hubId)) throw new HttpError(403, 'The requested Hub is outside your scope', undefined, 'SCOPE_DENIED');
 }
 
+/**
+ * FulfilmentTask/Shipment/ReturnRequest/etc. store marketId, hubId, and
+ * marketAssociateId as denormalized strings (not Mongoose refs — see the
+ * schema), so admin views showing them raw display bare ObjectIds instead of
+ * names. This batch-resolves every id referenced across a set of records in
+ * three queries total (not one query per record) and returns lookup maps
+ * keyed by both _id and publicId, since callers store either form.
+ */
+async function resolveFulfilmentNames(records: Array<{ marketId?: string; hubId?: string; marketAssociateId?: string; orderId?: string }>) {
+  const marketIds = [...new Set(records.map((record) => record.marketId).filter(Boolean))] as string[];
+  const hubIds = [...new Set(records.map((record) => record.hubId).filter(Boolean))] as string[];
+  const marketAssociateIds = [...new Set(records.map((record) => record.marketAssociateId).filter(Boolean))] as string[];
+  const orderIds = [...new Set(records.map((record) => record.orderId).filter(Boolean))] as string[];
+
+  const [markets, hubs, marketAssociates, orders] = await Promise.all([
+    marketIds.length ? Market.find({ $or: marketIds.map((id) => identifier(id)) }).select('publicId name imageUrl').lean() as Promise<any[]> : Promise.resolve([]),
+    hubIds.length ? DispatchHub.find({ $or: hubIds.map((id) => identifier(id)) }).select('publicId name').lean() as Promise<any[]> : Promise.resolve([]),
+    marketAssociateIds.length ? MarketAssociateProfile.find({ $or: marketAssociateIds.map((id) => identifier(id)) }).select('publicId accountId').lean() as Promise<any[]> : Promise.resolve([]),
+    orderIds.length ? Order.find({ $or: orderIds.map((id) => identifier(id)) }).select('publicId').lean() as Promise<any[]> : Promise.resolve([]),
+  ]);
+
+  const accounts = marketAssociates.length
+    ? await User.find({ _id: { $in: marketAssociates.map((profile) => profile.accountId) } }).select('firstName lastName email avatarUrl').lean() as any[]
+    : [];
+  const accountById = new Map(accounts.map((account) => [String(account._id), account]));
+
+  function byBothIds<T extends { publicId?: string; _id: unknown }>(list: T[]) {
+    const map = new Map<string, T>();
+    for (const item of list) {
+      map.set(String(item._id), item);
+      if (item.publicId) map.set(item.publicId, item);
+    }
+    return map;
+  }
+
+  const marketById = byBothIds(markets);
+  const hubById = byBothIds(hubs);
+  const orderById = byBothIds(orders);
+  const marketAssociateById = byBothIds(marketAssociates.map((profile) => {
+    const account = accountById.get(String(profile.accountId));
+    const name = account ? `${account.firstName} ${account.lastName}`.trim() : undefined;
+    return { ...profile, name, avatarUrl: account?.avatarUrl, email: account?.email };
+  }));
+
+  return {
+    market: (id?: string) => (id ? marketById.get(id) || null : null),
+    hub: (id?: string) => (id ? hubById.get(id) || null : null),
+    marketAssociate: (id?: string) => (id ? marketAssociateById.get(id) || null : null),
+    order: (id?: string) => (id ? orderById.get(id) || null : null),
+  };
+}
+
 export class FulfilmentService {
   private readonly payments = new PaymentService();
   private readonly email = new EmailService();
@@ -229,15 +281,25 @@ export class FulfilmentService {
   async adminTaskDetail(actor: Actor, taskIdentifier: string) {
     const task = await taskByIdentifier(taskIdentifier);
     await assertStaffScope(actor, task.sourceStateId, task.hubId);
-    const [order, items] = await Promise.all([
+    const [order, items, names] = await Promise.all([
       Order.findById(task.orderId)
         .select('publicId commerceStatus status sourceStateId customerProgress')
         .lean({ virtuals: true }),
       OrderItem.find({ _id: { $in: task.orderItemIds } })
-        .select('publicId productSnapshot quantity variantSnapshot fulfilmentStatus')
+        .select('publicId productTitle productImage productSnapshot quantity variantSnapshot fulfilmentStatus')
         .lean({ virtuals: true }),
+      resolveFulfilmentNames([task]),
     ]);
-    return { task, order, items };
+    return {
+      task: {
+        ...task,
+        market: names.market(task.marketId),
+        hub: names.hub(task.hubId),
+        marketAssociate: names.marketAssociate(task.marketAssociateId),
+      },
+      order,
+      items,
+    };
   }
 
   async assignmentMarketAssociates(actor: Actor, query: Record<string, unknown>) {
@@ -620,14 +682,21 @@ export class FulfilmentService {
         return {
           orderItemId: id,
           productTitle: item?.productTitle,
-          orderedPhotoUrl: item?.productImage || (item?.productSnapshot as any)?.images?.[0],
+          orderedPhotoUrl: item?.productImage || (item?.productSnapshot as any)?.image,
           pickedUpPhotoUrl: verification?.photoUrl,
           checks: verification?.checks,
           matched: verification?.matched ?? false,
         };
       }),
     }));
-    return { inbound, packages: packagesWithItems, exceptions, consolidations };
+    const names = await resolveFulfilmentNames([...inbound, ...packagesWithItems, ...exceptions, ...consolidations] as any[]);
+    const withNames = (record: any) => ({ ...record, hub: names.hub(record.hubId), order: names.order(record.orderId) });
+    return {
+      inbound: inbound.map(withNames),
+      packages: packagesWithItems.map(withNames),
+      exceptions: exceptions.map(withNames),
+      consolidations: consolidations.map(withNames),
+    };
   }
 
   async consolidations(actor: Actor, query: Record<string, unknown>) {
@@ -638,7 +707,9 @@ export class FulfilmentService {
     if (query.hubId) filter.hubId = query.hubId;
     if (actor.stateIds?.length) filter.sourceStateId = { $in: actor.stateIds };
     if (actor.hubIds?.length) filter.hubId = { $in: actor.hubIds };
-    return Consolidation.find(filter).sort({ createdAt: -1 }).limit(Math.min(Number(query.limit || 100), 200)).lean({ virtuals: true });
+    const records = await Consolidation.find(filter).sort({ createdAt: -1 }).limit(Math.min(Number(query.limit || 100), 200)).lean({ virtuals: true });
+    const names = await resolveFulfilmentNames(records as any[]);
+    return records.map((record: any) => ({ ...record, hub: names.hub(record.hubId), order: names.order(record.orderId) }));
   }
 
   async receivePackage(actor: Actor, packageIdentifier: string, body: Record<string, any>) {
@@ -1074,7 +1145,21 @@ export class FulfilmentService {
     const returnFilter: Record<string, any> = { status: { $in: ['REQUESTED', 'UNDER_REVIEW', 'APPROVED'] } };
     if (orderScope) returnFilter.orderId = { $in: orderScope };
     const [tasks, exceptions, shipments, returns] = await Promise.all([FulfilmentTask.find(filter).sort({ acceptanceDueAt: 1 }).limit(200).lean({ virtuals: true }), FulfilmentException.find(exceptionFilter).sort({ createdAt: -1 }).limit(100).lean({ virtuals: true }), Shipment.find(shipmentFilter).sort({ createdAt: -1 }).limit(100).lean({ virtuals: true }), ReturnRequest.find(returnFilter).sort({ createdAt: -1 }).limit(100).lean({ virtuals: true })]);
-    return { tasks, exceptions, shipments, returns, metrics: { openTasks: tasks.length, openExceptions: exceptions.length, activeShipments: shipments.filter((item: any) => ![ShipmentStatus.DELIVERED, ShipmentStatus.CANCELLED, ShipmentStatus.RETURNED_TO_HOOK].includes(item.status)).length, openReturns: returns.length } };
+    const names = await resolveFulfilmentNames([...tasks, ...exceptions, ...shipments, ...returns] as any[]);
+    const withNames = (record: any) => ({
+      ...record,
+      market: names.market(record.marketId),
+      hub: names.hub(record.hubId),
+      marketAssociate: names.marketAssociate(record.marketAssociateId),
+      order: names.order(record.orderId),
+    });
+    return {
+      tasks: tasks.map(withNames),
+      exceptions: exceptions.map(withNames),
+      shipments: shipments.map(withNames),
+      returns: returns.map(withNames),
+      metrics: { openTasks: tasks.length, openExceptions: exceptions.length, activeShipments: shipments.filter((item: any) => ![ShipmentStatus.DELIVERED, ShipmentStatus.CANCELLED, ShipmentStatus.RETURNED_TO_HOOK].includes(item.status)).length, openReturns: returns.length },
+    };
   }
 
   async exceptions(actor: Actor, query: Record<string, unknown>) {
@@ -1090,7 +1175,8 @@ export class FulfilmentService {
       filter.orderId = { $in: (await Order.distinct('_id', { sourceStateId: { $in: states } })).map(String) };
     }
     const records = await ReturnRequest.find(filter).sort({ createdAt: -1 }).limit(Math.min(Number(query.limit || 100), 200)).lean({ virtuals: true });
-    return records;
+    const names = await resolveFulfilmentNames(records as any[]);
+    return records.map((record: any) => ({ ...record, order: names.order(record.orderId) }));
   }
 
   async refunds(actor: Actor, query: Record<string, unknown>) {
@@ -1100,7 +1186,9 @@ export class FulfilmentService {
       const states = (query.stateId ? [String(query.stateId)] : (actor.stateIds || []).map(String));
       filter.orderId = { $in: (await Order.distinct('_id', { sourceStateId: { $in: states } })).map(String) };
     }
-    return FulfilmentRefund.find(filter).sort({ createdAt: -1 }).limit(Math.min(Number(query.limit || 100), 200)).lean({ virtuals: true });
+    const records = await FulfilmentRefund.find(filter).sort({ createdAt: -1 }).limit(Math.min(Number(query.limit || 100), 200)).lean({ virtuals: true });
+    const names = await resolveFulfilmentNames(records as any[]);
+    return records.map((record: any) => ({ ...record, order: names.order(record.orderId) }));
   }
 
   async shipments(actor: Actor, query: Record<string, unknown>) {
@@ -1110,7 +1198,9 @@ export class FulfilmentService {
     if (query.hubId) filter.hubId = query.hubId;
     if (actor.stateIds?.length) filter.sourceStateId = { $in: actor.stateIds };
     if (actor.hubIds?.length) filter.hubId = { $in: actor.hubIds };
-    return Shipment.find(filter).sort({ createdAt: -1 }).limit(Math.min(Number(query.limit || 100), 200)).lean({ virtuals: true });
+    const records = await Shipment.find(filter).sort({ createdAt: -1 }).limit(Math.min(Number(query.limit || 100), 200)).lean({ virtuals: true });
+    const names = await resolveFulfilmentNames(records as any[]);
+    return records.map((record: any) => ({ ...record, hub: names.hub(record.hubId), order: names.order(record.orderId) }));
   }
 
   async logisticsReadiness(actor: Actor) {

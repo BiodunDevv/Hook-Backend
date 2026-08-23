@@ -39,12 +39,42 @@ import {
 import { getEmailSettings } from '@services/email-settings.service';
 
 type BrevoSendResponse = {
+  code?: string;
+  message?: string;
   messageId?: string;
+};
+
+type BrevoSender = {
+  active?: boolean;
+  email?: string;
+};
+
+type BrevoSendersResponse = {
+  senders?: BrevoSender[];
 };
 
 function isBrevoConfigured() {
   const key = process.env.BREVO_API_KEY;
   return Boolean(key && !key.includes('placeholder'));
+}
+
+export async function isActiveBrevoSender(email: string) {
+  if (!isBrevoConfigured()) return false;
+
+  const response = await fetch('https://api.brevo.com/v3/senders', {
+    headers: {
+      accept: 'application/json',
+      'api-key': process.env.BREVO_API_KEY!,
+    },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) throw new Error(`Brevo sender check failed with status ${response.status}`);
+
+  const data = await response.json() as BrevoSendersResponse;
+  const normalizedEmail = email.trim().toLowerCase();
+  return Boolean(data.senders?.some((sender) => (
+    sender.active && sender.email?.trim().toLowerCase() === normalizedEmail
+  )));
 }
 
 export class EmailService {
@@ -90,11 +120,17 @@ export class EmailService {
         htmlContent: message.html,
         textContent: message.text,
       }),
+      signal: AbortSignal.timeout(15_000),
     });
 
     const data = await response.json().catch(() => ({} as BrevoSendResponse));
     if (!response.ok) {
-      console.error(`[email:brevo] Failed to send to ${message.to}: ${response.status}`);
+      console.error(JSON.stringify({
+        event: 'brevo_email_rejected',
+        status: response.status,
+        providerCode: data.code,
+        providerMessage: data.message,
+      }));
       throw new Error('Email provider failed to send message');
     }
 

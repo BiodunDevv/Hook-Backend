@@ -160,6 +160,21 @@ export function createAdminRouter() {
     validateBody(roleSchema),
     asyncHandler(users.role),
   );
+  router.post(
+    "/users/:id/soft-delete",
+    requirePermission("customers.edit"),
+    asyncHandler(users.softDelete),
+  );
+  router.post(
+    "/users/:id/restore",
+    requirePermission("customers.edit"),
+    asyncHandler(users.restore),
+  );
+  router.post(
+    "/users/:id/hard-delete",
+    requireSuperAdmin,
+    asyncHandler(users.hardDelete),
+  );
 
   // ── Categories (taxonomy managed through explicit catalog permissions) ──
   router.get(

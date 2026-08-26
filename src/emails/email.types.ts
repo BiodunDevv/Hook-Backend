@@ -118,3 +118,9 @@ export interface AccountActivatedEmailPayload {
   name?: string;
   accountType: string;
 }
+
+export interface AvailabilityDigestEmailPayload {
+  to: string;
+  name?: string;
+  products: Array<{ title: string; marketName: string }>;
+}

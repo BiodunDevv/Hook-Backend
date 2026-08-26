@@ -3,6 +3,7 @@ import path from 'path';
 import {
   AccountActivatedEmailPayload,
   AccountInvitationEmailPayload,
+  AvailabilityDigestEmailPayload,
   CustomerAccountSetupEmailPayload,
   NegotiationAcceptedEmailPayload,
   NegotiationOfferEmailPayload,
@@ -375,5 +376,24 @@ export function accountActivatedEmailTemplate(payload: AccountActivatedEmailPayl
       accountType: payload.accountType,
     })),
     text: `Your Hook ${payload.accountType} account is now active.`,
+  };
+}
+
+/** Every value is escaped here because the result is injected raw via the triple-brace token. */
+function availabilityProductRowsHtml(products: AvailabilityDigestEmailPayload['products']) {
+  return products
+    .map((product) => `<div class="line-item"><span class="label">${escapeHtml(product.title)}</span><span class="value">${escapeHtml(product.marketName)}</span></div>`)
+    .join('');
+}
+
+export function availabilityDigestEmailTemplate(payload: AvailabilityDigestEmailPayload) {
+  return {
+    subject: `${payload.products.length} product${payload.products.length === 1 ? '' : 's'} need an availability check`,
+    html: renderTemplate('availability-digest.html', baseValues({
+      name: payload.name || 'there',
+      productCount: payload.products.length,
+      productRows: availabilityProductRowsHtml(payload.products),
+    })),
+    text: `${payload.products.length} product(s) need an availability check: ${payload.products.map((product) => `${product.title} (${product.marketName})`).join(', ')}`,
   };
 }

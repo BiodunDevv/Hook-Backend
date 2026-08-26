@@ -69,7 +69,7 @@ export class AdminProductsController {
   reviewQueue = async (req: Request, res: Response) => {
     const { page, limit, skip } = getPagination(req.query);
     const [data, total] = await adminRepos.products().findAndCount({
-      where: { status: ProductStatus.PENDING_APPROVAL },
+      where: { status: ProductStatus.PENDING_APPROVAL, deletedAt: { $exists: false } },
       relations: { category: true },
       order: { createdAt: 'ASC' },
       skip,
@@ -81,7 +81,7 @@ export class AdminProductsController {
   list = async (req: Request, res: Response) => {
     const { page, limit, skip } = getPagination(req.query);
     const search = typeof req.query.search === 'string' ? req.query.search.toLowerCase() : undefined;
-    const where: Record<string, any> = {};
+    const where: Record<string, any> = { deletedAt: { $exists: false } };
     if (typeof req.query.status === 'string') where.status = req.query.status;
     if (typeof req.query.categoryId === 'string') where.categoryId = req.query.categoryId;
     if (req.query.stock === 'low') where.quantity = { $gt: 0, $lt: 10 };
@@ -137,7 +137,7 @@ export class AdminProductsController {
 
   detail = async (req: Request, res: Response) => {
     const product: any = await adminRepos.products().findOne({
-      where: { id: routeParam(req.params.id) },
+      where: { id: routeParam(req.params.id), deletedAt: { $exists: false } },
       relations: { category: true, orderItems: true, negotiations: true },
     });
     if (!product) throw new HttpError(404, 'Product not found');
@@ -217,6 +217,25 @@ export class AdminProductsController {
     await products.save(product);
     await auditAdminAction(req, 'product.disable', 'product', product.id);
     sendSuccess(res, publicProduct(product as any));
+  };
+
+  /**
+   * Soft delete only — a Product's id is still referenced by historical
+   * OrderItems/Negotiations, so the document is kept and just hidden from
+   * every admin/public query via deletedAt. Only allowed once a product is
+   * already Disabled, so nothing live or customer-visible can be deleted
+   * out from under an active listing.
+   */
+  remove = async (req: Request, res: Response) => {
+    const products = adminRepos.products();
+    const product = await products.findOne({ where: { id: routeParam(req.params.id) } });
+    if (!product) throw new HttpError(404, 'Product not found');
+    if (product.status !== ProductStatus.DISABLED) {
+      throw new HttpError(409, 'A product must be disabled before it can be deleted', undefined, 'INVALID_STATE_TRANSITION');
+    }
+    await Product.updateOne({ _id: product.id }, { $set: { deletedAt: new Date() } });
+    await auditAdminAction(req, 'product.delete', 'product', product.id, { title: product.title });
+    sendSuccess(res, { id: product.id, deleted: true });
   };
 
   private async statsData() {

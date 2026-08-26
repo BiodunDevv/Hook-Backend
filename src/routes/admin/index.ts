@@ -357,6 +357,11 @@ export function createAdminRouter() {
     requirePermission("products.edit"),
     asyncHandler(products.disable),
   );
+  router.delete(
+    "/products/:id",
+    requireSuperAdmin,
+    asyncHandler(products.remove),
+  );
 
   // ── Orders ─────────────────────────────────────────────────────────────
   router.get(

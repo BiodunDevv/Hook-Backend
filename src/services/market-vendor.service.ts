@@ -8,6 +8,7 @@ import { MarketAssociateMarketAssignment, MarketAssociateProfile, StaffProfile }
 import { Role } from '@models/platform/access.model';
 import { User } from '@models/users/user.model';
 import { Notification } from '@models/notifications/notification.model';
+import { createCommerceNotification } from '@services/commerce-notification.service';
 import { publishRealtime } from '@services/realtime.service';
 import { nextPublicId } from '@services/public-id.service';
 import { decryptVendorAccountNumber, encryptVendorAccountNumber } from '@lib/vendor-payment-crypto';
@@ -112,12 +113,20 @@ function paymentProfile(input: any): VendorPaymentProfile | undefined {
   };
 }
 
-async function notifyAccount(accountId: string, title: string, body: string, data: Record<string, unknown>) {
-  const [notification, account] = await Promise.all([
-    Notification.create({ userId: accountId, title, body, type: 'catalog_availability', data, isRead: false }),
+/**
+ * `eventKey` makes the in-app notification idempotent — re-triggering the
+ * same availability issue (e.g. a retry, or the escalation loop revisiting
+ * a product before its next run) upserts the same row instead of spamming
+ * a duplicate. Falls back to a plain create when no key is given.
+ */
+async function notifyAccount(accountId: string, title: string, body: string, data: Record<string, unknown>, eventKey?: string) {
+  const [account] = await Promise.all([
     User.findById(accountId).select('email firstName').lean(),
+    eventKey
+      ? createCommerceNotification({ eventKey, userId: accountId, title, body, type: 'catalog_availability', data })
+      : Notification.create({ userId: accountId, title, body, type: 'catalog_availability', data, isRead: false })
+        .then((notification) => publishRealtime({ type: 'notification.created', entityId: notification.id, version: 1 }, { accountId })),
   ]);
-  publishRealtime({ type: 'notification.created', entityId: notification.id, version: 1 }, { accountId });
   if (account?.email) {
     await email.send({
       to: account.email,
@@ -537,7 +546,17 @@ export class MarketVendorService {
       const marketAssociates = await MarketAssociateProfile.find({ _id: { $in: assignments.map((item) => item.marketAssociateId) }, status: 'active' }).select('accountId').lean();
       accounts = marketAssociates.map((item) => item.accountId);
     }
-    await Promise.all(accounts.map((accountIdValue) => notifyAccount(accountIdValue, 'Product availability check', `${product.title} needs a fresh availability check before it can be shown to customers.`, { productId: product.publicId, marketId: product.marketId })));
+    // catalogVersion increments on every availability-state transition, so
+    // keying on it scopes the dedup to this specific check cycle — a later,
+    // genuinely new availability issue on the same product still notifies.
+    const eventKeyBase = `availability:${product.publicId || product._id}:${product.catalogVersion || 1}`;
+    await Promise.all(accounts.map((accountIdValue) => notifyAccount(
+      accountIdValue,
+      'Product availability check',
+      `${product.title} needs a fresh availability check before it can be shown to customers.`,
+      { productId: product.publicId, marketId: product.marketId },
+      `${eventKeyBase}:${accountIdValue}`,
+    )));
     return accounts.length;
   }
 
@@ -552,11 +571,13 @@ export class MarketVendorService {
     const staff = await StaffProfile.find({ status: 'active', roleIds: { $in: roles.map((role) => role._id.toString()) } })
       .select('accountId scopeType stateIds').lean();
     const scopedStaff = staff.filter((profile) => profile.scopeType === 'global' || !product.sourceStateId || profile.stateIds.includes(product.sourceStateId));
+    const eventKeyBase = `availability-overdue:${product.publicId || product._id}:${product.catalogVersion || 1}`;
     await Promise.all(scopedStaff.map((profile) => notifyAccount(
       profile.accountId,
       'Overdue product availability check',
       `${product.title} has passed its supplier availability deadline and remains unavailable to customers.`,
       { productId: product.publicId, marketId: product.marketId, dueAt: product.availabilityCheckDueAt },
+      `${eventKeyBase}:${profile.accountId}`,
     )));
     return scopedStaff.length;
   }

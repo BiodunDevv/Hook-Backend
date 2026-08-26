@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import cron, { type ScheduledTask } from 'node-cron';
 import type { Server } from 'http';
 import { createApp } from './app';
 import { assertSafeEnvironment } from './config/env';
@@ -8,6 +9,7 @@ import { expireNegotiationsAndQuotes } from './services/negotiation.service';
 import { startFulfilmentWorker, stopFulfilmentWorker } from './services/fulfilment-worker.service';
 import { realtime } from './services/realtime.service';
 import { escalateOverdueAvailabilityChecks } from './services/catalog-availability.service';
+import { sendDailyAvailabilityDigests } from './services/availability-digest.service';
 
 dotenv.config({ quiet: true });
 
@@ -59,6 +61,7 @@ ${rows.map(([label, value]) => line(`${label.padEnd(8)}${value}`)).join('\n')}
 
 let server: Server | undefined;
 let expiryTimer: NodeJS.Timeout | undefined;
+let availabilityDigestTask: ScheduledTask | undefined;
 let shuttingDown = false;
 
 async function shutdown(signal: string) {
@@ -66,6 +69,7 @@ async function shutdown(signal: string) {
   shuttingDown = true;
   console.log(`\n🛑 ${signal} received. Shutting down Hook API...`);
   if (expiryTimer) clearInterval(expiryTimer);
+  availabilityDigestTask?.stop();
   stopFulfilmentWorker();
   realtime.close();
 
@@ -92,9 +96,16 @@ async function bootstrap() {
     });
   }, 60_000);
   expiryTimer.unref();
+  availabilityDigestTask = cron.schedule('0 7 * * *', () => {
+    void sendDailyAvailabilityDigests().catch((error) => {
+      console.error('[availability-digest] Failed to send daily digest emails', error);
+    });
+  });
   startFulfilmentWorker();
   console.log('🕒 Catalog expiry scheduler started');
   console.log('   Checking negotiation, quote, and availability deadlines every 60 seconds');
+  console.log('📬 Availability digest scheduler started');
+  console.log('   Sending daily Market Associate availability-check emails at 07:00');
   console.log('⚙️ Fulfilment worker started');
   console.log('   Polling the durable outbox every 5 seconds');
 

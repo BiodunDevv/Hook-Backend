@@ -161,7 +161,7 @@ export async function escalateOverdueAvailabilityChecks() {
     availabilityCheckDueAt: { $lt: new Date() },
     availabilityEscalatedAt: { $exists: false },
     deletedAt: { $exists: false },
-  }).select('publicId title marketId sourceStateId availabilityCheckDueAt').limit(100).lean({ virtuals: true });
+  }).select('publicId title marketId sourceStateId availabilityCheckDueAt catalogVersion').limit(100).lean({ virtuals: true });
   let escalated = 0;
   for (const product of products) {
     const recipients = await notifier.notifyAvailabilityOverdue(product);

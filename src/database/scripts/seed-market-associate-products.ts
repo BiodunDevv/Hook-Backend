@@ -8,7 +8,7 @@ import { MarketVendor } from '@models/catalog/market-vendor.model';
 import { MarketAssociateMarketAssignment, MarketAssociateProfile } from '@models/platform/operations-accounts.model';
 import { Product } from '@models/products/product.model';
 import { User } from '@models/users/user.model';
-import { nextPublicId } from '@services/public-id.service';
+import { hookIdFromPublicId, nextPublicId } from '@services/public-id.service';
 import { productGallery, productOptions, MARKET_ASSOCIATE_PRODUCT_CATALOG } from '../seeds/market-associate-product-catalog';
 
 dotenv.config({ quiet: true });
@@ -110,7 +110,7 @@ async function main() {
         const productPublicId = await nextPublicId('product');
         const product = await Product.create([{
           publicId: productPublicId,
-          hookId: `HK-${productPublicId.split('-').at(-1)}`,
+          hookId: hookIdFromPublicId(productPublicId),
           title: item.title,
           slug: slugify(item.title),
           description: item.description,

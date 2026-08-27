@@ -16,7 +16,7 @@ import { MarketVendor } from '@models/catalog/market-vendor.model';
 import { Market } from '@models/platform/network.model';
 import { MarketAssociateMarketAssignment, MarketAssociateProfile } from '@models/platform/operations-accounts.model';
 import { User } from '@models/users/user.model';
-import { nextPublicId } from './public-id.service';
+import { hookIdFromPublicId, nextPublicId } from './public-id.service';
 import { CatalogMediaService } from './catalog-media.service';
 import { createCommerceNotification } from './commerce-notification.service';
 import { EmailService } from '@emails/email.service';
@@ -486,7 +486,7 @@ export class CatalogReviewService {
         const slug = `${slugify(current.basicTitle)}-${productPublicId.toLowerCase()}`;
         const product = await Product.create([{
           publicId: productPublicId,
-          hookId: productPublicId,
+          hookId: hookIdFromPublicId(productPublicId),
           sourceSubmissionId: current._id.toString(),
           sourceMarketVendorId: current.marketVendorId,
           sourceMarketAssociateId: current.marketAssociateId,

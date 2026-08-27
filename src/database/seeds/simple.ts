@@ -34,7 +34,7 @@ import { OperationalState } from '@models/operations/operational-state.model';
 import { Product } from '@models/products/product.model';
 import { User } from '@models/users/user.model';
 import { ensurePlatformAccessCatalog } from '@services/platform-bootstrap.service';
-import { nextPublicIds, nextPublicId } from '@services/public-id.service';
+import { hookIdFromPublicId, nextPublicIds, nextPublicId } from '@services/public-id.service';
 import { refreshNigerianLocationCatalog } from '@services/location-catalog.service';
 import { encryptVendorAccountNumber } from '@lib/vendor-payment-crypto';
 import { productGallery, productOptions, MARKET_ASSOCIATE_PRODUCT_CATALOG } from './market-associate-product-catalog';
@@ -492,7 +492,7 @@ async function seedProducts(categories: any[], markets: any[], states: any[], ad
     const availabilityStatus = ProductAvailabilityStatus.AVAILABLE;
     const product = await Product.create({
       publicId: productIds[index],
-      hookId: `HK-${String(index + 1).padStart(4, '0')}`,
+      hookId: hookIdFromPublicId(productIds[index]),
       title,
       slug: slugify(title),
       description: seed.description,

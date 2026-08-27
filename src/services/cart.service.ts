@@ -513,7 +513,7 @@ export class CartService {
         blockingReasons.push("PRODUCT_CHANGED");
       const enrichedItem = {
         ...item,
-        productId: product?.publicId || product?.hookId || item.productId,
+        productId: product?.hookId || product?.publicId || item.productId,
         publicStateId: stateMap.get(String(item.stateId))?.publicId,
         product: product ? this.cartProduct(product) : undefined,
         negotiatedQuote: item.quoteId && quoteMap.get(item.quoteId) ? {
@@ -606,8 +606,8 @@ export class CartService {
           .filter(Boolean)
       : [];
     return {
-      id: product.publicId || product.hookId,
-      publicId: product.publicId || product.hookId,
+      id: product.hookId || product.publicId,
+      publicId: product.hookId || product.publicId,
       title: product.title,
       slug: product.slug,
       imageUrl: images[0] || null,

@@ -18,7 +18,8 @@
     "db:clear-market-associate-uploads": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/clear-market-associate-uploads.ts",
     "db:seed-market-associate-products": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/seed-market-associate-products.ts",
     "db:sync-market-associate-product-options": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/sync-market-associate-product-options.ts",
-    "db:seed-legal-content": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/seed-legal-content.ts"
+    "db:seed-legal-content": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/seed-legal-content.ts",
+    "db:backfill-product-ids": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/backfill-product-ids.ts"
   },
   "dependencies": {
     "@types/cors": "^2.8.19",

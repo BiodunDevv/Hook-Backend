@@ -203,7 +203,7 @@ export class AdminSearchController {
     });
 
     const products = (productsRows as any[]).map((p) => ({
-        id: p.publicId || p.hookId || String(p._id),
+        id: p.hookId || p.publicId || String(p._id),
         title: p.title,
         hookId: p.hookId,
         status: p.status,

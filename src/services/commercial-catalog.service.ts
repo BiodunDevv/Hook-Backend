@@ -155,7 +155,7 @@ export class CommercialCatalogService {
       : undefined;
     return {
       ...product,
-      id: product.publicId || product.hookId || product.id,
+      id: product.hookId || product.publicId || product.id,
       catalogVersion: product.catalogVersion || 1,
       pricing,
     };

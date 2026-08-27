@@ -52,6 +52,17 @@ export function formatPublicId(prefix: string, year: number, sequence: number) {
   return `${prefix}-${year}-${String(sequence).padStart(6, '0')}`;
 }
 
+/**
+ * The short, human-facing product alias (HK-000061) derived from the same
+ * reserved sequence as the product's publicId (PRD-2026-000061), so the two
+ * can never drift. Every product-creation path must use this rather than
+ * inventing its own format.
+ */
+export function hookIdFromPublicId(productPublicId: string) {
+  const sequence = productPublicId.split('-')[2];
+  return `HK-${sequence || productPublicId}`;
+}
+
 export async function nextPublicId(domain: PublicIdDomain, now = new Date()) {
   const prefix = PUBLIC_ID_PREFIXES[domain];
   const year = now.getUTCFullYear();

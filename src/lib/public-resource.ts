@@ -2,7 +2,7 @@ export function publicProduct<T extends Record<string, any> | null | undefined>(
   if (!product) return product;
   return {
     ...product,
-    id: product.publicId || product.hookId || product.id,
+    id: product.hookId || product.publicId || product.id,
   };
 }
 
@@ -112,7 +112,7 @@ export function publicCart<T extends Record<string, any> | null | undefined>(car
 function publicCartLine(item: Record<string, any>) {
   const product = item.product as Record<string, any> | undefined;
   const productId = product
-    ? publicIdentifier(product.publicId || product.hookId || product.id)
+    ? publicIdentifier(product.hookId || product.publicId || product.id)
     : typeof item.productId === "string" && !looksLikeMongoId(item.productId)
       ? item.productId
       : null;

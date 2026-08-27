@@ -9,6 +9,7 @@ import { Category } from '@models/categories/category.model';
 import { User } from '@models/users/user.model';
 import { Market } from '@models/platform/network.model';
 import { MarketVendor } from '@models/catalog/market-vendor.model';
+import { hookIdFromPublicId, nextPublicId } from '@services/public-id.service';
 import { adminCategoryManagersCache, adminProductStatsCache } from '@lib/ttl-cache';
 
 function slugify(value: string) {
@@ -167,14 +168,17 @@ export class AdminProductsController {
     const products = adminRepos.products();
     const category = await categories.findOne({ where: { id: req.body.categoryId } });
     if (!category) throw new HttpError(404, 'Category not found');
-    const baseSlug = slugify(req.body.title);
     const body = { ...req.body };
     delete body.vendorId;
+    // Both identifiers come from the same reserved sequence: publicId is the
+    // durable internal key, hookId the human-facing alias shown in the UI.
+    const productPublicId = await nextPublicId('product');
     const product = await products.save(products.create({
       ...body,
       source: 'admin',
-      slug: `${baseSlug}-${Date.now().toString().slice(-6)}`,
-      hookId: `HK-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
+      slug: `${slugify(req.body.title)}-${productPublicId.toLowerCase()}`,
+      publicId: productPublicId,
+      hookId: hookIdFromPublicId(productPublicId),
     } as any)) as any;
     await auditAdminAction(req, 'product.create', 'product', product.id, { title: product.title });
     sendCreated(res, publicProduct(await products.findOne({ where: { id: product.id }, relations: { category: true } }) as any));

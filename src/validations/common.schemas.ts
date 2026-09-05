@@ -132,7 +132,8 @@ const productBaseSchema = z.object({
   discountedPrice: z.coerce.number().positive().optional(),
   minAcceptablePrice: z.coerce.number().positive(),
   quantity: z.coerce.number().int().nonnegative().default(0),
-  categoryId: idSchema,
+  categoryId: z.string().trim().min(3).max(80),
+  marketId: z.string().trim().min(3).max(80),
   images: z.array(z.string().url()).min(1, 'At least one product image is required'),
   colors: z.array(z.string().transform((value, ctx) => {
     const normalized = normalizeProductColor(value);
@@ -192,11 +193,17 @@ export const adminVendorUpdateSchema = adminVendorCreateSchema.omit({
 }).partial();
 
 export const adminProductCreateSchema = productBaseSchema.extend({
-  status: z.nativeEnum(ProductStatus).default(ProductStatus.PENDING_APPROVAL),
+  status: z.enum([ProductStatus.DRAFT, ProductStatus.PUBLISHED]).default(ProductStatus.DRAFT),
 }).superRefine(validateNegotiationFloor);
 
 export const adminProductUpdateSchema = productBaseSchema.extend({
-  status: z.nativeEnum(ProductStatus).default(ProductStatus.PENDING_APPROVAL),
+  status: z.enum([
+    ProductStatus.DRAFT,
+    ProductStatus.PUBLISHED,
+    ProductStatus.PAUSED,
+    ProductStatus.UNPUBLISHED,
+    ProductStatus.DISABLED,
+  ]).optional(),
 }).partial().superRefine(validateNegotiationFloor);
 
 export const adminOrderCreateSchema = z.object({

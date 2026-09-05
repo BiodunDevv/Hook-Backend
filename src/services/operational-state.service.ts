@@ -7,8 +7,8 @@ export function normalizeStateCode(code?: unknown): string | undefined {
 }
 
 export async function ensureOperationalStatesCatalog() {
-  const existing = await OperationalState.countDocuments();
-  if (existing > 0) return;
+  const existing = await OperationalState.findOne().select('_id').lean();
+  if (existing) return;
 
   await OperationalState.insertMany(NIGERIAN_STATES.map((state) => ({
     ...state,

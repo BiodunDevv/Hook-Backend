@@ -10,6 +10,8 @@ export interface Order extends BaseEntity {
   publicId?: string;
   channel?: "SHOPPER_APP" | "PARTNER_ASSISTED";
   sourceStateId?: string;
+  sourceStateIds?: string[];
+  fulfilmentGroupIds?: string[];
   initiatingPartnerId?: string;
   deliveryMethod?: "HOME_DELIVERY" | "PARTNER_PICKUP";
   commercePaymentMethod?: "PREPAID" | "PAY_AT_HANDOVER";
@@ -18,6 +20,19 @@ export interface Order extends BaseEntity {
     | "VERIFICATION_PENDING"
     | "OPERATIONS_REVIEW"
     | "APPROVED_FOR_FULFILMENT"
+    | "IN_FULFILMENT"
+    | "PARTIALLY_RECEIVED"
+    | "READY_FOR_CONSOLIDATION"
+    | "READY_FOR_DISPATCH"
+    | "IN_TRANSIT"
+    | "PARTIALLY_IN_TRANSIT"
+    | "PARTIALLY_DELIVERED"
+    | "DELIVERED"
+    | "COLLECTED"
+    | "COMPLETED"
+    | "ON_HOLD"
+    | "RETURN_IN_PROGRESS"
+    | "REFUNDED"
     | "CANCELLED";
   commercePaymentStatus?:
     | "PENDING"
@@ -28,7 +43,11 @@ export interface Order extends BaseEntity {
     | "REFUND_PENDING"
     | "REFUNDED";
   subtotalMinor?: number;
+  vatRate?: number;
+  vatMinor?: number;
+  taxSnapshot?: Record<string, unknown>;
   deliveryFeeMinor?: number;
+  deliveryPricing?: Record<string, unknown>;
   totalMinor?: number;
   currency?: string;
   customerSnapshot?: Record<string, unknown>;
@@ -94,6 +113,9 @@ export interface Order extends BaseEntity {
   cancellationReason?: string;
   commerceMigrationVersion?: number;
   legacyCommerceSnapshot?: Record<string, unknown>;
+  fulfilmentSummary?: Record<string, unknown>;
+  fulfilmentCompletedAt?: Date;
+  customerProgress?: Array<Record<string, unknown>>;
 }
 
 const OrderSchema = createSchema<Order>({
@@ -104,6 +126,8 @@ const OrderSchema = createSchema<Order>({
     index: true,
   },
   sourceStateId: { type: String, index: true, sparse: true },
+  sourceStateIds: { type: [String], default: [], index: true },
+  fulfilmentGroupIds: { type: [String], default: [] },
   initiatingPartnerId: { type: String, index: true, sparse: true },
   deliveryMethod: { type: String, enum: ["HOME_DELIVERY", "PARTNER_PICKUP"] },
   commercePaymentMethod: {
@@ -118,6 +142,19 @@ const OrderSchema = createSchema<Order>({
       "VERIFICATION_PENDING",
       "OPERATIONS_REVIEW",
       "APPROVED_FOR_FULFILMENT",
+      "IN_FULFILMENT",
+      "PARTIALLY_RECEIVED",
+      "READY_FOR_CONSOLIDATION",
+      "READY_FOR_DISPATCH",
+      "IN_TRANSIT",
+      "PARTIALLY_IN_TRANSIT",
+      "PARTIALLY_DELIVERED",
+      "DELIVERED",
+      "COLLECTED",
+      "COMPLETED",
+      "ON_HOLD",
+      "RETURN_IN_PROGRESS",
+      "REFUNDED",
       "CANCELLED",
     ],
     index: true,
@@ -136,7 +173,11 @@ const OrderSchema = createSchema<Order>({
     index: true,
   },
   subtotalMinor: { type: Number, min: 0 },
+  vatRate: { type: Number, min: 0 },
+  vatMinor: { type: Number, min: 0 },
+  taxSnapshot: { type: Object },
   deliveryFeeMinor: { type: Number, min: 0 },
+  deliveryPricing: { type: Object },
   totalMinor: { type: Number, min: 0 },
   currency: { type: String, default: "NGN" },
   customerSnapshot: { type: Object },
@@ -196,6 +237,9 @@ const OrderSchema = createSchema<Order>({
   cancellationReason: { type: String },
   commerceMigrationVersion: { type: Number, index: true },
   legacyCommerceSnapshot: { type: Object },
+  fulfilmentSummary: { type: Object, default: {} },
+  fulfilmentCompletedAt: { type: Date },
+  customerProgress: { type: [Object], default: [] },
   deletedAt: { type: Date },
 });
 

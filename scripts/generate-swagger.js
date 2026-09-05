@@ -7,12 +7,13 @@ const tags = [
   ['System', 'Health checks and API metadata.'],
   ['Authentication', 'Customer/mobile authentication and profile endpoints.'],
   ['Public Marketplace', 'Public product, category, vendor, booth, feed, and search endpoints.'],
+  ['Delivery Coverage', 'Customer delivery States and distance-aware delivery pricing.'],
   ['Customer Cart', 'Authenticated shopper cart management.'],
   ['Customer Orders', 'Authenticated checkout and order management.'],
   ['Negotiations', 'Customer AI negotiation sessions.'],
   ['Payments', 'Customer payment initialization, verification, and status checks.'],
   ['Notifications', 'Authenticated customer notifications.'],
-  ['Devices', 'Customer and guest device token registration for push notifications.'],
+  ['Devices', 'Authenticated customer device token registration for push notifications.'],
   ['Vendor Portal', 'Vendor profile, catalog, order, settlement, and bank detail endpoints.'],
   ['Logistics', 'Driver, field-agent, and admin assignment workflows.'],
   ['Uploads', 'Authenticated image uploads.'],
@@ -81,7 +82,6 @@ const schemas = {
     properties: {
       email: { type: 'string', format: 'email', example: 'admin@gmail.com' },
       password: { type: 'string', example: '123456' },
-      guestId: { type: 'string', description: 'Optional guest id to merge guest cart/orders after login.' },
     },
   },
   GoogleAuthRequest: {
@@ -92,7 +92,6 @@ const schemas = {
         type: 'string',
         description: 'Google ID token returned by the iOS or Android Google OAuth client.',
       },
-      guestId: { type: 'string', description: 'Optional guest id to merge guest cart/orders after Google sign-in.' },
     },
   },
   AccountInvitationAcceptRequest: {
@@ -114,7 +113,6 @@ const schemas = {
     properties: {
       email: { type: 'string', format: 'email', example: 'shopper@example.com' },
       password: { type: 'string', minLength: 6, example: '123456789' },
-      guestId: { type: 'string' },
     },
   },
   SignupVerifyRequest: {
@@ -133,7 +131,6 @@ const schemas = {
       firstName: { type: 'string', example: 'Hook' },
       lastName: { type: 'string', example: 'Shopper' },
       phone: { type: 'string', example: '+2348012345678' },
-      guestId: { type: 'string' },
     },
   },
   RegisterRequest: {
@@ -491,16 +488,6 @@ function query(name, schema = { type: 'string' }, description = `${name} filter`
   return { name, in: 'query', required: false, schema, description };
 }
 
-function guestHeader() {
-  return {
-    name: 'X-Guest-Id',
-    in: 'header',
-    required: false,
-    schema: { type: 'string' },
-    description: 'Guest session id. Use this instead of Bearer auth for guest cart, checkout, orders, notifications, and device registration.',
-  };
-}
-
 function boothSessionHeader(required = true) {
   return {
     name: 'X-Booth-Session',
@@ -508,6 +495,16 @@ function boothSessionHeader(required = true) {
     required,
     schema: { type: 'string' },
     description: 'Short-lived signed booth session returned after resolving a six-digit code or scanning a booth QR. It must match the cart booth for adding items and checkout.',
+  };
+}
+
+function idempotencyHeader(required = true) {
+  return {
+    name: 'Idempotency-Key',
+    in: 'header',
+    required,
+    schema: { type: 'string', minLength: 8, maxLength: 160 },
+    description: 'Stable client command key. Repeating it returns the original result and cannot mutate a different resource.',
   };
 }
 
@@ -533,11 +530,12 @@ function op(tag, summary, options = {}) {
 const paths = {};
 
 Object.assign(schemas, {
-  RunnerSubmissionRequest: {
+  MarketAssociateSubmissionRequest: {
     type: 'object',
-    required: ['marketId', 'categorySuggestionId', 'basicTitle', 'basePriceMinor', 'currency', 'availabilityStatus'],
+    required: ['marketId', 'marketVendorId', 'categorySuggestionId', 'basicTitle', 'basePriceMinor', 'currency', 'availabilityStatus'],
     properties: {
       marketId: { type: 'string', example: 'MAR-2026-000001' },
+      marketVendorId: { type: 'string', example: 'MVD-2026-000001' },
       categorySuggestionId: { type: 'string', example: 'CAT-2026-000001' },
       basicTitle: { type: 'string', maxLength: 180 },
       notes: { type: 'string', maxLength: 2000 },
@@ -595,6 +593,74 @@ Object.assign(schemas, {
     required: ['offeredPriceMinor'],
     properties: { offeredPriceMinor: { type: 'integer', minimum: 1 } },
   },
+  MarketVendorRequest: {
+    type: 'object',
+    required: ['businessName', 'contactName', 'phone', 'preferredContactChannel', 'paymentProfile'],
+    properties: {
+      businessName: { type: 'string', maxLength: 180 },
+      contactName: { type: 'string', maxLength: 120 },
+      phone: { type: 'string' },
+      email: { type: 'string', format: 'email' },
+      address: { type: 'string', maxLength: 500 },
+      preferredContactChannel: { type: 'string', enum: ['phone', 'email', 'whatsapp'] },
+      paymentProfile: {
+        type: 'object',
+        required: ['method'],
+        properties: {
+          method: { type: 'string', enum: ['cash', 'bank_transfer', 'other'] },
+          bankName: { type: 'string' },
+          accountName: { type: 'string' },
+          accountNumber: { type: 'string', writeOnly: true },
+        },
+      },
+      notes: { type: 'string', maxLength: 1000 },
+    },
+  },
+  VendorCollectionRequest: {
+    type: 'object',
+    required: ['quantity', 'actualCostMinor'],
+    properties: {
+      quantity: { type: 'integer', minimum: 1 },
+      actualCostMinor: { type: 'integer', minimum: 0, description: 'Internal procurement cost in kobo.' },
+      evidenceAssetIds: { type: 'array', items: { type: 'string' } },
+      notes: { type: 'string' },
+      payment: {
+        type: 'object',
+        properties: {
+          amountMinor: { type: 'integer', minimum: 0 },
+          method: { type: 'string', enum: ['cash', 'bank_transfer', 'other'] },
+          proofAssetIds: { type: 'array', items: { type: 'string' } },
+          reference: { type: 'string' },
+        },
+      },
+    },
+  },
+  AvailabilityConfirmRequest: {
+    type: 'object',
+    required: ['status', 'version'],
+    properties: {
+      status: { type: 'string', enum: ['available', 'limited'] },
+      note: { type: 'string' },
+      version: { type: 'integer', minimum: 1 },
+    },
+  },
+  AvailabilityReportRequest: {
+    type: 'object',
+    required: ['note', 'version'],
+    properties: {
+      note: { type: 'string', minLength: 3 },
+      version: { type: 'integer', minimum: 1 },
+    },
+  },
+  VendorReconcileRequest: {
+    type: 'object',
+    required: ['status', 'reason'],
+    properties: {
+      status: { type: 'string', enum: ['reconciled', 'disputed'] },
+      notes: { type: 'string' },
+      reason: { type: 'string', minLength: 3 },
+    },
+  },
 });
 function add(method, path, operation) {
   paths[path] = paths[path] || {};
@@ -610,9 +676,9 @@ add('post', `${apiPrefix}/auth/signup/start`, op('Authentication', 'Start staged
 add('post', `${apiPrefix}/auth/signup/verify`, op('Authentication', 'Verify staged signup OTP', { public: true, requestBody: body('SignupVerifyRequest') }));
 add('post', `${apiPrefix}/auth/signup/complete`, op('Authentication', 'Complete staged signup and issue tokens', { public: true, requestBody: body('SignupCompleteRequest') }));
 add('post', `${apiPrefix}/auth/register`, op('Authentication', 'Register shopper account', { public: true, requestBody: body('RegisterRequest') }));
-add('post', `${apiPrefix}/auth/login`, op('Authentication', 'Login shopper/mobile user', { public: true, requestBody: body('LoginRequest') }));
+add('post', `${apiPrefix}/auth/login`, op('Authentication', 'Sign in a customer, staff, Market Associate, or Hook Partner account', { public: true, requestBody: body('LoginRequest') }));
 add('post', `${apiPrefix}/auth/google`, op('Authentication', 'Login or create shopper account with a verified Google ID token', { public: true, requestBody: body('GoogleAuthRequest') }));
-add('post', `${apiPrefix}/auth/invitations/accept`, op('Authentication', 'Activate an invited Staff, Runner, or Partner account and create its password', { public: true, requestBody: body('AccountInvitationAcceptRequest') }));
+add('post', `${apiPrefix}/auth/invitations/accept`, op('Authentication', 'Activate an invited Staff, Market Associate, or Partner account and create its password', { public: true, requestBody: body('AccountInvitationAcceptRequest') }));
 add('post', `${apiPrefix}/auth/verify-otp`, op('Authentication', 'Verify email OTP', { public: true, requestBody: body('OtpRequest') }));
 add('post', `${apiPrefix}/auth/refresh`, op('Authentication', 'Refresh access token', { public: true, requestBody: body('RefreshRequest') }));
 add('post', `${apiPrefix}/auth/password/forgot`, op('Authentication', 'Request password reset code', { public: true, requestBody: body('PasswordForgotRequest') }));
@@ -639,35 +705,34 @@ add('get', `${apiPrefix}/search`, op('Public Marketplace', 'Search products and 
 add('get', `${apiPrefix}/search/suggestions`, op('Public Marketplace', 'Get search suggestions', { public: true, parameters: [query('q')] }));
 
 // Customer
-add('get', `${apiPrefix}/cart`, op('Customer Cart', 'Get the backend-priced basket grouped by source State.', { parameters: [guestHeader()] }));
-add('post', `${apiPrefix}/cart/items`, op('Customer Cart', 'Add item to cart', { parameters: [guestHeader()], requestBody: body('CartItemRequest') }));
-add('patch', `${apiPrefix}/cart/items/{itemId}`, op('Customer Cart', 'Update cart item quantity', { parameters: [guestHeader(), param('itemId', 'Cart item id')], requestBody: body('QuantityRequest') }));
-add('delete', `${apiPrefix}/cart/items/{itemId}`, op('Customer Cart', 'Remove item from cart', { parameters: [guestHeader(), param('itemId', 'Cart item id')] }));
-add('delete', `${apiPrefix}/cart`, op('Customer Cart', 'Clear current cart', { parameters: [guestHeader()] }));
-add('delete', `${apiPrefix}/cart/states/{stateId}`, op('Customer Cart', 'Clear one State group from the current basket.', { parameters: [guestHeader(), param('stateId', 'STA public ID')] }));
+add('get', `${apiPrefix}/cart`, op('Customer Cart', 'Get the authenticated customer cart.'));
+add('post', `${apiPrefix}/cart/items`, op('Customer Cart', 'Add an authenticated customer cart item.', { requestBody: body('CartItemRequest') }));
+add('patch', `${apiPrefix}/cart/items/{itemId}`, op('Customer Cart', 'Update cart item quantity.', { parameters: [param('itemId', 'Cart item id')], requestBody: body('QuantityRequest') }));
+add('delete', `${apiPrefix}/cart/items/{itemId}`, op('Customer Cart', 'Remove a cart item.', { parameters: [param('itemId', 'Cart item id')] }));
+add('delete', `${apiPrefix}/cart`, op('Customer Cart', 'Clear the authenticated customer cart.'));
 add('get', `${apiPrefix}/commerce/config`, op('Customer Commerce', 'Get active policy versions and checkout capabilities.'));
-add('get', `${apiPrefix}/orders`, op('Customer Orders', 'List current shopper or guest orders', { parameters: [guestHeader()] }));
-add('get', `${apiPrefix}/orders/{id}`, op('Customer Orders', 'Get current shopper or guest order detail', { parameters: [guestHeader(), param('id', 'Order id')] }));
-add('post', `${apiPrefix}/orders/{id}/cancel`, op('Customer Orders', 'Cancel current shopper or guest order', { parameters: [guestHeader(), param('id', 'Order id')], requestBody: { required: false, content: { 'application/json': { schema: { type: 'object', properties: { reason: { type: 'string' } } } } } } }));
-add('get', `${apiPrefix}/negotiations`, op('Negotiations', 'List current shopper or guest negotiations', { parameters: [guestHeader()] }));
-add('post', `${apiPrefix}/negotiations`, op('Negotiations', 'Start negotiation', { parameters: [guestHeader()], requestBody: body('NegotiationRequest') }));
-add('get', `${apiPrefix}/negotiations/{id}`, op('Negotiations', 'Get negotiation detail', { parameters: [guestHeader(), param('id', 'Negotiation id')] }));
-add('post', `${apiPrefix}/negotiations/{id}/offers`, op('Negotiations', 'Submit a deterministic negotiation offer', { parameters: [guestHeader(), param('id', 'NEG public ID')], requestBody: body('NegotiationCounterRequest') }));
-add('post', `${apiPrefix}/negotiations/{id}/accept`, op('Negotiations', 'Accept negotiation counter', { parameters: [guestHeader(), param('id', 'Negotiation id')] }));
-add('post', `${apiPrefix}/payments/initialize`, op('Payments', 'Initialize Paystack Hosted Checkout from an immutable Order amount.', { requestBody: body('PaymentInitializeRequest') }));
+add('get', `${apiPrefix}/orders`, op('Customer Orders', 'List authenticated customer orders.'));
+add('get', `${apiPrefix}/orders/{id}`, op('Customer Orders', 'Get an owned customer order.', { parameters: [param('id', 'Order id')] }));
+add('post', `${apiPrefix}/orders/{id}/cancel`, op('Customer Orders', 'Cancel an eligible owned order.', { parameters: [param('id', 'Order id')], requestBody: { required: false, content: { 'application/json': { schema: { type: 'object', properties: { reason: { type: 'string' } } } } } } }));
+add('post', `${apiPrefix}/payments/initialize`, op('Payments', 'Initialize the legacy customer payment flow from an immutable Order amount.', { requestBody: body('PaymentInitializeRequest') }));
+add('post', `${apiPrefix}/payments/links`, op('Payments', 'Create an opaque 24-hour hosted payment link for an owned Order or fulfilment-group payment.'));
+add('post', `${apiPrefix}/payments/links/{id}/revoke`, op('Payments', 'Revoke an owned hosted payment link.'));
+add('get', `${apiPrefix}/public/payment-links/{token}`, op('Payments', 'Read a privacy-limited hosted payment summary.', { public: true }));
+add('post', `${apiPrefix}/public/payment-links/{token}/initialize`, op('Payments', 'Initialize an enabled hosted payment provider using an idempotency key.', { public: true }));
+add('get', `${apiPrefix}/public/payment-links/{token}/status`, op('Payments', 'Poll provider-verified hosted payment status.', { public: true }));
 add('get', `${apiPrefix}/payments/{orderId}`, op('Payments', 'Poll safe payment status; this endpoint never confirms payment.', { parameters: [param('orderId', 'ORD public ID')] }));
 add('get', `${apiPrefix}/payments/orders/{orderId}/status`, op('Payments', 'Compatibility alias for safe Order payment polling.', { parameters: [param('orderId', 'ORD public ID')] }));
-add('post', `${apiPrefix}/orders/{id}/refunds`, op('Customer Orders', 'Request a support-reviewed refund against captured funds', { parameters: [guestHeader(), param('id', 'Order id')] }));
+add('post', `${apiPrefix}/orders/{id}/refunds`, op('Customer Orders', 'Request a support-reviewed refund against captured funds', { parameters: [param('id', 'Order id')] }));
 add('post', `${apiPrefix}/support/account-deletion`, op('Authentication', 'Open a support-managed deletion request with a cooling-off period'));
-add('post', `${apiPrefix}/analytics/checkout-events`, op('Payments', 'Record a non-sensitive checkout funnel event', { parameters: [guestHeader()] }));
-add('get', `${apiPrefix}/notifications`, op('Notifications', 'List notifications', { parameters: [guestHeader()] }));
-add('patch', `${apiPrefix}/notifications/read-all`, op('Notifications', 'Mark all notifications as read', { parameters: [guestHeader()] }));
-add('delete', `${apiPrefix}/notifications/clear`, op('Notifications', 'Clear all notifications', { parameters: [guestHeader()] }));
-add('get', `${apiPrefix}/notifications/{id}`, op('Notifications', 'Get notification detail', { parameters: [guestHeader(), param('id', 'Notification id')] }));
-add('patch', `${apiPrefix}/notifications/{id}/read`, op('Notifications', 'Mark notification as read', { parameters: [guestHeader(), param('id', 'Notification id')] }));
-add('delete', `${apiPrefix}/notifications/{id}`, op('Notifications', 'Delete notification', { parameters: [guestHeader(), param('id', 'Notification id')] }));
-add('post', `${apiPrefix}/devices/register`, op('Devices', 'Register Expo push device token', { parameters: [guestHeader()], requestBody: body('DeviceRegisterRequest') }));
-add('post', `${apiPrefix}/devices/unregister`, op('Devices', 'Unregister Expo push device token', { parameters: [guestHeader()], requestBody: body('DeviceUnregisterRequest', false) }));
+add('post', `${apiPrefix}/analytics/checkout-events`, op('Payments', 'Record an authenticated non-sensitive checkout event.'));
+add('get', `${apiPrefix}/notifications`, op('Notifications', 'List customer notifications.'));
+add('patch', `${apiPrefix}/notifications/read-all`, op('Notifications', 'Mark all notifications as read.'));
+add('delete', `${apiPrefix}/notifications/clear`, op('Notifications', 'Clear all notifications.'));
+add('get', `${apiPrefix}/notifications/{id}`, op('Notifications', 'Get notification detail.', { parameters: [param('id', 'Notification id')] }));
+add('patch', `${apiPrefix}/notifications/{id}/read`, op('Notifications', 'Mark notification as read.', { parameters: [param('id', 'Notification id')] }));
+add('delete', `${apiPrefix}/notifications/{id}`, op('Notifications', 'Delete notification.', { parameters: [param('id', 'Notification id')] }));
+add('post', `${apiPrefix}/devices/register`, op('Devices', 'Register an authenticated customer push token.', { requestBody: body('DeviceRegisterRequest') }));
+add('post', `${apiPrefix}/devices/unregister`, op('Devices', 'Unregister an authenticated customer push token.', { requestBody: body('DeviceUnregisterRequest', false) }));
 
 // Vendor
 add('post', `${apiPrefix}/vendors/me/register`, op('Vendor Portal', 'Register current user as vendor', { requestBody: body('VendorRegistrationRequest') }));
@@ -690,9 +755,11 @@ add('get', `${apiPrefix}/logistics/field-agent/profile`, op('Logistics', 'Get cu
 add('post', `${apiPrefix}/upload/image`, op('Uploads', 'Upload one image', { requestBody: { required: true, content: { 'multipart/form-data': { schema: { type: 'object', required: ['image'], properties: { image: { type: 'string', format: 'binary' } } } } } } }));
 add('post', `${apiPrefix}/upload/images`, op('Uploads', 'Upload multiple images', { requestBody: { required: true, content: { 'multipart/form-data': { schema: { type: 'object', required: ['images'], properties: { images: { type: 'array', items: { type: 'string', format: 'binary' } } } } } } } }));
 add('post', `${apiPrefix}/webhooks/paystack`, op('Webhooks', 'Receive a raw, signed Paystack event with replay and amount verification.', { public: true, requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } } } }));
+add('post', `${apiPrefix}/webhooks/opay`, op('Webhooks', 'Receive a raw, signed OPay event with replay and amount verification.', { public: true, requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } } } }));
+add('get', `${apiPrefix}/admin/commerce/payment-providers`, op('Admin Commerce', 'Read payment-provider enablement and credential readiness.'));
+add('patch', `${apiPrefix}/admin/commerce/payment-providers`, op('Admin Commerce', 'Update enabled providers, display order, and default provider.'));
 
 // Admin
-add('post', `${apiPrefix}/admin/auth/login`, op('Admin Auth', 'Login admin or super-admin', { public: true, requestBody: body('LoginRequest') }));
 add('get', `${apiPrefix}/admin/dashboard`, op('Admin Dashboard', 'Get admin dashboard summary'));
 add('get', `${apiPrefix}/admin/analytics`, op('Admin Dashboard', 'Get admin analytics series'));
 add('get', `${apiPrefix}/admin/health`, op('Admin Dashboard', 'Check admin API health'));
@@ -718,12 +785,12 @@ add('post', `${apiPrefix}/admin/orders/{orderId}/fulfilments/{vendorId}/{decisio
 add('get', `${apiPrefix}/admin/dispatch/active`, op('Admin Dispatch', 'List active deliveries'));
 add('get', `${apiPrefix}/admin/dispatch`, op('Admin Dispatch', 'List delivery records', { parameters: [query('page', { type: 'integer' }), query('limit', { type: 'integer' })] }));
 add('get', `${apiPrefix}/admin/dispatch/drivers`, op('Admin Dispatch', 'List active drivers', { parameters: [query('stateCode')] }));
-add('get', `${apiPrefix}/admin/runners`, op('Admin Runners', 'List runners', { parameters: [query('page', { type: 'integer' }), query('limit', { type: 'integer' }), query('stateCode')] }));
-add('get', `${apiPrefix}/admin/runners/stats`, op('Admin Runners', 'Get runner operational statistics'));
-add('get', `${apiPrefix}/admin/runners/queue`, op('Admin Runners', 'List runner catalog review queue'));
-add('get', `${apiPrefix}/admin/runners/{id}`, op('Admin Runners', 'Get runner detail', { parameters: [param('id', 'Runner id')] }));
-add('patch', `${apiPrefix}/admin/runners/{id}/toggle`, op('Admin Runners', 'Toggle runner active status', { parameters: [param('id', 'Runner id')] }));
-add('patch', `${apiPrefix}/admin/runners/{id}/state`, op('Admin Runners', 'Assign runner to an active operating state', { parameters: [param('id', 'Runner id')], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['stateCode'], properties: { stateCode: { type: 'string', example: 'LA' } } } } } } }));
+add('get', `${apiPrefix}/admin/market-associates`, op('Admin Market Associates', 'List market associates', { parameters: [query('page', { type: 'integer' }), query('limit', { type: 'integer' }), query('stateCode')] }));
+add('get', `${apiPrefix}/admin/market-associates/stats`, op('Admin Market Associates', 'Get market associate operational statistics'));
+add('get', `${apiPrefix}/admin/market-associates/queue`, op('Admin Market Associates', 'List market associate catalog review queue'));
+add('get', `${apiPrefix}/admin/market-associates/{id}`, op('Admin Market Associates', 'Get market associate detail', { parameters: [param('id', 'Market Associate id')] }));
+add('patch', `${apiPrefix}/admin/market-associates/{id}/toggle`, op('Admin Market Associates', 'Toggle market associate active status', { parameters: [param('id', 'Market Associate id')] }));
+add('patch', `${apiPrefix}/admin/market-associates/{id}/state`, op('Admin Market Associates', 'Assign market associate to an active operating state', { parameters: [param('id', 'Market Associate id')], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['stateCode'], properties: { stateCode: { type: 'string', example: 'LA' } } } } } } }));
 add('get', `${apiPrefix}/admin/booths`, op('Admin Booths', 'List booths', { parameters: [query('page', { type: 'integer' }), query('limit', { type: 'integer' }), query('stateCode')] }));
 add('get', `${apiPrefix}/admin/booths/analytics`, op('Admin Booths', 'Get booth analytics'));
 add('get', `${apiPrefix}/admin/booths/{id}`, op('Admin Booths', 'Get booth detail', { parameters: [param('id', 'Booth id')] }));
@@ -754,25 +821,31 @@ add('get', `${apiPrefix}/admin/reports`, op('Admin Reports', 'List generated rep
 add('post', `${apiPrefix}/admin/reports/generate`, op('Admin Reports', 'Generate report metadata', { requestBody: body('ReportRequest', false) }));
 add('get', `${apiPrefix}/admin/settings`, op('Admin Settings', 'Get platform settings'));
 add('patch', `${apiPrefix}/admin/settings`, op('Admin Settings', 'Update platform settings (super-admin)', { requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } } } }));
+add('get', `${apiPrefix}/admin/delivery`, op('Delivery Coverage', 'View every Nigerian delivery State, pricing rule, and global delivery settings.'));
+add('get', `${apiPrefix}/admin/delivery/settings`, op('Delivery Coverage', 'View delivery coverage and pricing settings.'));
+add('patch', `${apiPrefix}/admin/delivery/settings`, op('Delivery Coverage', 'Update the global delivery fallback fee with an audit reason.'));
+add('get', `${apiPrefix}/admin/delivery/rules`, op('Delivery Coverage', 'List active and inactive delivery pricing rules.'));
+add('post', `${apiPrefix}/admin/delivery/rules`, op('Delivery Coverage', 'Create a State, Service Zone, or global flat/distance pricing rule.'));
+add('patch', `${apiPrefix}/admin/delivery/rules/{id}`, op('Delivery Coverage', 'Update an audited delivery pricing rule.', { parameters: [param('id', 'DPR public ID')] }));
+add('patch', `${apiPrefix}/admin/delivery/states/{id}`, op('Delivery Coverage', 'Enable or pause delivery in one Nigerian State.', { parameters: [param('id', 'STA public ID')] }));
+add('post', `${apiPrefix}/admin/delivery/locations/refresh`, op('Delivery Coverage', 'Refresh the cached Nigerian State, capital, and Local Government catalog.', { requestBody: body('AuditReasonRequest', false) }));
+add('post', `${apiPrefix}/admin/delivery/preview`, op('Delivery Coverage', 'Preview the effective delivery fee for a destination.'));
 
-add('post', `${apiPrefix}/guest-sessions`, op('Guest Sessions', 'Issue an opaque backend-managed guest session'));
-add('get', `${apiPrefix}/guest-sessions/current`, op('Guest Sessions', 'Restore the current guest session', {
-  parameters: [{ in: 'header', name: 'X-Guest-Session', required: true, schema: { type: 'string' } }],
-}));
-add('delete', `${apiPrefix}/guest-sessions/current`, op('Guest Sessions', 'Revoke the current guest session', {
-  parameters: [{ in: 'header', name: 'X-Guest-Session', required: true, schema: { type: 'string' } }],
-}));
 for (const resource of ['states', 'cities', 'zones', 'markets']) {
   add('get', `${apiPrefix}/public/${resource}`, op('Public Geography', `List active public ${resource}`));
   add('get', `${apiPrefix}/public/${resource}/{id}`, op('Public Geography', `Get active public ${resource.slice(0, -1)}`, {
     parameters: [param('id', 'Public Hook ID')],
   }));
 }
+add('get', `${apiPrefix}/public/states/{id}/lgas`, op('Public Geography', 'List active Local Government Areas for a delivery-enabled Nigerian State.', {
+  public: true,
+  parameters: [param('id', 'STA public ID')],
+}));
 const platformResources = [
   ['staff', 'Staff Accounts'], ['roles', 'Roles and Permissions'], ['permissions', 'Roles and Permissions'],
   ['states', 'Platform Geography'], ['cities', 'Platform Geography'], ['zones', 'Platform Geography'],
   ['markets', 'Operational Network'], ['hubs', 'Operational Network'], ['partners', 'Operational Network'],
-  ['runners', 'Operational Network'], ['runner-assignments', 'Operational Network'],
+  ['market-associates', 'Operational Network'], ['market-associate-assignments', 'Operational Network'],
   ['audit-logs', 'Platform Audit'],
 ];
 for (const [resource, tag] of platformResources) {
@@ -786,32 +859,42 @@ for (const [resource, tag] of platformResources) {
 }
 add('get', `${apiPrefix}/admin/public-id-counters`, op('Platform Governance', 'Inspect annual public Hook ID counters'));
 add('post', `${apiPrefix}/admin/public-id-counters/repair`, op('Platform Governance', 'Repair a public ID counter with mandatory reason and audit'));
-for (const resource of ['staff', 'runners', 'partners']) {
+for (const resource of ['staff', 'market-associates', 'partners']) {
   add('post', `${apiPrefix}/admin/${resource}/{id}/resend-invitation`, op('Platform Governance', `Revoke the previous token and resend a ${resource.slice(0, -1)} activation invitation`, {
     parameters: [param('id', 'Public Hook ID')],
   }));
 }
-add('get', `${apiPrefix}/runner/profile`, op('Runner Foundation', 'Get the authenticated Runner profile and scope'));
-add('post', `${apiPrefix}/runner/auth/login`, op('Runner Foundation', 'Sign in to the Runner portal with server-enforced Runner account type', { requestBody: body('LoginRequest') }));
-add('get', `${apiPrefix}/runner/markets`, op('Runner Foundation', 'List only Markets assigned to the authenticated Runner'));
-add('post', `${apiPrefix}/partner/auth/login`, op('Partner Foundation', 'Sign in to the Hook Partner portal with server-enforced Partner account type', { requestBody: body('LoginRequest') }));
+add('get', `${apiPrefix}/market-associate/profile`, op('Market Associate Foundation', 'Get the authenticated Market Associate profile and scope'));
+add('get', `${apiPrefix}/market-associate/markets`, op('Market Associate Foundation', 'List only Markets assigned to the authenticated Market Associate'));
+add('get', `${apiPrefix}/market-associate/markets/{id}`, op('Market Supplier Operations', 'Get an assigned Market with suppliers, Products, submissions, and collections.', { parameters: [param('id', 'MAR public ID')] }));
+add('get', `${apiPrefix}/market-associate/markets/{id}/vendors`, op('Market Supplier Operations', 'List suppliers in an assigned Market.', { parameters: [param('id', 'MAR public ID'), query('q')] }));
+add('post', `${apiPrefix}/market-associate/markets/{id}/vendors`, op('Market Supplier Operations', 'Create a Market supplier and issue a single-use invitation.', { parameters: [param('id', 'MAR public ID')], requestBody: body('MarketVendorRequest') }));
+add('get', `${apiPrefix}/market-associate/market-vendors/{id}`, op('Market Supplier Operations', 'Get one supplier within the Market Associate Market scope.', { parameters: [param('id', 'MVD public ID')] }));
+add('patch', `${apiPrefix}/market-associate/market-vendors/{id}`, op('Market Supplier Operations', 'Update a supplier within the Market Associate Market scope.', { parameters: [param('id', 'MVD public ID')], requestBody: body('MarketVendorRequest', false) }));
+add('post', `${apiPrefix}/market-associate/market-vendors/{id}/invite`, op('Market Supplier Operations', 'Revoke pending invitations and issue a new single-use supplier invitation.', { parameters: [param('id', 'MVD public ID')] }));
+add('post', `${apiPrefix}/market-associate/product-submissions/{id}/collection`, op('Market Supplier Operations', 'Record collected quantity, procurement cost, and optional supplier payment.', { parameters: [param('id', 'SUB public ID')], requestBody: body('VendorCollectionRequest') }));
+add('get', `${apiPrefix}/market-associate/vendor-collections`, op('Market Supplier Operations', 'List collections recorded by the authenticated Market Associate.', { parameters: [query('marketId')] }));
+add('get', `${apiPrefix}/market-associate/availability-checks`, op('Catalog Availability', 'List source-owned or eligible fallback Market availability checks.'));
+add('post', `${apiPrefix}/market-associate/products/{id}/availability/confirm`, op('Catalog Availability', 'Confirm available or limited supplier availability with optimistic versioning.', { parameters: [param('id', 'PRD public ID')], requestBody: body('AvailabilityConfirmRequest') }));
+add('post', `${apiPrefix}/market-associate/products/{id}/availability/report`, op('Catalog Availability', 'Report a Product unavailable and keep it paused.', { parameters: [param('id', 'PRD public ID')], requestBody: body('AvailabilityReportRequest') }));
+add('post', `${apiPrefix}/public/vendor-invitations/{token}/accept`, op('Market Supplier Operations', 'Accept a single-use supplier consent invitation without creating a login.', { public: true, parameters: [param('token', 'Single-use invitation token')] }));
 add('get', `${apiPrefix}/partner/profile`, op('Partner Foundation', 'Get the authenticated Hook Partner profile'));
 add('get', `${apiPrefix}/partner/location`, op('Partner Foundation', 'Get only the authenticated Hook Partner location'));
 
-// Phase 3: Runner capture, Commercial Catalog, and deterministic negotiation.
-add('get', `${apiPrefix}/runner/dashboard`, op('Runner Catalog Capture', 'Get self-scoped catalog capture metrics.'));
-add('get', `${apiPrefix}/runner/product-submissions`, op('Runner Catalog Capture', 'List the authenticated Runner submissions with cursor pagination.'));
-add('post', `${apiPrefix}/runner/product-submissions`, op('Runner Catalog Capture', 'Create a Runner product-submission draft.', { requestBody: body('RunnerSubmissionRequest') }));
-add('get', `${apiPrefix}/runner/product-submissions/{id}`, op('Runner Catalog Capture', 'Get one owned submission.', { parameters: [param('id', 'SUB public ID')] }));
-add('patch', `${apiPrefix}/runner/product-submissions/{id}`, op('Runner Catalog Capture', 'Update an owned draft or requested-changes submission with optimistic versioning.', { parameters: [param('id', 'SUB public ID')], requestBody: body('RunnerSubmissionRequest') }));
-add('post', `${apiPrefix}/runner/product-submissions/{id}/submit`, op('Runner Catalog Capture', 'Submit a complete capture to Catalog Review.', { parameters: [param('id', 'SUB public ID')] }));
+// Phase 3: Market Associate capture, Commercial Catalog, and deterministic negotiation.
+add('get', `${apiPrefix}/market-associate/dashboard`, op('Market Associate Catalog Capture', 'Get self-scoped catalog capture metrics.'));
+add('get', `${apiPrefix}/market-associate/product-submissions`, op('Market Associate Catalog Capture', 'List the authenticated Market Associate submissions with cursor pagination.'));
+add('post', `${apiPrefix}/market-associate/product-submissions`, op('Market Associate Catalog Capture', 'Create a Market Associate product-submission draft.', { requestBody: body('MarketAssociateSubmissionRequest') }));
+add('get', `${apiPrefix}/market-associate/product-submissions/{id}`, op('Market Associate Catalog Capture', 'Get one owned submission.', { parameters: [param('id', 'SUB public ID')] }));
+add('patch', `${apiPrefix}/market-associate/product-submissions/{id}`, op('Market Associate Catalog Capture', 'Update an owned draft or requested-changes submission with optimistic versioning.', { parameters: [param('id', 'SUB public ID')], requestBody: body('MarketAssociateSubmissionRequest') }));
+add('post', `${apiPrefix}/market-associate/product-submissions/{id}/submit`, op('Market Associate Catalog Capture', 'Submit a complete capture to Catalog Review.', { parameters: [param('id', 'SUB public ID')] }));
 add('get', `${apiPrefix}/catalog/media/readiness`, op('Catalog Media', 'Check signed catalog media availability without exposing provider credentials.'));
 add('post', `${apiPrefix}/catalog/media/upload-intents`, op('Catalog Media', 'Create a signed authenticated Cloudinary upload intent. Returns MEDIA_PROVIDER_UNAVAILABLE when signed uploads are disabled or not configured.'));
 add('post', `${apiPrefix}/catalog/media/finalize`, op('Catalog Media', 'Verify provider metadata and finalize an owned catalog asset.'));
 
 add('get', `${apiPrefix}/admin/catalog/review/dashboard`, op('Catalog Review', 'Get scoped review metrics.'));
 add('get', `${apiPrefix}/admin/catalog/review`, op('Catalog Review', 'List scoped submission review queue.'));
-add('get', `${apiPrefix}/admin/catalog/review/{id}`, op('Catalog Review', 'Get submission evidence and immutable Runner snapshot.', { parameters: [param('id', 'SUB public ID')] }));
+add('get', `${apiPrefix}/admin/catalog/review/{id}`, op('Catalog Review', 'Get submission evidence and immutable Market Associate snapshot.', { parameters: [param('id', 'SUB public ID')] }));
 add('post', `${apiPrefix}/admin/catalog/review/{id}/start`, op('Catalog Review', 'Claim and start a versioned review.', { parameters: [param('id', 'SUB public ID')] }));
 for (const action of ['request-changes', 'approve', 'reject']) {
   add('post', `${apiPrefix}/admin/catalog/review/{id}/${action}`, op('Catalog Review', `${action.replace('-', ' ')} a submission with an audited reason.`, { parameters: [param('id', 'SUB public ID')], requestBody: body('CatalogReviewDecision') }));
@@ -824,6 +907,14 @@ add('patch', `${apiPrefix}/admin/commercial/products/{id}/pricing`, op('Commerci
 for (const action of ['publish', 'pause', 'availability-unconfirmed', 'unpublish']) {
   add('post', `${apiPrefix}/admin/commercial/products/{id}/${action}`, op('Commercial Catalog', `${action.replaceAll('-', ' ')} a Commercial Product through the audited lifecycle.`, { parameters: [param('id', 'PRD public ID')] }));
 }
+add('get', `${apiPrefix}/admin/markets/{id}/vendors`, op('Market Supplier Operations', 'List Market suppliers in the authenticated Staff State scope.', { parameters: [param('id', 'MAR public ID')] }));
+add('get', `${apiPrefix}/admin/market-vendors/{id}`, op('Market Supplier Operations', 'Get a masked supplier operations record.', { parameters: [param('id', 'MVD public ID')] }));
+add('patch', `${apiPrefix}/admin/market-vendors/{id}`, op('Market Supplier Operations', 'Update a supplier with an audited reason.', { parameters: [param('id', 'MVD public ID')], requestBody: body('MarketVendorRequest', false) }));
+add('get', `${apiPrefix}/admin/market-vendors/{id}/payment-details`, op('Market Supplier Finance', 'View decrypted supplier bank details. Finance or Super Admin only; requires an audit reason.', { parameters: [param('id', 'MVD public ID'), query('reason')] }));
+add('get', `${apiPrefix}/admin/vendor-collections`, op('Market Supplier Operations', 'List State-scoped supplier collections.', { parameters: [query('marketId'), query('vendorId'), query('marketAssociateId'), query('status')] }));
+add('post', `${apiPrefix}/admin/vendor-collections/{id}/reconcile`, op('Market Supplier Finance', 'Reconcile or dispute a supplier payment with an audited reason.', { parameters: [param('id', 'VCL public ID')], requestBody: body('VendorReconcileRequest') }));
+add('get', `${apiPrefix}/admin/settings/catalog-availability`, op('Catalog Availability', 'Get the universal availability-check window and overdue count.'));
+add('patch', `${apiPrefix}/admin/settings/catalog-availability`, op('Catalog Availability', 'Update the universal availability-check window with an audited reason.'));
 add('get', `${apiPrefix}/public/home`, op('Public Catalog', 'Get safe published catalog foundations for Home.', { public: true }));
 add('get', `${apiPrefix}/public/categories`, op('Public Catalog', 'List safe active categories.', { public: true }));
 add('get', `${apiPrefix}/public/products`, op('Public Catalog', 'List safe published products using cursor pagination.', { public: true, parameters: [query('cursor'), query('limit', { type: 'integer' }), query('stateId'), query('marketId'), query('categoryId'), query('q')] }));
@@ -839,16 +930,13 @@ add('post', `${apiPrefix}/negotiations/{id}/close`, op('AI Negotiation', 'Close 
 for (const method of ['get', 'post']) add(method, `${apiPrefix}/addresses`, op('Customer Commerce', `${method === 'get' ? 'List' : 'Create'} customer-owned delivery addresses.`));
 for (const method of ['patch', 'delete']) add(method, `${apiPrefix}/addresses/{id}`, op('Customer Commerce', `${method === 'patch' ? 'Update' : 'Archive'} an owned address.`, { parameters: [param('id', 'ADR public ID')] }));
 add('post', `${apiPrefix}/addresses/{id}/default`, op('Customer Commerce', 'Set the customer default address.', { parameters: [param('id', 'ADR public ID')] }));
-add('get', `${apiPrefix}/cart`, op('Customer Commerce', 'Get the backend-owned basket grouped by source State. Guests use X-Guest-Session.'));
-add('post', `${apiPrefix}/cart/items`, op('Customer Commerce', 'Add a backend-priced catalog line to the basket.'));
-add('patch', `${apiPrefix}/cart/items/{id}`, op('Customer Commerce', 'Update a basket line and invalidate incompatible quotes.', { parameters: [param('id', 'CTI public ID')] }));
-add('delete', `${apiPrefix}/cart/items/{id}`, op('Customer Commerce', 'Remove a basket line.', { parameters: [param('id', 'CTI public ID')] }));
-add('delete', `${apiPrefix}/cart/states/{stateId}`, op('Customer Commerce', 'Clear exactly one State group.', { parameters: [param('stateId', 'STA public ID')] }));
-add('post', `${apiPrefix}/checkout/states/{stateId}/preview`, op('Customer Commerce', 'Create a short-lived server-priced State checkout preview.', { parameters: [param('stateId', 'STA public ID')] }));
-add('post', `${apiPrefix}/checkout/states/{stateId}/confirm`, op('Customer Commerce', 'Confirm one State checkout. Requires Idempotency-Key.', { parameters: [param('stateId', 'STA public ID')] }));
-add('post', `${apiPrefix}/payments/initialize`, op('Payments', 'Initialize Paystack Hosted Checkout from an owned ORD public ID.'));
+add('post', `${apiPrefix}/commerce/import`, op('Customer Commerce', 'Idempotently import a device-local cart and saved products after authentication.'));
+add('post', `${apiPrefix}/checkout/preview`, op('Customer Commerce', 'Create one checkout preview for the complete customer cart.'));
+add('post', `${apiPrefix}/checkout/confirm`, op('Customer Commerce', 'Confirm one combined customer order. Requires Idempotency-Key.'));
+add('post', `${apiPrefix}/payments/initialize`, op('Payments', 'Initialize the legacy hosted checkout from an owned ORD public ID.'));
 add('get', `${apiPrefix}/payments/{id}`, op('Payments', 'Poll safe payment and Order status; this never confirms payment.', { parameters: [param('id', 'PAY or ORD public ID')] }));
 add('post', `${apiPrefix}/webhooks/paystack`, op('Payments', 'Raw-body Paystack webhook with HMAC evidence validation.', { public: true }));
+add('post', `${apiPrefix}/webhooks/opay`, op('Payments', 'Raw-body OPay webhook with signed evidence validation.', { public: true }));
 add('get', `${apiPrefix}/payments/paystack/callback`, op('Payments', 'Paystack browser return bridge. Redirects to the Hook app and never confirms payment.', { public: true }));
 add('get', `${apiPrefix}/partner/customers/lookup`, op('Partner Commerce', 'Exact customer lookup in the authenticated Partner scope.'));
 add('post', `${apiPrefix}/partner/customers`, op('Partner Commerce', 'Create an attested assisted-ordering customer without verifying email.'));
@@ -870,6 +958,44 @@ add('get', `${apiPrefix}/admin/commerce/integration-exceptions`, op('Commerce Op
 add('get', `${apiPrefix}/admin/commerce/outbox`, op('Commerce Operations', 'Inspect fulfilment-ready outbox events.'));
 add('get', `${apiPrefix}/admin/commerce/settings`, op('Commerce Operations', 'Get Super Admin commerce defaults.'));
 add('patch', `${apiPrefix}/admin/commerce/settings`, op('Commerce Operations', 'Update audited Super Admin commerce defaults.'));
+
+// Phase 5: Market Associate fulfilment, Hub custody, logistics, Partner collection, returns, and refunds.
+add('get', `${apiPrefix}/market-associate/fulfilments/dashboard`, op('Market Associate Fulfilment', 'Get self-scoped fulfilment metrics and SLA work.'));
+add('get', `${apiPrefix}/market-associate/fulfilments`, op('Market Associate Fulfilment', 'List fulfilment tasks assigned to the authenticated Market Associate.', { parameters: [query('status'), query('limit', { type: 'integer' })] }));
+add('get', `${apiPrefix}/market-associate/fulfilments/{id}`, op('Market Associate Fulfilment', 'Get one assigned fulfilment task and its customer-safe item details.', { parameters: [param('id', 'FUL public ID')] }));
+for (const action of ['accept', 'start_sourcing', 'secure', 'begin_packing', 'pack']) {
+  add('post', `${apiPrefix}/market-associate/fulfilments/{id}/${action}`, op('Market Associate Fulfilment', `Market Associate ${action.replaceAll('_', ' ')} action with optimistic versioning.`, { parameters: [param('id', 'FUL public ID')] }));
+}
+add('post', `${apiPrefix}/market-associate/fulfilments/{id}/issues`, op('Market Associate Fulfilment', 'Report a sourcing or fulfilment exception.', { parameters: [param('id', 'FUL public ID'), idempotencyHeader(false)] }));
+add('get', `${apiPrefix}/admin/fulfilment/control-tower`, op('Fulfilment Operations', 'View State/Hub-scoped fulfilment tasks, exceptions, shipments, and returns.'));
+add('get', `${apiPrefix}/admin/fulfilment/tasks/{id}`, op('Fulfilment Operations', 'Get a State/Hub-scoped fulfilment task, order summary, and assigned item snapshots.', { parameters: [param('id', 'FUL public ID')] }));
+add('get', `${apiPrefix}/admin/fulfilment/market-associates`, op('Fulfilment Operations', 'List active compatible Market Associate profiles for audited reassignment.', { parameters: [query('stateId'), query('limit', { type: 'integer' })] }));
+add('get', `${apiPrefix}/admin/fulfilment/hubs`, op('Fulfilment Operations', 'List active compatible Dispatch Hubs for audited reassignment.', { parameters: [query('stateId'), query('limit', { type: 'integer' })] }));
+add('post', `${apiPrefix}/admin/fulfilment/tasks/{id}/reassign`, op('Fulfilment Operations', 'Reassign a task only to a compatible active Market Associate and Hub with an audited reason.', { parameters: [param('id', 'FUL public ID')] }));
+add('get', `${apiPrefix}/admin/fulfilment/exceptions`, op('Fulfilment Operations', 'List open State/Hub-scoped fulfilment exceptions.', { parameters: [query('stateId'), query('hubId')] }));
+add('patch', `${apiPrefix}/admin/fulfilment/exceptions/{id}`, op('Fulfilment Operations', 'Move an exception to in-progress, resolved, or dismissed with an audited reason.', { parameters: [param('id', 'EXC public ID')] }));
+add('get', `${apiPrefix}/admin/fulfilment/hub`, op('Hub Operations', 'View inbound Market Associate packages, Hub packages, exceptions, and consolidations.'));
+add('get', `${apiPrefix}/admin/fulfilment/consolidations`, op('Hub Operations', 'List State/Hub-scoped consolidation records.', { parameters: [query('status'), query('stateId'), query('hubId'), query('limit', { type: 'integer' })] }));
+add('post', `${apiPrefix}/admin/fulfilment/packages/{id}/receive`, op('Hub Operations', 'Receive a Market Associate package after validating its one-time scan credential.', { parameters: [param('id', 'RPK public ID'), idempotencyHeader()] }));
+add('post', `${apiPrefix}/admin/fulfilment/packages/{id}/qc`, op('Hub Operations', 'Record a visible quality-check result with optimistic versioning.', { parameters: [param('id', 'HPK public ID')] }));
+add('post', `${apiPrefix}/admin/fulfilment/orders/{id}/consolidate`, op('Hub Operations', 'Create a single complete State Order consolidation; incomplete orders are rejected.', { parameters: [param('id', 'ORD public ID')] }));
+add('post', `${apiPrefix}/admin/fulfilment/consolidations/{id}/seal`, op('Hub Operations', 'Seal one complete customer parcel for dispatch.', { parameters: [param('id', 'CON public ID')] }));
+add('get', `${apiPrefix}/admin/fulfilment/shipments`, op('Fulfilment Logistics', 'List State/Hub-scoped shipment records.'));
+add('get', `${apiPrefix}/admin/fulfilment/logistics/readiness`, op('Fulfilment Logistics', 'Inspect manual, development simulator, and external provider readiness without exposing credentials.'));
+add('post', `${apiPrefix}/admin/fulfilment/orders/{id}/shipments`, op('Fulfilment Logistics', 'Book one sealed parcel through manual logistics fallback, the development-only simulator, or an enabled provider.', { parameters: [param('id', 'ORD public ID'), idempotencyHeader()] }));
+add('patch', `${apiPrefix}/admin/fulfilment/shipments/{id}`, op('Fulfilment Logistics', 'Advance a shipment through the explicit status map.', { parameters: [param('id', 'SHP public ID')] }));
+add('post', `${apiPrefix}/webhooks/logistics/{provider}`, op('Fulfilment Logistics', 'Receive an authenticated deduplicated provider tracking event.', { public: true, parameters: [param('provider', 'Logistics provider'), { name: 'x-provider-event-id', in: 'header', required: true, schema: { type: 'string' } }, { name: 'x-provider-signature', in: 'header', required: true, schema: { type: 'string' } }] }));
+add('get', `${apiPrefix}/partner/fulfilment/custody`, op('Partner Custody', 'List only packages assigned to the authenticated initiating Hook Partner.'));
+add('get', `${apiPrefix}/partner/fulfilment/custody/{orderId}`, op('Partner Custody', 'Get one Partner custody record without exposing the collection-code hash.', { parameters: [param('orderId', 'ORD public ID')] }));
+add('post', `${apiPrefix}/partner/fulfilment/custody/{id}/receive`, op('Partner Custody', 'Receive one package into the authenticated Partner location.', { parameters: [param('id', 'PCU public ID'), idempotencyHeader(false)] }));
+add('post', `${apiPrefix}/partner/fulfilment/custody/{id}/release`, op('Partner Custody', 'Release a package only after verified payment and a valid one-time collection code.', { parameters: [param('id', 'PCU public ID'), idempotencyHeader(false)] }));
+add('get', `${apiPrefix}/orders/{id}/fulfilment`, op('Customer Fulfilment', 'Return customer-safe Market Associate, Hub, shipment, Partner custody, return, and refund progress.', { parameters: [param('id', 'ORD public ID')] }));
+add('post', `${apiPrefix}/orders/{id}/returns`, op('Returns and Refunds', 'Create an eligible customer return issue within the delivery/collection window.', { parameters: [param('id', 'ORD public ID')] }));
+add('get', `${apiPrefix}/admin/fulfilment/returns`, op('Returns and Refunds', 'List State-scoped customer return requests.'));
+add('patch', `${apiPrefix}/admin/fulfilment/returns/{id}/review`, op('Returns and Refunds', 'Approve or reject a return with a mandatory reason.', { parameters: [param('id', 'RET public ID')] }));
+add('get', `${apiPrefix}/admin/fulfilment/refunds`, op('Returns and Refunds', 'List State-scoped refund records.'));
+add('post', `${apiPrefix}/admin/fulfilment/refunds`, op('Returns and Refunds', 'Create an idempotent refund request within the captured balance.', { parameters: [idempotencyHeader()] }));
+add('post', `${apiPrefix}/admin/fulfilment/refunds/{id}/process`, op('Returns and Refunds', 'Process a refund through the active payment provider.', { parameters: [param('id', 'RFD public ID'), idempotencyHeader(false)] }));
 
 const obsoletePrefixes = [
   `${apiPrefix}/vendors`,
@@ -904,25 +1030,27 @@ const spec = {
   info: {
     title: 'Hook API',
     version: '1.0.0',
-    description: 'Hook Phase 4 platform API. State-grouped commerce, Partner-assisted ordering, Paystack evidence, and Pay-at-Handover use public Hook IDs and the standard { success, data, meta } contract.',
+    description: 'Hook Phase 5 platform API. State-grouped commerce, Paystack evidence, fulfilment operations, Hub custody, logistics boundaries, returns, and refunds use public Hook IDs and the standard { success, data, meta } contract.',
   },
   servers: [
     { url: 'http://localhost:4000', description: 'Local development server' },
     { url: 'https://hook-api.onrender.com', description: 'Production server' },
   ],
   tags: tags.filter((tag) => !inactiveTags.has(tag.name)).concat([
-    { name: 'Admin Runners', description: 'Admin Runner identity, scope, and assignment controls.' },
-    { name: 'Guest Sessions', description: 'Backend-issued anonymous Shopper sessions.' },
+    { name: 'Admin Market Associates', description: 'Admin Market Associate identity, scope, and assignment controls.' },
     { name: 'Public Geography', description: 'Safe public State, City, Zone, and Market configuration.' },
     { name: 'Staff Accounts', description: 'Staff identity, role, scope, and session controls.' },
     { name: 'Roles and Permissions', description: 'Live RBAC configuration.' },
     { name: 'Platform Geography', description: 'State, City, and Service Zone administration.' },
-    { name: 'Operational Network', description: 'Market, Dispatch Hub, Hook Partner, and Runner administration.' },
+    { name: 'Operational Network', description: 'Market, Dispatch Hub, Hook Partner, and Market Associate administration.' },
     { name: 'Platform Audit', description: 'Append-only sanitized operational audit events.' },
     { name: 'Platform Governance', description: 'Super-admin platform counter governance.' },
-    { name: 'Runner Foundation', description: 'Self-scoped Runner account foundation.' },
+    { name: 'Market Associate Foundation', description: 'Self-scoped Market Associate account foundation.' },
     { name: 'Partner Foundation', description: 'Self-scoped Hook Partner account foundation.' },
-    { name: 'Runner Catalog Capture', description: 'Self-scoped Runner Market catalog capture and submission workflow.' },
+    { name: 'Market Associate Catalog Capture', description: 'Self-scoped Market Associate Market catalog capture and submission workflow.' },
+    { name: 'Market Supplier Operations', description: 'Market-scoped supplier invitations, sourcing collections, and masked operational records.' },
+    { name: 'Market Supplier Finance', description: 'Finance-restricted supplier payment reconciliation and audited bank-detail access.' },
+    { name: 'Catalog Availability', description: 'Universal Product availability checks, Market Associate confirmation, and overdue escalation.' },
     { name: 'Catalog Media', description: 'Signed private catalog media upload and verification.' },
     { name: 'Catalog Review', description: 'Scoped submission review and approval workflow.' },
     { name: 'Commercial Catalog', description: 'Commercial content, pricing, negotiation rules, and publication lifecycle.' },
@@ -932,6 +1060,13 @@ const spec = {
     { name: 'Payments', description: 'Provider-neutral payment lifecycle with active Paystack Hosted Checkout.' },
     { name: 'Partner Commerce', description: 'Self-scoped prepaid assisted ordering through Hook Partners.' },
     { name: 'Commerce Operations', description: 'State-scoped POD, payment evidence, settings, and outbox operations.' },
+    { name: 'Market Associate Fulfilment', description: 'Self-scoped Market Associate sourcing, packing, and issue workflows.' },
+    { name: 'Fulfilment Operations', description: 'State/Hub-scoped fulfilment control and reassignment.' },
+    { name: 'Hub Operations', description: 'Market Associate package receipt, visible QC, consolidation, and sealing.' },
+    { name: 'Fulfilment Logistics', description: 'Shipment booking, explicit transitions, and provider webhooks.' },
+    { name: 'Partner Custody', description: 'Initiating Partner package custody and customer collection.' },
+    { name: 'Customer Fulfilment', description: 'Customer-safe post-order fulfilment progress.' },
+    { name: 'Returns and Refunds', description: 'Return review and provider-backed refund operations.' },
   ]),
   paths,
   components: {

@@ -4,14 +4,29 @@ import { DEFAULT_OPERATIONAL_STATE_CODE, NIGERIAN_STATES } from '@lib/nigeria-st
 import { OperationalState } from '@models/operations/operational-state.model';
 import { ensureOperationalStatesCatalog, normalizeStateCode } from '@services/operational-state.service';
 import { HttpError, sendSuccess } from '@utils/http';
+import { adminOperationsCache } from '@lib/ttl-cache';
 
 export class AdminOperationsController {
   listStates = async (req: Request, res: Response) => {
-    await ensureOperationalStatesCatalog();
     const activeOnly = req.query.active === 'true';
-    const rows = await OperationalState.find(activeOnly ? { isEnabled: true } : {})
+    const cacheKey = activeOnly ? 'active' : 'all';
+    const cached = adminOperationsCache.get(cacheKey);
+    if (cached) {
+      sendSuccess(res, cached);
+      return;
+    }
+    let rows = await OperationalState.find(activeOnly ? { isEnabled: true } : {})
+      .select('publicId code name countryCode countryName isEnabled enabledAt sortOrder')
       .sort({ sortOrder: 1, name: 1 })
       .lean({ virtuals: true });
+    if (!rows.length) {
+      await ensureOperationalStatesCatalog();
+      rows = await OperationalState.find(activeOnly ? { isEnabled: true } : {})
+        .select('publicId code name countryCode countryName isEnabled enabledAt sortOrder')
+        .sort({ sortOrder: 1, name: 1 })
+        .lean({ virtuals: true });
+    }
+    adminOperationsCache.set(cacheKey, rows);
     sendSuccess(res, rows);
   };
 
@@ -37,6 +52,7 @@ export class AdminOperationsController {
       isEnabled,
     });
 
+    adminOperationsCache.clear();
     sendSuccess(res, state.toJSON());
   };
 
@@ -50,6 +66,7 @@ export class AdminOperationsController {
       enabledAt: state.code === DEFAULT_OPERATIONAL_STATE_CODE ? new Date() : undefined,
     })));
     const rows = await OperationalState.find({}).sort({ sortOrder: 1 }).lean({ virtuals: true });
+    adminOperationsCache.clear();
     sendSuccess(res, rows);
   };
 }

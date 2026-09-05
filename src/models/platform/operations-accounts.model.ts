@@ -10,7 +10,7 @@ export interface StaffProfile extends BaseEntity {
   status: 'invited' | 'active' | 'suspended' | 'disabled';
 }
 
-export interface RunnerProfile extends BaseEntity {
+export interface MarketAssociateProfile extends BaseEntity {
   publicId: string;
   accountId: string;
   stateIds: string[];
@@ -36,9 +36,9 @@ export interface HookPartner extends BaseEntity {
   legacy?: Record<string, unknown>;
 }
 
-export interface RunnerMarketAssignment extends BaseEntity {
+export interface MarketAssociateMarketAssignment extends BaseEntity {
   publicId?: string;
-  runnerId: string;
+  marketAssociateId: string;
   marketId: string;
   stateId: string;
   preferredHubId?: string;
@@ -63,7 +63,7 @@ const staffSchema = createSchema<StaffProfile>({
   status: { type: String, enum: ['invited', 'active', 'suspended', 'disabled'], default: 'invited', index: true },
 });
 
-const runnerSchema = createSchema<RunnerProfile>({
+const marketAssociateSchema = createSchema<MarketAssociateProfile>({
   publicId: { type: String, required: true, unique: true, index: true },
   accountId: { type: String, required: true, unique: true, index: true },
   stateIds: { type: [String], default: [], index: true },
@@ -89,9 +89,9 @@ const partnerSchema = createSchema<HookPartner>({
   legacy: { type: Object },
 });
 
-const assignmentSchema = createSchema<RunnerMarketAssignment>({
+const assignmentSchema = createSchema<MarketAssociateMarketAssignment>({
   publicId: { type: String, unique: true, sparse: true, index: true },
-  runnerId: { type: String, required: true, index: true },
+  marketAssociateId: { type: String, required: true, index: true },
   marketId: { type: String, required: true, index: true },
   stateId: { type: String, required: true, index: true },
   preferredHubId: { type: String, index: true },
@@ -106,12 +106,12 @@ const assignmentSchema = createSchema<RunnerMarketAssignment>({
   history: { type: [Object], default: [] },
 });
 assignmentSchema.index(
-  { runnerId: 1, stateId: 1, isPrimary: 1 },
+  { marketAssociateId: 1, stateId: 1, isPrimary: 1 },
   { unique: true, partialFilterExpression: { status: 'active', isPrimary: true } },
 );
-assignmentSchema.index({ runnerId: 1, marketId: 1, status: 1 });
+assignmentSchema.index({ marketAssociateId: 1, marketId: 1, status: 1 });
 
 export const StaffProfile = createModel<StaffProfile>('StaffProfile', staffSchema);
-export const RunnerProfile = createModel<RunnerProfile>('RunnerProfile', runnerSchema);
+export const MarketAssociateProfile = createModel<MarketAssociateProfile>('MarketAssociateProfile', marketAssociateSchema, 'marketassociateprofiles');
 export const HookPartner = createModel<HookPartner>('HookPartner', partnerSchema);
-export const RunnerMarketAssignment = createModel<RunnerMarketAssignment>('RunnerMarketAssignment', assignmentSchema);
+export const MarketAssociateMarketAssignment = createModel<MarketAssociateMarketAssignment>('MarketAssociateMarketAssignment', assignmentSchema, 'marketassociatemarketassignments');

@@ -10,10 +10,17 @@ export interface CustomerAddress extends BaseEntity {
   line2?: string;
   landmark?: string;
   stateId: string;
-  cityId: string;
-  zoneId: string;
+  cityId?: string;
+  localGovernmentAreaId?: string;
   postalCode?: string;
   coordinates?: { latitude: number; longitude: number };
+  formattedAddress?: string;
+  stateCode: string;
+  stateName: string;
+  cityName: string;
+  localGovernmentArea?: string;
+  deliveryDistanceKm?: number;
+  deliveryPricingSnapshot?: Record<string, unknown>;
   isDefault: boolean;
   status: "active" | "archived";
 }
@@ -26,6 +33,8 @@ export interface CheckoutPreview extends BaseEntity {
   customerId: string;
   partnerId?: string;
   stateId: string;
+  sourceStateIds?: string[];
+  fulfilmentGroups?: Array<Record<string, unknown>>;
   cartId: string;
   cartVersion: number;
   channel: "SHOPPER_APP" | "PARTNER_ASSISTED";
@@ -36,7 +45,11 @@ export interface CheckoutPreview extends BaseEntity {
   pickupPartnerSnapshot?: Record<string, unknown>;
   lines: Array<Record<string, unknown>>;
   subtotalMinor: number;
+  vatRate: number;
+  vatMinor: number;
+  taxSnapshot?: Record<string, unknown>;
   deliveryFeeMinor: number;
+  deliveryPricing?: Record<string, unknown>;
   totalMinor: number;
   currency: string;
   policyVersions: Record<string, string>;
@@ -53,6 +66,20 @@ export interface CommerceSettings extends BaseEntity {
   podEnabled: boolean;
   defaultPodLimitMinor: number;
   previewTtlMinutes: number;
+  catalogAvailabilityCheckDays: number;
+  negotiationEnabled: boolean;
+  negotiationSessionMode: "fixed" | "unlimited";
+  negotiationSessionMinutes: number;
+  negotiationMaximumOffers: number;
+  negotiationQuoteMinutes: number;
+  negotiationAzureWordingEnabled: boolean;
+  paymentProviders: Array<{
+    provider: "paystack" | "opay";
+    enabled: boolean;
+    displayOrder: number;
+    isDefault: boolean;
+  }>;
+  lowStockThreshold: number;
   activePolicyVersions: Record<string, string>;
   updatedBy?: string;
 }
@@ -67,7 +94,7 @@ export interface CommercePolicyVersion extends BaseEntity {
 }
 
 export interface PaymentWebhookEvent extends BaseEntity {
-  provider: "paystack";
+  provider: "paystack" | "opay";
   providerEventId: string;
   payloadHash: string;
   eventType: string;
@@ -90,10 +117,12 @@ export interface CommerceOutboxEvent extends BaseEntity {
   availableAt: Date;
   processedAt?: Date;
   lastError?: string;
+  lockedUntil?: Date;
+  lockToken?: string;
 }
 
 export interface IntegrationException extends BaseEntity {
-  provider: "paystack";
+  provider: "paystack" | "opay";
   type:
     | "signature"
     | "reference"
@@ -138,10 +167,17 @@ const addressSchema = createSchema<CustomerAddress>({
   line2: { type: String, maxlength: 240 },
   landmark: { type: String, maxlength: 240 },
   stateId: { type: String, required: true, index: true },
-  cityId: { type: String, required: true, index: true },
-  zoneId: { type: String, required: true, index: true },
+  cityId: { type: String, index: true, sparse: true },
+  localGovernmentAreaId: { type: String, index: true, sparse: true },
   postalCode: { type: String, maxlength: 20 },
   coordinates: { type: Object },
+  formattedAddress: { type: String, maxlength: 500 },
+  stateCode: { type: String, required: true, uppercase: true, index: true },
+  stateName: { type: String, required: true },
+  cityName: { type: String, required: true },
+  localGovernmentArea: { type: String },
+  deliveryDistanceKm: { type: Number, min: 0 },
+  deliveryPricingSnapshot: { type: Object },
   isDefault: { type: Boolean, default: false, index: true },
   status: {
     type: String,
@@ -161,6 +197,8 @@ const previewSchema = createSchema<CheckoutPreview>({
   customerId: { type: String, required: true, index: true },
   partnerId: { type: String, index: true },
   stateId: { type: String, required: true, index: true },
+  sourceStateIds: { type: [String], default: [] },
+  fulfilmentGroups: { type: [Object], default: [] },
   cartId: { type: String, required: true, index: true },
   cartVersion: { type: Number, required: true },
   channel: {
@@ -183,7 +221,11 @@ const previewSchema = createSchema<CheckoutPreview>({
   pickupPartnerSnapshot: { type: Object },
   lines: { type: [Object], required: true },
   subtotalMinor: { type: Number, required: true, min: 0 },
+  vatRate: { type: Number, required: true, min: 0, default: 0.075 },
+  vatMinor: { type: Number, required: true, min: 0, default: 0 },
+  taxSnapshot: { type: Object },
   deliveryFeeMinor: { type: Number, required: true, min: 0 },
+  deliveryPricing: { type: Object },
   totalMinor: { type: Number, required: true, min: 0 },
   currency: { type: String, default: "NGN" },
   policyVersions: { type: Object, required: true },
@@ -202,6 +244,21 @@ const settingsSchema = createSchema<CommerceSettings>({
   podEnabled: { type: Boolean, default: false },
   defaultPodLimitMinor: { type: Number, default: 10000000, min: 0 },
   previewTtlMinutes: { type: Number, default: 10, min: 2, max: 30 },
+  catalogAvailabilityCheckDays: { type: Number, default: 4, min: 1, max: 30 },
+  negotiationEnabled: { type: Boolean, default: true },
+  negotiationSessionMode: { type: String, enum: ["fixed", "unlimited"], default: "fixed" },
+  negotiationSessionMinutes: { type: Number, default: 10, min: 1, max: 1440 },
+  negotiationMaximumOffers: { type: Number, default: 3, min: 1, max: 10 },
+  negotiationQuoteMinutes: { type: Number, default: 30, min: 1, max: 1440 },
+  negotiationAzureWordingEnabled: { type: Boolean, default: true },
+  paymentProviders: {
+    type: [Object],
+    default: [
+      { provider: "paystack", enabled: true, displayOrder: 1, isDefault: true },
+      { provider: "opay", enabled: false, displayOrder: 2, isDefault: false },
+    ],
+  },
+  lowStockThreshold: { type: Number, default: 5, min: 0, max: 100 },
   activePolicyVersions: { type: Object, default: {} },
   updatedBy: { type: String },
   deletedAt: { type: Date },
@@ -227,7 +284,7 @@ const policySchema = createSchema<CommercePolicyVersion>({
 });
 policySchema.index({ type: 1, version: 1 }, { unique: true });
 const webhookSchema = createSchema<PaymentWebhookEvent>({
-  provider: { type: String, enum: ["paystack"], required: true },
+  provider: { type: String, enum: ["paystack", "opay"], required: true },
   providerEventId: { type: String, required: true },
   payloadHash: { type: String, required: true },
   eventType: { type: String, required: true },
@@ -264,6 +321,8 @@ const outboxSchema = createSchema<CommerceOutboxEvent>({
   availableAt: { type: Date, default: Date.now, index: true },
   processedAt: { type: Date },
   lastError: { type: String, maxlength: 1000 },
+  lockedUntil: { type: Date, index: true },
+  lockToken: { type: String, index: true, sparse: true },
   deletedAt: { type: Date },
 });
 outboxSchema.index(
@@ -271,7 +330,7 @@ outboxSchema.index(
   { unique: true },
 );
 const exceptionSchema = createSchema<IntegrationException>({
-  provider: { type: String, enum: ["paystack"], default: "paystack" },
+  provider: { type: String, enum: ["paystack", "opay"], default: "paystack" },
   type: {
     type: String,
     enum: [

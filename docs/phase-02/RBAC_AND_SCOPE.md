@@ -11,6 +11,6 @@ Scopes:
 - Global: unrestricted records allowed by permission.
 - Multi-state / single-state: record and list filters constrained to assigned states.
 - Hub: state and Hub constraints are both applied.
-- Self: Runner and Partner APIs resolve records from the authenticated account, never a client ID.
+- Self: Market Associate and Partner APIs resolve records from the authenticated account, never a client ID.
 
 Changing a selected state removes the client Hub context. The backend independently rejects a state or Hub not assigned to the staff account. Suspension revokes all active sessions.

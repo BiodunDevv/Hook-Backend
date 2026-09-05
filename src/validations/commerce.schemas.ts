@@ -16,8 +16,13 @@ export const addressCreateSchema = z
     line2: z.string().trim().max(240).optional(),
     landmark: z.string().trim().max(240).optional(),
     stateId: publicId,
-    cityId: publicId,
-    zoneId: publicId,
+    cityId: publicId.optional(),
+    localGovernmentAreaId: publicId,
+    formattedAddress: z.string().trim().min(4).max(500).optional(),
+    stateCode: z.string().trim().regex(/^[A-Za-z]{2,3}$/),
+    stateName: z.string().trim().min(2).max(100),
+    cityName: z.string().trim().min(2).max(120),
+    localGovernmentArea: z.string().trim().max(120).optional(),
     postalCode: z.string().trim().max(20).optional(),
     coordinates: z
       .object({
@@ -51,6 +56,21 @@ export const commerceCartItemSchema = z
   })
   .strict();
 
+export const commerceImportSchema = z.object({
+  schemaVersion: z.literal(1),
+  cartItems: z.array(z.object({
+    clientLineId: z.string().trim().min(1).max(120),
+    productId: publicId,
+    variantId: publicId.optional(),
+    selectedVariants: z.object({
+      color: z.string().trim().max(80).optional(),
+      size: z.string().trim().max(80).optional(),
+    }).strict().optional(),
+    quantity: z.number().int().min(1).max(99),
+  }).strict()).max(100),
+  likedProductIds: z.array(publicId).max(500),
+}).strict();
+
 export const checkoutPreviewSchema = z
   .object({
     addressId: publicId.optional(),
@@ -70,8 +90,43 @@ export const checkoutConfirmSchema = z
   .object({ previewToken: z.string().min(40).max(300) })
   .strict();
 export const paymentInitializeV4Schema = z
-  .object({ orderId: publicId })
+  .object({ orderId: publicId, fulfilmentGroupId: publicId.optional() })
   .strict();
+
+export const paymentLinkCreateSchema = z.object({
+  orderId: publicId,
+  fulfilmentGroupId: publicId.optional(),
+}).strict();
+
+export const paymentLinkInitializeSchema = z.object({
+  provider: z.enum(["paystack", "opay"]),
+  appReturn: z.boolean().optional().default(false),
+}).strict();
+
+export const paymentProviderSettingsSchema = z.object({
+  providers: z.array(z.object({
+    provider: z.enum(["paystack", "opay"]),
+    enabled: z.boolean(),
+    displayOrder: z.number().int().min(1).max(10),
+    isDefault: z.boolean(),
+  }).strict()).length(2),
+  reason: z.string().trim().min(5).max(500),
+}).strict();
+
+export const emailSettingsSchema = z.object({
+  supportEmail: z.string().trim().email().optional(),
+  hookOpsEmail: z.string().trim().email().optional(),
+  brevoFromEmail: z.string().trim().email().optional(),
+  brevoFromName: z.string().trim().min(1).max(80).optional(),
+  appName: z.string().trim().min(1).max(80).optional(),
+  appUrl: z.string().trim().url().optional(),
+  reason: z.string().trim().min(5).max(500),
+}).strict();
+
+export const inventorySettingsSchema = z.object({
+  lowStockThreshold: z.coerce.number().int().min(0).max(100),
+  reason: z.string().trim().min(5).max(500),
+}).strict();
 
 export const podCallSchema = z
   .object({

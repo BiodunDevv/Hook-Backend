@@ -1,9 +1,19 @@
 import fs from 'fs';
 import path from 'path';
 import {
+  AccountActivatedEmailPayload,
   AccountInvitationEmailPayload,
+  AvailabilityDigestEmailPayload,
+  CustomerAccountSetupEmailPayload,
+  NegotiationAcceptedEmailPayload,
+  NegotiationOfferEmailPayload,
+  OrderCancelledEmailPayload,
+  OrderEmailLine,
   OrderEmailPayload,
   OtpEmailPayload,
+  PaymentConfirmedEmailPayload,
+  RefundEmailPayload,
+  SubmissionDecisionEmailPayload,
   VendorDecisionEmailPayload,
   WelcomeEmailPayload,
 } from './email.types';
@@ -22,6 +32,19 @@ function readTemplateFile(fileName: string) {
 }
 
 const emailStyles = readTemplateFile('base.css');
+
+/**
+ * Set once per send by EmailService before any render*Template() call, from
+ * the DB-backed admin Email Configuration settings. Kept as a plain module
+ * variable (not threaded through all 19 render functions' signatures) so
+ * baseValues() stays synchronous — EmailService is the only place that needs
+ * to know settings are DB-backed at all.
+ */
+let resolvedEmailSettings: { appName?: string; appUrl?: string; supportEmail?: string } = {};
+
+export function setResolvedEmailSettings(values: { appName?: string; appUrl?: string; supportEmail?: string }) {
+  resolvedEmailSettings = values;
+}
 
 function escapeHtml(value: unknown) {
   return String(value ?? '')
@@ -42,17 +65,56 @@ function money(value = 0) {
 
 function renderTemplate(fileName: string, values: Record<string, unknown>) {
   const html = readTemplateFile(fileName);
-  return html.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_match, key) => {
-    if (key === 'emailStyles') return emailStyles;
-    return escapeHtml(values[key]);
-  });
+  return html
+    // Triple braces inject trusted, internally-generated markup (e.g. the
+    // order line-item rows built by orderLinesHtml below). Never use this
+    // for values that originate from user input.
+    .replace(/\{\{\{\s*([a-zA-Z0-9_]+)\s*\}\}\}/g, (_match, key) => String(values[key] ?? ''))
+    .replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_match, key) => {
+      if (key === 'emailStyles') return emailStyles;
+      return escapeHtml(values[key]);
+    });
+}
+
+/**
+ * Builds the itemised recap rows. Every value is escaped here because the
+ * result is injected raw via the triple-brace token.
+ */
+function orderLinesHtml(lines?: OrderEmailLine[]) {
+  if (!lines?.length) return '';
+  return lines
+    .map((line) => `<div class="line-item"><span class="line-title">${escapeHtml(line.title)}</span><span class="line-qty">Quantity ${escapeHtml(line.quantity)}</span><span class="line-price">${escapeHtml(money(line.amount))}</span></div>`)
+    .join('');
+}
+
+/** Optional summary rows, omitted entirely when the caller has no value. */
+function optionalRowHtml(label: string, value?: number) {
+  if (value === undefined || value === null) return '';
+  return `<div class="row"><span class="label">${escapeHtml(label)}</span><span class="value">${escapeHtml(money(value))}</span></div>`;
+}
+
+/**
+ * The dark delivery block. Rendered whole (or not at all) because the template
+ * engine only substitutes values — it has no conditionals.
+ */
+function deliveryBlockHtml(payload: { deliveryAddress?: string; expectedDeliveryDate?: string; appUrl: string }) {
+  if (!payload.deliveryAddress && !payload.expectedDeliveryDate) return '';
+  const columns = [
+    payload.deliveryAddress
+      ? `<div class="dark-col"><div class="dark-heading">Shipping to</div><div class="dark-value">${escapeHtml(payload.deliveryAddress)}</div></div>`
+      : '',
+    payload.expectedDeliveryDate
+      ? `<div class="dark-col"><div class="dark-heading">Expected delivery</div><div class="dark-value">${escapeHtml(payload.expectedDeliveryDate)}</div></div>`
+      : '',
+  ].join('');
+  return `<div class="dark-block"><div class="dark-cols">${columns}</div><p style="text-align:center"><a class="button button-light" href="${escapeHtml(payload.appUrl)}">Track your order</a></p></div>`;
 }
 
 function baseValues(values: Record<string, unknown> = {}) {
   return {
-    appName: process.env.APP_NAME || 'Hook',
-    appUrl: process.env.APP_URL || 'http://localhost:3000',
-    supportEmail: process.env.SUPPORT_EMAIL || process.env.BREVO_FROM_EMAIL || 'support@hook.africa',
+    appName: resolvedEmailSettings.appName || process.env.APP_NAME || 'Hook',
+    appUrl: resolvedEmailSettings.appUrl || process.env.APP_URL || 'http://localhost:3000',
+    supportEmail: resolvedEmailSettings.supportEmail || process.env.SUPPORT_EMAIL || process.env.BREVO_FROM_EMAIL || 'support@hook.africa',
     year: new Date().getFullYear(),
     ...values,
   };
@@ -107,6 +169,20 @@ export function accountInvitationEmailTemplate(payload: AccountInvitationEmailPa
   };
 }
 
+export function customerAccountSetupEmailTemplate(payload: CustomerAccountSetupEmailPayload) {
+  return {
+    subject: 'Set your Hook password',
+    html: renderTemplate('customer-account-setup.html', baseValues({
+      name: payload.name || 'there',
+      email: payload.email,
+      partnerName: payload.partnerName,
+      activationUrl: payload.activationUrl,
+      expiresIn: `${payload.expiresInHours} hours`,
+    })),
+    text: `${payload.partnerName} started an order for you on Hook. Set your password: ${payload.activationUrl}. This link expires in ${payload.expiresInHours} hours.`,
+  };
+}
+
 export function orderConfirmationEmailTemplate(payload: OrderEmailPayload) {
   return {
     subject: `Hook order received: ${payload.orderCode}`,
@@ -115,6 +191,15 @@ export function orderConfirmationEmailTemplate(payload: OrderEmailPayload) {
       orderCode: payload.orderCode,
       amount: money(payload.amount),
       itemCount: payload.itemCount || 0,
+      lines: orderLinesHtml(payload.lines),
+      subtotalRow: optionalRowHtml('Subtotal', payload.subtotal),
+      discountRow: optionalRowHtml('Discount', payload.discount),
+      deliveryRow: optionalRowHtml('Delivery', payload.deliveryFee),
+      deliveryBlock: deliveryBlockHtml({
+        deliveryAddress: payload.deliveryAddress,
+        expectedDeliveryDate: payload.expectedDeliveryDate,
+        appUrl: resolvedEmailSettings.appUrl || process.env.APP_URL || 'http://localhost:3000',
+      }),
     })),
     text: `Your Hook order ${payload.orderCode} has been received. Total: ${money(payload.amount)}.`,
   };
@@ -193,5 +278,122 @@ export function settlementUpdateEmailTemplate(payload: OrderEmailPayload) {
       status: payload.status || 'pending',
     })),
     text: `Settlement for ${payload.orderCode}: ${money(payload.amount)} is ${payload.status || 'pending'}.`,
+  };
+}
+
+export function orderCancelledEmailTemplate(payload: OrderCancelledEmailPayload) {
+  return {
+    subject: `Hook order cancelled: ${payload.orderCode}`,
+    html: renderTemplate('order-cancelled.html', baseValues({
+      name: payload.name || 'there',
+      orderCode: payload.orderCode,
+      amount: money(payload.amount),
+      reasonSuffix: payload.reason ? ` (${payload.reason})` : '',
+    })),
+    text: `Your Hook order ${payload.orderCode} was cancelled${payload.reason ? ` (${payload.reason})` : ''}.`,
+  };
+}
+
+export function paymentConfirmedEmailTemplate(payload: PaymentConfirmedEmailPayload) {
+  return {
+    subject: `Hook payment confirmed: ${payload.orderCode}`,
+    html: renderTemplate('payment-confirmed.html', baseValues({
+      name: payload.name || 'there',
+      orderCode: payload.orderCode,
+      amount: money(payload.amount),
+    })),
+    text: `Payment confirmed for Hook order ${payload.orderCode}: ${money(payload.amount)}.`,
+  };
+}
+
+export function refundIssuedEmailTemplate(payload: RefundEmailPayload) {
+  return {
+    subject: `Hook refund issued: ${payload.orderCode}`,
+    html: renderTemplate('refund-issued.html', baseValues({
+      name: payload.name || 'there',
+      orderCode: payload.orderCode,
+      amount: money(payload.amountMinor / 100),
+      refundTitle: payload.fullyRefunded ? 'Your refund is on the way' : 'A partial refund is on the way',
+    })),
+    text: `A refund for Hook order ${payload.orderCode} has been issued: ${money(payload.amountMinor / 100)}.`,
+  };
+}
+
+export function negotiationOfferEmailTemplate(payload: NegotiationOfferEmailPayload) {
+  return {
+    subject: `New counter-offer for ${payload.productTitle}`,
+    html: renderTemplate('negotiation-offer.html', baseValues({
+      name: payload.name || 'there',
+      productTitle: payload.productTitle,
+      counterPrice: money(payload.counterPriceMinor / 100),
+      expiresAt: new Date(payload.expiresAt).toLocaleString('en-NG'),
+    })),
+    text: `Hook sent a counter-offer of ${money(payload.counterPriceMinor / 100)} for ${payload.productTitle}.`,
+  };
+}
+
+export function negotiationAcceptedEmailTemplate(payload: NegotiationAcceptedEmailPayload) {
+  return {
+    subject: `Price locked for ${payload.productTitle}`,
+    html: renderTemplate('negotiation-accepted.html', baseValues({
+      name: payload.name || 'there',
+      productTitle: payload.productTitle,
+      agreedPrice: money(payload.agreedPriceMinor / 100),
+      quoteExpiresAt: new Date(payload.quoteExpiresAt).toLocaleString('en-NG'),
+    })),
+    text: `Your negotiated price of ${money(payload.agreedPriceMinor / 100)} for ${payload.productTitle} is locked in.`,
+  };
+}
+
+const submissionDecisionCopy: Record<SubmissionDecisionEmailPayload['decision'], { title: string; lead: string; label: string; icon: string }> = {
+  approved: { title: 'Your submission was approved', lead: 'was approved and is now live on Hook.', label: 'Approved', icon: '✓' },
+  rejected: { title: 'Your submission was not approved', lead: 'was not approved.', label: 'Rejected', icon: '✕' },
+  changes_requested: { title: 'Changes requested on your submission', lead: 'needs a few changes before it can go live.', label: 'Changes requested', icon: '!' },
+};
+
+export function submissionDecisionEmailTemplate(payload: SubmissionDecisionEmailPayload) {
+  const copy = submissionDecisionCopy[payload.decision];
+  return {
+    subject: `Hook submission update: ${payload.productTitle}`,
+    html: renderTemplate('submission-decision.html', baseValues({
+      name: payload.name || 'there',
+      productTitle: payload.productTitle,
+      decisionTitle: copy.title,
+      decisionLead: copy.lead,
+      decisionLabel: copy.label,
+      decisionIcon: copy.icon,
+      reason: payload.reason || 'No additional notes were provided.',
+    })),
+    text: `Your Hook submission for ${payload.productTitle} ${copy.lead}${payload.reason ? ` ${payload.reason}` : ''}`,
+  };
+}
+
+export function accountActivatedEmailTemplate(payload: AccountActivatedEmailPayload) {
+  return {
+    subject: "You're all set on Hook",
+    html: renderTemplate('account-activated.html', baseValues({
+      name: payload.name || 'there',
+      accountType: payload.accountType,
+    })),
+    text: `Your Hook ${payload.accountType} account is now active.`,
+  };
+}
+
+/** Every value is escaped here because the result is injected raw via the triple-brace token. */
+function availabilityProductRowsHtml(products: AvailabilityDigestEmailPayload['products']) {
+  return products
+    .map((product) => `<div class="line-item"><span class="label">${escapeHtml(product.title)}</span><span class="value">${escapeHtml(product.marketName)}</span></div>`)
+    .join('');
+}
+
+export function availabilityDigestEmailTemplate(payload: AvailabilityDigestEmailPayload) {
+  return {
+    subject: `${payload.products.length} product${payload.products.length === 1 ? '' : 's'} need an availability check`,
+    html: renderTemplate('availability-digest.html', baseValues({
+      name: payload.name || 'there',
+      productCount: payload.products.length,
+      productRows: availabilityProductRowsHtml(payload.products),
+    })),
+    text: `${payload.products.length} product(s) need an availability check: ${payload.products.map((product) => `${product.title} (${product.marketName})`).join(', ')}`,
   };
 }

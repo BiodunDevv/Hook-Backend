@@ -16,8 +16,8 @@
 - `/dashboard/products/new`
 - `/dashboard/products/[id]`
 - `/dashboard/categories`
-- `/dashboard/runners`
-- `/dashboard/runners/[id]`
+- `/dashboard/market-associates`
+- `/dashboard/market-associates/[id]`
 - `/dashboard/customers`
 - `/dashboard/customers/[id]`
 - `/dashboard/staff`

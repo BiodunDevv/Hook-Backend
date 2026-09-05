@@ -30,7 +30,12 @@ export interface Negotiation extends BaseEntity {
     minimumNegotiablePriceMinor: number;
     maximumDiscountMinor: number;
     maximumOffers: number;
+    sessionMode?: 'fixed' | 'unlimited';
+    sessionMinutes?: number;
+    quoteMinutes?: number;
+    azureWordingEnabled?: boolean;
   };
+  language?: 'english' | 'pidgin';
   lastDecision?: 'ACCEPT' | 'COUNTER' | 'DECLINE';
   lastCounterPriceMinor?: number;
   agreedPriceMinor?: number;
@@ -87,9 +92,10 @@ const schema = createSchema<Negotiation>({
   currency: { type: String, uppercase: true, default: 'NGN' },
   status: { type: String, enum: Object.values(NegotiationStatus), default: NegotiationStatus.ACTIVE, index: true },
   offerCount: { type: Number, default: 0, min: 0 },
-  maximumOffers: { type: Number, default: 3, min: 1, max: 3 },
+  maximumOffers: { type: Number, default: 3, min: 1, max: 10 },
   transcript: { type: [Object], default: [] },
   rulesSnapshot: { type: Object },
+  language: { type: String, enum: ['english', 'pidgin'], default: 'english' },
   lastDecision: { type: String, enum: ['ACCEPT', 'COUNTER', 'DECLINE'] },
   lastCounterPriceMinor: { type: Number },
   agreedPriceMinor: { type: Number },
@@ -115,7 +121,7 @@ const schema = createSchema<Negotiation>({
   declineReason: { type: String },
   deletedAt: { type: Date },
 });
-schema.index({ customerId: 1, productId: 1, status: 1 });
+schema.index({ customerId: 1, productId: 1, variantId: 1, quantity: 1, status: 1 });
 schema.index({ guestSessionId: 1, productId: 1, status: 1 });
 schema.index({ sourceStateId: 1, status: 1, createdAt: -1 });
 

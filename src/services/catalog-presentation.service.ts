@@ -1,13 +1,14 @@
 import { Category } from '@models/categories/category.model';
 import { Market } from '@models/platform/network.model';
 import { OperationState } from '@models/platform/geography.model';
-import { RunnerProfile } from '@models/platform/operations-accounts.model';
+import { MarketAssociateProfile } from '@models/platform/operations-accounts.model';
 import { CatalogMediaAsset } from '@models/catalog/catalog.model';
+import { MarketVendor } from '@models/catalog/market-vendor.model';
 import { Product } from '@models/products/product.model';
 import { CatalogMediaService } from './catalog-media.service';
 
 export async function presentSubmission(record: any) {
-  const [market, category, state, runner, rawMedia, product] = await Promise.all([
+  const [market, category, state, marketAssociate, rawMedia, product, marketVendor] = await Promise.all([
     record.market?.publicId
       ? record.market
       : Market.findById(record.marketId).select('publicId name').lean({ virtuals: true }),
@@ -15,9 +16,9 @@ export async function presentSubmission(record: any) {
       ? record.category
       : Category.findById(record.categorySuggestionId).select('publicId name slug').lean({ virtuals: true }),
     OperationState.findById(record.sourceStateId).select('publicId name code').lean({ virtuals: true }),
-    record.runner?.publicId
-      ? record.runner
-      : RunnerProfile.findById(record.runnerId).select('publicId').lean({ virtuals: true }),
+    record.marketAssociate?.publicId
+      ? record.marketAssociate
+      : MarketAssociateProfile.findById(record.marketAssociateId).select('publicId').lean({ virtuals: true }),
     record.media
       ? record.media
       : CatalogMediaAsset.find({
@@ -28,7 +29,10 @@ export async function presentSubmission(record: any) {
           status: 'ready',
         }).sort({ order: 1 }).lean({ virtuals: true }),
     record.productId
-      ? Product.findById(record.productId).select('publicId').lean({ virtuals: true })
+      ? Product.findById(record.productId).select('publicId sellingPriceMinor minAcceptablePrice sellingPrice costPrice currency status publishedAt').lean({ virtuals: true })
+      : null,
+    record.marketVendorId
+      ? MarketVendor.findOne({ $or: [{ publicId: record.marketVendorId }, { _id: record.marketVendorId }] }).select('publicId businessName contactName').lean({ virtuals: true })
       : null,
   ]);
   const mediaService = new CatalogMediaService();
@@ -40,13 +44,16 @@ export async function presentSubmission(record: any) {
   return {
     id: record.publicId,
     publicId: record.publicId,
-    runner: runner ? { publicId: runner.publicId } : null,
+    marketAssociate: marketAssociate ? { publicId: marketAssociate.publicId } : null,
     marketId: market?.publicId,
     market: market ? { publicId: market.publicId, name: market.name } : null,
     sourceStateId: state?.publicId,
     sourceState: state ? { publicId: state.publicId, name: state.name, code: state.code } : null,
     categorySuggestionId: category?.publicId,
     category: category ? { publicId: category.publicId, name: category.name, slug: category.slug } : null,
+    marketVendorId: marketVendor?.publicId || record.marketVendorId,
+    marketVendor: marketVendor ? { publicId: marketVendor.publicId, businessName: marketVendor.businessName, contactName: marketVendor.contactName } : null,
+    internalSellerReference: record.internalSellerReference,
     basicTitle: record.basicTitle,
     notes: record.notes,
     mediaIds: media.map((asset: any) => asset.publicId),
@@ -57,6 +64,7 @@ export async function presentSubmission(record: any) {
       height: asset.height,
       format: asset.format,
     })),
+    imageUrl: media[0]?.deliveryUrl,
     basePriceMinor: record.basePriceMinor,
     currency: record.currency,
     variants: record.variants || [],
@@ -68,6 +76,15 @@ export async function presentSubmission(record: any) {
     reviewStartedAt: record.reviewStartedAt,
     reviewedAt: record.reviewedAt,
     productId: product?.publicId,
+    approvedProduct: product ? {
+      publicId: product.publicId,
+      sellingPriceMinor: product.sellingPriceMinor ?? Number(product.sellingPrice || 0) * 100,
+      minimumPriceMinor: Number(product.minAcceptablePrice || 0) * 100,
+      observedCostMinor: Number(product.costPrice || 0) * 100,
+      currency: product.currency || record.currency,
+      status: product.status,
+      publishedAt: product.publishedAt,
+    } : null,
     version: record.version,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
@@ -111,6 +128,22 @@ export function presentCommercialSummary(record: any) {
       height: asset.height,
       format: asset.format,
     })),
+    publishedAt: record.publishedAt,
+    updatedAt: record.updatedAt,
+  };
+}
+
+export function presentCommercialList(record: any) {
+  return {
+    id: record.publicId,
+    publicId: record.publicId,
+    title: record.title,
+    slug: record.slug,
+    status: record.status,
+    catalogVersion: record.catalogVersion,
+    pricing: record.pricing,
+    negotiationRules: record.negotiationRules,
+    availabilityStatus: record.availabilityStatus,
     publishedAt: record.publishedAt,
     updatedAt: record.updatedAt,
   };

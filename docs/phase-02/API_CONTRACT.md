@@ -29,10 +29,10 @@ Pagination is returned in `meta.pagination`. Stable error families are validatio
 - `/api/v1/public/states|cities|zones|markets`
 - `/api/v1/admin/staff|roles|permissions`
 - `/api/v1/admin/states|cities|zones`
-- `/api/v1/admin/markets|hubs|partners|runners|runner-assignments`
+- `/api/v1/admin/markets|hubs|partners|market-associates|market-associate-assignments`
 - `/api/v1/admin/audit-logs|public-id-counters`
-- `/api/v1/runner/profile|markets`
+- `/api/v1/market-associate/profile|markets`
 - `/api/v1/partner/profile|location`
-- `/api/v1/runner/auth/login` and `/api/v1/partner/auth/login`
+- `/api/v1/auth/login` for customer, staff, Market Associate, and Partner identities
 
 The generated `swagger-spec.json` is the detailed catalogue.

@@ -12,14 +12,18 @@ const variant = z.object({
   message: 'A variant must include a size, colour, or configured attribute',
 });
 
-export const runnerSubmissionDraftSchema = z.object({
+export const marketAssociateSubmissionDraftSchema = z.object({
   marketId: publicOrInternalId,
+  marketVendorId: publicOrInternalId,
   categorySuggestionId: publicOrInternalId,
   basicTitle: z.string().trim().min(2).max(180),
   notes: z.string().trim().max(2000).optional(),
   mediaIds: z.array(publicOrInternalId).max(12).default([]),
   basePriceMinor: moneyMinor,
   currency: z.literal('NGN').default('NGN'),
+  // No minimum here — this schema also covers draft save/update, and a
+  // Market Associate must be able to save incremental progress before
+  // variants are added. The minimum is enforced at submit time instead.
   variants: z.array(variant).max(80).default([]),
   availabilityStatus: z.nativeEnum(ProductAvailabilityStatus),
   availabilityNote: z.string().trim().max(500).optional(),
@@ -96,8 +100,12 @@ export const negotiationCreateSchema = z.object({
   productId: publicOrInternalId,
   variantId: publicOrInternalId,
   quantity: z.coerce.number().int().min(1).max(20),
+  message: z.string().trim().max(500).optional(),
 }).strict();
 
 export const negotiationOfferSchema = z.object({
-  offeredPriceMinor: moneyMinor,
-}).strict();
+  offeredPriceMinor: moneyMinor.optional(),
+  message: z.string().trim().min(1).max(500),
+}).strict().refine((value) => Boolean(value.message || value.offeredPriceMinor), {
+  message: 'Enter a message or offer',
+});

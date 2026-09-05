@@ -10,7 +10,7 @@
 ## Domain
 
 - Market, Hook Partner, Hook Dispatch Hub, and external logistics provider models do not yet exist.
-- Runner remains backed by legacy FieldAgent persistence.
+- Market Associate remains backed by legacy FieldAgent persistence.
 - General product details, state-grouped basket, fulfillment tracking, and returns are incomplete in the shopper app.
 - Admin commercial catalog has legacy source fields in historical records but no explicit partner-supply contract.
 

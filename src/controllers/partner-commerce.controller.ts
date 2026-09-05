@@ -6,6 +6,7 @@ import {
   UserRole,
 } from "@lib/constants";
 import { CartService } from "@services/cart.service";
+import { publicCart } from "@lib/public-resource";
 import { CheckoutService } from "@services/checkout.service";
 import { PaymentService } from "@services/payment.service";
 import { nextPublicId } from "@services/public-id.service";
@@ -14,6 +15,7 @@ import { User } from "@models/users/user.model";
 import { Order } from "@models/orders/order.model";
 import { CommerceSettings } from "@models/commerce/commerce.model";
 import { recordAudit } from "@services/platform-audit.service";
+import { issueCustomerAccountSetup } from "@services/account-invitation.service";
 import { HttpError, sendCreated, sendSuccess } from "@utils/http";
 import { routeParam } from "@lib/api-utils";
 
@@ -117,6 +119,12 @@ export class PartnerCommerceController {
         consent: true,
       },
     });
+    await issueCustomerAccountSetup({
+      accountId: customer.id,
+      email: customer.email,
+      name: customer.firstName || "there",
+      partnerName: partner.name,
+    });
     sendCreated(res, {
       id: customer.publicId,
       firstName: customer.firstName,
@@ -135,10 +143,12 @@ export class PartnerCommerceController {
     );
     sendSuccess(
       res,
-      await this.cart.getCart({
-        partnerId: partner.id,
-        assistedCustomerId: customer.id,
-      }),
+      publicCart(
+        await this.cart.getCart({
+          partnerId: partner.id,
+          assistedCustomerId: customer.id,
+        }),
+      ),
     );
   };
   addCart = async (req: Request, res: Response) => {
@@ -148,14 +158,15 @@ export class PartnerCommerceController {
     );
     sendCreated(
       res,
-      await this.cart.addItem(
+      publicCart(await this.cart.addItem(
         { partnerId: partner.id, assistedCustomerId: customer.id },
         req.body.productId,
         req.body.quantity,
         req.body.selectedVariants,
         req.body.variantId,
         req.body.quoteId,
-      ),
+      )),
+      "Item added to cart successfully",
     );
   };
   updateCart = async (req: Request, res: Response) => {
@@ -165,11 +176,12 @@ export class PartnerCommerceController {
     );
     sendSuccess(
       res,
-      await this.cart.updateItem(
+      publicCart(await this.cart.updateItem(
         { partnerId: partner.id, assistedCustomerId: customer.id },
         routeParam(req.params.itemId),
         req.body.quantity,
-      ),
+      )),
+      "Cart updated successfully",
     );
   };
   removeCart = async (req: Request, res: Response) => {
@@ -179,10 +191,11 @@ export class PartnerCommerceController {
     );
     sendSuccess(
       res,
-      await this.cart.removeItem(
+      publicCart(await this.cart.removeItem(
         { partnerId: partner.id, assistedCustomerId: customer.id },
         routeParam(req.params.itemId),
-      ),
+      )),
+      "Item removed from cart successfully",
     );
   };
   preview = async (req: Request, res: Response) => {

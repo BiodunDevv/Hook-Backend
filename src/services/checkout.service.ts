@@ -13,6 +13,7 @@ import {
   OrderType,
   PaymentMode,
   PaymentStatus,
+  ProductAvailabilityStatus,
   ProductStatus,
 } from "@lib/constants";
 import { Cart } from "@models/cart/cart.model";
@@ -25,14 +26,20 @@ import {
 } from "@models/commerce/commerce.model";
 import { OrderItem } from "@models/orders/order-item.model";
 import { Order } from "@models/orders/order.model";
+import { OrderFulfilmentGroup } from "@models/orders/order-fulfilment-group.model";
 import { Payment } from "@models/payments/payment.model";
-import { OperationState, ServiceZone } from "@models/platform/geography.model";
+import { OperationState } from "@models/platform/geography.model";
 import { HookPartner } from "@models/platform/operations-accounts.model";
 import { Product } from "@models/products/product.model";
 import { User } from "@models/users/user.model";
 import { AddressService } from "@services/address.service";
+import {
+  calculateDeliveryPricing,
+  resolveDeliveryState,
+} from "@services/delivery-pricing.service";
 import { nextPublicId } from "@services/public-id.service";
 import { createCommerceNotification } from "@services/commerce-notification.service";
+import { EmailService } from "@emails/email.service";
 import { HttpError } from "@utils/http";
 
 type PreviewInput = {
@@ -62,14 +69,36 @@ function recordId(record: { _id?: unknown; id?: string }) {
   return String(record._id || record.id);
 }
 
+function storedStateIdentifiers(state: { _id?: unknown; publicId?: string }, fallback?: string) {
+  return [...new Set(
+    [state._id, state.publicId, fallback]
+      .filter((value) => value != null && String(value).length > 0)
+      .map(String),
+  )];
+}
+
 export class CheckoutService {
   private addresses = new AddressService();
+  private email = new EmailService();
 
   async preview(
     actor: CheckoutActor,
     stateIdentifier: string,
     input: PreviewInput,
   ) {
+    const combined = actor.type === "customer" && stateIdentifier === "all";
+    const combinedCart = combined
+      ? await Cart.findOne({ customerId: actor.customerId, ownerType: "customer", status: "active", isCheckedOut: false }).lean({ virtuals: true })
+      : null;
+    const firstCombinedItem = combinedCart
+      ? await CartItem.findOne({ cartId: recordId(combinedCart) }).select("stateId").lean()
+      : null;
+    const resolvedStateIdentifier = combined
+      ? String(firstCombinedItem?.stateId || "")
+      : stateIdentifier;
+    if (combined && !resolvedStateIdentifier) {
+      throw new HttpError(409, "Cart is empty", undefined, "CART_EMPTY");
+    }
     const customer = await User.findById(actor.customerId).lean({
       virtuals: true,
     });
@@ -83,7 +112,7 @@ export class CheckoutService {
         "EMAIL_VERIFICATION_REQUIRED",
       );
     const state = await OperationState.findOne({
-      ...idFilter(stateIdentifier),
+      ...idFilter(resolvedStateIdentifier),
       status: "active",
     }).lean({ virtuals: true });
     if (!state)
@@ -94,6 +123,7 @@ export class CheckoutService {
         "CHECKOUT_STATE_UNAVAILABLE",
       );
     const stateId = recordId(state);
+    const stateIdentifiers = storedStateIdentifiers(state, resolvedStateIdentifier);
     const partner = actor.partnerId
       ? await HookPartner.findOne({
           _id: actor.partnerId,
@@ -134,7 +164,7 @@ export class CheckoutService {
     )
       throw new HttpError(409, "Pickup Partner is unavailable");
 
-    const cart = await Cart.findOne({
+    const cart = combinedCart || await Cart.findOne({
       ...(actor.type === "customer"
         ? { customerId: actor.customerId, ownerType: "customer" }
         : {
@@ -150,7 +180,7 @@ export class CheckoutService {
     const cartId = recordId(cart);
     const cartItems = await CartItem.find({
       cartId,
-      stateId,
+      ...(combined ? {} : { stateId: { $in: stateIdentifiers } }),
     }).lean({ virtuals: true });
     if (!cartItems.length)
       throw new HttpError(
@@ -160,9 +190,17 @@ export class CheckoutService {
         "CART_EMPTY",
       );
     const lines = await this.revalidateLines(actor.customerId, cartItems);
+    const groupedLines = [...lines.reduce((groups, line) => {
+      const key = String(line.stateId);
+      const group = groups.get(key) || { sourceStateId: key, lines: [], subtotalMinor: 0 };
+      group.lines.push(line);
+      group.subtotalMinor += Number(line.totalPriceMinor);
+      groups.set(key, group);
+      return groups;
+    }, new Map<string, { sourceStateId: string; lines: typeof lines; subtotalMinor: number }>()).values()];
 
     let addressSnapshot: Record<string, unknown> | undefined;
-    let zone: any;
+    let deliveryState = state;
     if (input.deliveryMethod === DeliveryMethod.HOME_DELIVERY) {
       if (!input.addressId)
         throw new HttpError(400, "Delivery address is required");
@@ -170,23 +208,20 @@ export class CheckoutService {
         actor.customerId,
         input.addressId,
       );
-      if (address.stateId !== stateId)
+      const resolvedDeliveryState = await resolveDeliveryState(
+        String(address.stateId),
+      );
+      if (
+        !resolvedDeliveryState ||
+        resolvedDeliveryState.deliveryEnabled === false
+      )
         throw new HttpError(
           409,
-          "Address must be in the basket State",
-          undefined,
-          "ADDRESS_STATE_MISMATCH",
-        );
-      zone = await ServiceZone.findById(address.zoneId).lean({
-        virtuals: true,
-      });
-      if (!zone?.deliveryEligible)
-        throw new HttpError(
-          409,
-          "Address is outside Hook delivery coverage",
+          "Delivery is not available in this State",
           undefined,
           "ADDRESS_OUTSIDE_COVERAGE",
         );
+      deliveryState = resolvedDeliveryState;
       addressSnapshot = {
         publicId: address.publicId,
         label: address.label,
@@ -195,11 +230,16 @@ export class CheckoutService {
         line1: address.line1,
         line2: address.line2,
         landmark: address.landmark,
-        stateId: state.publicId,
+        stateId: deliveryState.publicId,
         cityId: address.cityId,
-        zoneId: address.zoneId,
+        localGovernmentAreaId: address.localGovernmentAreaId,
         postalCode: address.postalCode,
         coordinates: address.coordinates,
+        formattedAddress: address.formattedAddress,
+        stateCode: address.stateCode,
+        stateName: address.stateName,
+        cityName: address.cityName,
+        localGovernmentArea: address.localGovernmentArea,
       };
     }
 
@@ -212,26 +252,32 @@ export class CheckoutService {
       (sum, line) => sum + Number(line.totalPriceMinor),
       0,
     );
-    const deliveryFeeMinor =
-      input.deliveryMethod === DeliveryMethod.PARTNER_PICKUP
-        ? 0
-        : Number(
-            zone?.deliveryFeeMinor ??
-              state.deliveryFeeMinor ??
-              settings.defaultDeliveryFeeMinor ??
-              DEFAULT_DELIVERY_FEE_MINOR,
-          );
-    const totalMinor = subtotalMinor + deliveryFeeMinor;
+    const deliveryPricing = input.deliveryMethod === DeliveryMethod.PARTNER_PICKUP
+      ? { scope: "partner" as const, mode: "flat" as const, feeMinor: 0, ruleVersion: "partner-pickup-v1" }
+      : await calculateDeliveryPricing({
+          state: deliveryState,
+          coordinates: addressSnapshot?.coordinates as { latitude: number; longitude: number } | undefined,
+          defaultFeeMinor: settings.defaultDeliveryFeeMinor ?? DEFAULT_DELIVERY_FEE_MINOR,
+        });
+    const vatRate = 0.075;
+    const vatMinor = Math.round(subtotalMinor * vatRate);
+    const taxSnapshot = {
+      jurisdiction: "NG",
+      name: "VAT",
+      rate: vatRate,
+      basis: "product_subtotal",
+      version: "ng-vat-7.5-v1",
+    };
+    const deliveryFeeMinor = deliveryPricing.feeMinor;
+    const totalMinor = subtotalMinor + vatMinor + deliveryFeeMinor;
     const podLimitMinor = Number(
-      zone?.podLimitMinor ??
-        state.podLimitMinor ??
+      deliveryState.podLimitMinor ??
         settings.defaultPodLimitMinor ??
         DEFAULT_POD_LIMIT_MINOR,
     );
     const podEnabled = Boolean(
       settings.podEnabled &&
-      state.podEnabled &&
-      (zone?.podEnabled ?? true) &&
+      deliveryState.podEnabled &&
       customer.podEligible !== false,
     );
     if (
@@ -260,6 +306,8 @@ export class CheckoutService {
       customerId: actor.customerId,
       partnerId: actor.partnerId,
       stateId,
+      sourceStateIds: groupedLines.map((group) => group.sourceStateId),
+      fulfilmentGroups: groupedLines.map((group) => ({ sourceStateId: group.sourceStateId, subtotalMinor: group.subtotalMinor })),
       cartId,
       cartVersion: cart.version || 1,
       channel:
@@ -282,7 +330,11 @@ export class CheckoutService {
           : undefined,
       lines,
       subtotalMinor,
+      vatRate,
+      vatMinor,
+      taxSnapshot,
       deliveryFeeMinor,
+      deliveryPricing,
       totalMinor,
       currency: "NGN",
       policyVersions: settings.activePolicyVersions,
@@ -304,8 +356,14 @@ export class CheckoutService {
       deliveryMethod: preview.deliveryMethod,
       paymentMethod: preview.paymentMethod,
       lines,
+      fulfilmentGroups: groupedLines,
+      sourceStateCount: groupedLines.length,
       subtotalMinor,
+      vatRate,
+      vatMinor,
+      taxSnapshot,
       deliveryFeeMinor,
+      deliveryPricing,
       totalMinor,
       currency: "NGN",
       podDecision: preview.podDecision,
@@ -387,9 +445,17 @@ export class CheckoutService {
         undefined,
         "CART_VERSION_CHANGED",
       );
+    const previewState = await OperationState.findOne({
+      ...idFilter(preview.stateId),
+      status: "active",
+    })
+      .select("_id publicId")
+      .lean();
+    const stateIdentifiers = storedStateIdentifiers(previewState || {}, preview.stateId);
+    const combined = Array.isArray(preview.sourceStateIds) && preview.sourceStateIds.length > 1;
     const cartItems = await CartItem.find({
       cartId: cart.id,
-      stateId: preview.stateId,
+      ...(combined ? {} : { stateId: { $in: stateIdentifiers } }),
     }).lean({ virtuals: true });
     const currentLines = await this.revalidateLines(
       actor.customerId,
@@ -403,9 +469,60 @@ export class CheckoutService {
         "CHECKOUT_REVALIDATION_REQUIRED",
       );
 
+    const currentSubtotalMinor = currentLines.reduce(
+      (sum, line) => sum + Number(line.totalPriceMinor),
+      0,
+    );
+    const currentVatMinor = Math.round(currentSubtotalMinor * Number(preview.vatRate ?? 0.075));
+    let currentDeliveryFeeMinor = Number(preview.deliveryFeeMinor);
+    if (preview.deliveryMethod === DeliveryMethod.HOME_DELIVERY) {
+      const address = await this.addresses.getOwned(actor.customerId, String(preview.addressId || ""));
+      const deliveryState = await resolveDeliveryState(String(address.stateId));
+      if (!deliveryState || deliveryState.deliveryEnabled === false)
+        throw new HttpError(409, "Delivery is no longer available in this State", undefined, "ADDRESS_OUTSIDE_COVERAGE");
+      const settings = await this.getSettings();
+      const pricing = await calculateDeliveryPricing({
+        state: deliveryState,
+        defaultFeeMinor: settings.defaultDeliveryFeeMinor ?? DEFAULT_DELIVERY_FEE_MINOR,
+      });
+      currentDeliveryFeeMinor = pricing.feeMinor;
+      if (
+        currentDeliveryFeeMinor !== Number(preview.deliveryFeeMinor) ||
+        pricing.ruleVersion !== (preview.deliveryPricing as any)?.ruleVersion
+      )
+        throw new HttpError(409, "Delivery pricing changed. Review checkout again.", undefined, "CHECKOUT_REVALIDATION_REQUIRED");
+    }
+    if (
+      currentSubtotalMinor !== Number(preview.subtotalMinor) ||
+      currentVatMinor !== Number(preview.vatMinor) ||
+      currentSubtotalMinor + currentVatMinor + currentDeliveryFeeMinor !== Number(preview.totalMinor)
+    )
+      throw new HttpError(409, "Order totals changed. Review checkout again.", undefined, "CHECKOUT_REVALIDATION_REQUIRED");
+
+    const groupSnapshots = (preview.fulfilmentGroups || []).map((group: any) => ({
+      sourceStateId: String(group.sourceStateId),
+      subtotalMinor: Number(group.subtotalMinor || 0),
+    }));
+    const effectiveGroups = groupSnapshots.length ? groupSnapshots : [{ sourceStateId: preview.stateId, subtotalMinor: Number(preview.subtotalMinor) }];
+    const groupIds = await Promise.all(effectiveGroups.map(() => nextPublicId("orderFulfilmentGroup")));
+    const pod = preview.paymentMethod === CommercePaymentMethod.PAY_AT_HANDOVER;
+    const paymentIds = await Promise.all((pod ? effectiveGroups : [null]).map(() => nextPublicId("payment")));
+    let allocatedFee = 0;
+    let allocatedVat = 0;
+    const groupPlans = effectiveGroups.map((group, index) => {
+      const feeShare = index === effectiveGroups.length - 1
+        ? Number(preview.deliveryFeeMinor) - allocatedFee
+        : Math.floor(Number(preview.deliveryFeeMinor) * group.subtotalMinor / Math.max(Number(preview.subtotalMinor), 1));
+      allocatedFee += feeShare;
+      const vatShare = index === effectiveGroups.length - 1
+        ? Number(preview.vatMinor || 0) - allocatedVat
+        : Math.floor(Number(preview.vatMinor || 0) * group.subtotalMinor / Math.max(Number(preview.subtotalMinor), 1));
+      allocatedVat += vatShare;
+      return { ...group, publicId: groupIds[index], vatShareMinor: vatShare, deliveryFeeShareMinor: feeShare, paymentPublicId: pod ? paymentIds[index] : undefined };
+    });
     const ids = {
       order: await nextPublicId("order"),
-      payment: await nextPublicId("payment"),
+      payment: paymentIds[0],
       items: await Promise.all(
         currentLines.map(() => nextPublicId("orderItem")),
       ),
@@ -414,8 +531,6 @@ export class CheckoutService {
     let orderId = "";
     try {
       await session.withTransaction(async () => {
-        const pod =
-          preview.paymentMethod === CommercePaymentMethod.PAY_AT_HANDOVER;
         const highValue = Boolean((preview.podDecision as any)?.highValue);
         const commerceStatus = pod
           ? highValue
@@ -428,6 +543,8 @@ export class CheckoutService {
           userId: actor.customerId,
           channel: preview.channel,
           sourceStateId: preview.stateId,
+          sourceStateIds: groupPlans.map((group) => group.sourceStateId),
+          fulfilmentGroupIds: groupPlans.map((group) => group.publicId),
           initiatingPartnerId: actor.partnerId,
           deliveryMethod: preview.deliveryMethod,
           commercePaymentMethod: preview.paymentMethod,
@@ -436,7 +553,11 @@ export class CheckoutService {
             ? CommercePaymentStatus.DUE_AT_HANDOVER
             : CommercePaymentStatus.PENDING,
           subtotalMinor: preview.subtotalMinor,
+          vatRate: preview.vatRate,
+          vatMinor: preview.vatMinor,
+          taxSnapshot: preview.taxSnapshot,
           deliveryFeeMinor: preview.deliveryFeeMinor,
+          deliveryPricing: preview.deliveryPricing,
           totalMinor: preview.totalMinor,
           currency: preview.currency,
           subtotal: preview.subtotalMinor / 100,
@@ -482,7 +603,7 @@ export class CheckoutService {
         });
         await order.save({ session });
         orderId = order.id;
-        await OrderItem.insertMany(
+        const createdItems = await OrderItem.insertMany(
           currentLines.map((line, index) => ({
             publicId: ids.items[index],
             orderId: order.id,
@@ -490,6 +611,7 @@ export class CheckoutService {
             variantId: line.variantId,
             marketId: line.marketId,
             stateId: line.stateId,
+            fulfilmentGroupId: groupPlans.find((group) => group.sourceStateId === String(line.stateId))?.publicId,
             quoteId: line.quoteId,
             productTitle: (line.productSnapshot as any).title,
             productImage: (line.productSnapshot as any).image,
@@ -507,17 +629,31 @@ export class CheckoutService {
           })),
           { session },
         );
+        await OrderFulfilmentGroup.insertMany(
+          groupPlans.map((group) => ({
+            publicId: group.publicId,
+            orderId: order.id,
+            sourceStateId: group.sourceStateId,
+            orderItemIds: createdItems.filter((item) => item.fulfilmentGroupId === group.publicId).map((item) => item.publicId || item.id),
+            subtotalMinor: group.subtotalMinor,
+            vatShareMinor: group.vatShareMinor,
+            deliveryFeeShareMinor: group.deliveryFeeShareMinor,
+            status: "PENDING",
+          })),
+          { session },
+        );
         await Payment.create(
-          [
-            {
-              publicId: ids.payment,
+          (pod ? groupPlans : [{ publicId: undefined, subtotalMinor: Number(preview.subtotalMinor), vatShareMinor: Number(preview.vatMinor || 0), deliveryFeeShareMinor: Number(preview.deliveryFeeMinor), paymentPublicId: ids.payment }]).map((group) =>
+            ({
+              publicId: group.paymentPublicId,
               orderId: order.id,
+              fulfilmentGroupId: group.publicId,
               resourceType: "order",
-              transactionRef: `PSK-${ids.payment}`,
+              transactionRef: `PSK-${group.paymentPublicId}`,
               gateway: "paystack",
               paymentMethod: pod ? "pos" : "card",
-              amount: preview.totalMinor / 100,
-              amountMinor: preview.totalMinor,
+              amount: (group.subtotalMinor + group.vatShareMinor + group.deliveryFeeShareMinor) / 100,
+              amountMinor: group.subtotalMinor + group.vatShareMinor + group.deliveryFeeShareMinor,
               currency: preview.currency,
               gatewayFee: 0,
               amountSettled: 0,
@@ -526,10 +662,20 @@ export class CheckoutService {
                 ? CommercePaymentStatus.DUE_AT_HANDOVER
                 : CommercePaymentStatus.PENDING,
               refundedAmount: 0,
-            },
-          ],
+            }),
+          ),
           { session },
         );
+        if (pod) {
+          const payments = await Payment.find({ orderId: order.id }).session(session).select("_id publicId fulfilmentGroupId").lean();
+          for (const payment of payments) {
+            await OrderFulfilmentGroup.updateOne(
+              { publicId: payment.fulfilmentGroupId },
+              { $set: { paymentId: payment.publicId || String(payment._id) } },
+              { session },
+            );
+          }
+        }
         for (const line of currentLines)
           if (line.quoteId) {
             const quoteUpdate = await NegotiatedQuote.updateOne(
@@ -556,7 +702,7 @@ export class CheckoutService {
               );
           }
         await CartItem.deleteMany(
-          { cartId: cart.id, stateId: preview.stateId },
+          { cartId: cart.id, ...(combined ? {} : { stateId: { $in: stateIdentifiers } }) },
           { session },
         );
         await Cart.updateOne(
@@ -588,6 +734,18 @@ export class CheckoutService {
       type: "order_created",
       data: { orderId: result.publicId || result.id, stateId: preview.stateId },
     }).catch(() => undefined);
+    if (actor.customerId) {
+      const customer = await User.findById(actor.customerId).select('email firstName').lean() as any;
+      if (customer?.email) {
+        await this.email.sendOrderConfirmation({
+          to: customer.email,
+          name: customer.firstName,
+          orderCode: result.publicId || String(result.id || ''),
+          amount: Number((result as any).totalMinor || 0) / 100,
+          itemCount: result.items?.length || 0,
+        }).catch(() => undefined);
+      }
+    }
     return result;
   }
 
@@ -595,6 +753,7 @@ export class CheckoutService {
     const products = await Product.find({
       _id: { $in: items.map((item) => item.productId) },
       status: ProductStatus.PUBLISHED,
+      availabilityStatus: { $in: [ProductAvailabilityStatus.AVAILABLE, ProductAvailabilityStatus.LIMITED] },
     }).lean({ virtuals: true });
     const map = new Map(
       products.map((product) => [recordId(product), product]),
@@ -621,7 +780,7 @@ export class CheckoutService {
           _id: item.quoteId,
           customerId,
           productId,
-          quantity: item.quantity,
+          ...(item.variantId ? { variantId: item.variantId } : {}),
           status: NegotiatedQuoteStatus.ACTIVE,
           expiresAt: { $gt: new Date() },
         }).lean({ virtuals: true });
@@ -729,18 +888,19 @@ export class CheckoutService {
   }
 
   private async orderResult(id: string) {
-    const order = await Order.findById(id).lean({ virtuals: true });
-    const items = await OrderItem.find({ orderId: id }).lean({
-      virtuals: true,
-    });
-    const payment = await Payment.findOne({ orderId: id }).lean({
-      virtuals: true,
-    });
+    const [order, items, payments, fulfilmentGroups] = await Promise.all([
+      Order.findById(id).lean({ virtuals: true }),
+      OrderItem.find({ orderId: id }).lean({ virtuals: true }),
+      Payment.find({ orderId: id }).lean({ virtuals: true }),
+      OrderFulfilmentGroup.find({ orderId: id }).sort({ createdAt: 1 }).lean({ virtuals: true }),
+    ]);
     return {
       ...order,
       id: order?.publicId,
       items: items.map((item) => ({ ...item, id: item.publicId })),
-      payment: payment ? { ...payment, id: payment.publicId } : undefined,
+      payment: payments[0] ? { ...payments[0], id: payments[0].publicId } : undefined,
+      payments: payments.map((payment) => ({ ...payment, id: payment.publicId })),
+      fulfilmentGroups: fulfilmentGroups.map((group) => ({ ...group, id: group.publicId })),
     };
   }
 }

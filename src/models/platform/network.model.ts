@@ -9,6 +9,12 @@ export interface Market extends BaseEntity {
   zoneId?: string;
   hubId?: string;
   address: string;
+  /** Optional market cover image used by admin and public discovery surfaces. */
+  imageUrl?: string;
+  shortDisplayName?: string;
+  discoveryColor?: string;
+  isFeatured: boolean;
+  displayPriority: number;
   coordinates?: { lat: number; lng: number };
   operatingHours?: Record<string, unknown>;
   notes?: string;
@@ -41,12 +47,18 @@ const marketSchema = createSchema<Market>({
   zoneId: { type: String, index: true },
   hubId: { type: String, index: true },
   address: { type: String, required: true, trim: true },
+  imageUrl: { type: String, trim: true },
+  shortDisplayName: { type: String, trim: true, maxlength: 60 },
+  discoveryColor: { type: String, trim: true, default: '#FF8A62' },
+  isFeatured: { type: Boolean, default: false, index: true },
+  displayPriority: { type: Number, default: 100, min: 0, index: true },
   coordinates: { type: Object },
   operatingHours: { type: Object },
   notes: { type: String },
   status: { type: String, enum: ['active', 'inactive'], default: 'inactive', index: true },
 });
 marketSchema.index({ stateId: 1, normalizedName: 1 }, { unique: true });
+marketSchema.index({ status: 1, isFeatured: -1, displayPriority: 1, name: 1 });
 
 const hubSchema = createSchema<DispatchHub>({
   publicId: { type: String, required: true, unique: true, index: true },

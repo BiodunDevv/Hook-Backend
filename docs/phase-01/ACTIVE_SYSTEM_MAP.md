@@ -23,7 +23,7 @@ Hook Admin
   dashboard
   customers + staff
   commercial catalog + category review
-  orders + runners
+  orders + market associates
   finance/refunds/support
   negotiation/reports/settings
 ```
@@ -31,7 +31,7 @@ Hook Admin
 Active terminology:
 
 - Commercial Catalog
-- Runner
+- Market Associate
 - Hook Partner (future architecture)
 - Hook Dispatch Hub (future architecture)
 - External Logistics Provider

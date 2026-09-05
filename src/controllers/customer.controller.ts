@@ -27,15 +27,14 @@ import { publicCart, publicOrder } from "@lib/public-resource";
 import { AddressService } from "@services/address.service";
 import { CheckoutService } from "@services/checkout.service";
 import { CommerceSettings } from "@models/commerce/commerce.model";
+import { CommerceImportService } from "@services/commerce-import.service";
 
 function owner(req: Request) {
-  return req.user?.sub
-    ? { userId: req.user.sub }
-    : { guestSessionId: req.guestSessionId };
+  return { userId: req.user!.sub };
 }
 
 function ownerId(req: Request) {
-  return req.user?.sub || req.guestId!;
+  return req.user!.sub;
 }
 
 export class CustomerController {
@@ -66,22 +65,42 @@ export class CustomerController {
   );
   private readonly addresses = new AddressService();
   private readonly checkoutV4 = new CheckoutService();
+  private readonly commerceImport = new CommerceImportService();
+
+  importCommerce = async (req: Request, res: Response) =>
+    sendSuccess(
+      res,
+      await this.commerceImport.import(
+        req.user!.sub,
+        String(req.header("idempotency-key") || ""),
+        req.body,
+      ),
+      "Shopping data imported successfully",
+    );
 
   getCart = async (req: Request, res: Response) => {
-    sendSuccess(res, publicCart(await this.cart.getCart(owner(req))));
+    sendSuccess(
+      res,
+      publicCart(await this.cart.getCart(owner(req))),
+      "Cart retrieved successfully",
+    );
   };
 
   addCartItem = async (req: Request, res: Response) => {
     sendCreated(
       res,
-      await this.cart.addItem(
-        owner(req),
-        req.body.productId,
-        req.body.quantity,
-        req.body.selectedVariants,
-        req.body.variantId,
-        req.body.quoteId,
+      publicCart(
+        await this.cart.addItem(
+          owner(req),
+          req.body.productId,
+          req.body.quantity,
+          req.body.selectedVariants,
+          req.body.variantId,
+          req.body.quoteId,
+          { deferRecalculation: true },
+        ),
       ),
+      "Item added to cart successfully",
     );
   };
 
@@ -93,8 +112,10 @@ export class CustomerController {
           owner(req),
           routeParam(req.params.itemId),
           req.body.quantity,
+          { deferRecalculation: true },
         ),
       ),
+      "Cart updated successfully",
     );
   };
 
@@ -102,19 +123,31 @@ export class CustomerController {
     sendSuccess(
       res,
       publicCart(
-        await this.cart.removeItem(owner(req), routeParam(req.params.itemId)),
+        await this.cart.removeItem(owner(req), routeParam(req.params.itemId), {
+          deferRecalculation: true,
+        }),
       ),
+      "Item removed from cart successfully",
     );
   };
 
   clearCart = async (req: Request, res: Response) => {
-    sendSuccess(res, await this.cart.clear(owner(req)));
+    sendSuccess(
+      res,
+      publicCart(await this.cart.clear(owner(req), undefined, { deferRecalculation: true })),
+      "Cart cleared successfully",
+    );
   };
 
   clearCartState = async (req: Request, res: Response) => {
     sendSuccess(
       res,
-      await this.cart.clear(owner(req), routeParam(req.params.stateId)),
+      publicCart(
+        await this.cart.clear(owner(req), routeParam(req.params.stateId), {
+          deferRecalculation: true,
+        }),
+      ),
+      "State basket cleared successfully",
     );
   };
 
@@ -151,6 +184,15 @@ export class CustomerController {
         req.body,
       ),
     );
+  checkoutCombinedPreview = async (req: Request, res: Response) =>
+    sendCreated(
+      res,
+      await this.checkoutV4.preview(
+        { type: "customer", actorId: req.user!.sub, customerId: req.user!.sub },
+        "all",
+        req.body,
+      ),
+    );
   checkoutConfirm = async (req: Request, res: Response) =>
     sendCreated(
       res,
@@ -160,6 +202,7 @@ export class CustomerController {
         String(req.header("idempotency-key") || ""),
       ),
     );
+  checkoutCombinedConfirm = this.checkoutConfirm;
   commerceConfig = async (_req: Request, res: Response) => {
     const settings = await CommerceSettings.findOne({ key: "commerce" }).lean();
     sendSuccess(res, {
@@ -215,7 +258,7 @@ export class CustomerController {
       throw new HttpError(401, "Customer authentication required");
     sendCreated(
       res,
-      await this.payments.initialize(req.user.sub, req.body.orderId),
+      await this.payments.initialize(req.user.sub, req.body.orderId, req.body.fulfilmentGroupId),
     );
   };
 
@@ -305,7 +348,10 @@ export class CustomerController {
   };
 
   listNotifications = async (req: Request, res: Response) => {
-    sendSuccess(res, await this.notificationService.list(owner(req)));
+    sendSuccess(res, await this.notificationService.list(owner(req), {
+      limit: Number(req.query.limit || 30),
+      cursor: typeof req.query.cursor === 'string' ? req.query.cursor : undefined,
+    }));
   };
 
   getNotification = async (req: Request, res: Response) => {
@@ -441,8 +487,7 @@ export class CustomerController {
       await repo.save(
         repo.create({
           ...req.body,
-          userId: req.user?.sub,
-          guestId: req.guestId,
+          userId: req.user!.sub,
         }),
       ),
     );

@@ -27,11 +27,11 @@ PHASE_02_MIGRATION_CONFIRMED=true npm run migrate:phase2
 - Backup archive: `.backups/phase-02/20260726T211917Z/hook.archive.gz` (local, Git-ignored).
 - Backup SHA-256: `3c542f6a44465d3214d495f3c7e6ab87f791ee0e895f8ce15a29d2f1853e02a4`.
 - Restore verification: successful in an isolated database; 43 collections and 213 documents matched exactly. The verification database was dropped.
-- Source counts: 37 legacy States, 20 Users, 3 Runner candidates, and 6 Staff candidates.
+- Source counts: 37 legacy States, 20 Users, 3 Market Associate candidates, and 6 Staff candidates.
 - Execution: successful and idempotent.
-- Post-migration: 37 Operation States, 3 Runner profiles, 6 Staff profiles, 12 Roles, and 45 Permissions.
+- Post-migration: 37 Operation States, 3 Market Associate profiles, 6 Staff profiles, 12 Roles, and 45 Permissions.
 - Legacy Vendor and internal Driver identities: 9 disabled, retained for history.
-- Public-ID duplicate check: zero duplicates in Operation States, Staff profiles, Runner profiles, and Users.
+- Public-ID duplicate check: zero duplicates in Operation States, Staff profiles, Market Associate profiles, and Users.
 - Phase 2 indexes were created explicitly because production disables Mongoose `autoIndex`; session, guest-session, and invitation expiry indexes are TTL indexes.
 - Temporary restore/test databases: none remain.
 
@@ -39,7 +39,7 @@ No source collection was deleted. Legacy records and migration-source metadata r
 
 ## Final catalogue synchronization, 2026-07-26
 
-- Analyze and dry-run remained idempotent: no State, Staff, or Runner records required recreation.
+- Analyze and dry-run remained idempotent: no State, Staff, or Market Associate records required recreation.
 - The confirmed migration rerun completed and verified successfully.
 - The unified Role/Permission catalogue now contains 45 permissions and 12 roles.
 - Retained commerce permissions are assigned through live Role records; legacy user role enums no longer bypass authorization.

@@ -1,8 +1,11 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { PlatformController } from '@controllers/admin/platform.controller';
+import { requirePermission } from '@middleware/permissions';
 import { validateBody } from '@middleware/validate';
 import { asyncHandler } from '@utils/http';
+import { AdminMarketVendorController } from '@controllers/market-vendor.controller';
+import { marketVendorUpdateSchema, vendorReconcileSchema } from '@validations/vendor.schemas';
 
 const idList = z.array(z.string().min(1)).default([]);
 const reason = z.string().trim().min(3).max(500).optional();
@@ -12,11 +15,13 @@ const lifecycleSchema = z.object({ reason: z.string().trim().min(3).max(500) });
 
 const stateSchema = z.object({
   name: z.string().trim().min(2).max(100),
+  capitalName: z.string().trim().min(2).max(100).optional(),
   code: z.string().trim().length(2),
   status,
   timezone: z.string().default('Africa/Lagos'),
   currency: z.string().length(3).default('NGN'),
   deliveryPromiseHours: z.number().int().positive().default(24),
+  operationsEnabled: z.boolean().default(false),
   payAtHubEnabled: z.boolean().default(false),
   payAtHubLimitMinor: z.number().int().nonnegative().default(10000000),
   configuration: z.record(z.string(), z.unknown()).optional(),
@@ -30,17 +35,6 @@ const citySchema = z.object({
   defaultHubId: z.string().optional(),
   reason,
 });
-const zoneSchema = z.object({
-  stateId: z.string().min(1),
-  cityId: z.string().min(1),
-  name: z.string().trim().min(2).max(100),
-  code: z.string().trim().min(2).max(16),
-  status,
-  areaRules: z.record(z.string(), z.unknown()).optional(),
-  geometry: z.record(z.string(), z.unknown()).optional(),
-  deliveryEligible: z.boolean().default(false),
-  reason,
-});
 const marketSchema = z.object({
   name: z.string().trim().min(2).max(150),
   stateId: z.string().min(1),
@@ -48,6 +42,11 @@ const marketSchema = z.object({
   zoneId: z.string().optional(),
   hubId: z.string().optional(),
   address: z.string().trim().min(5).max(500),
+  imageUrl: z.string().url().optional(),
+  shortDisplayName: z.string().trim().min(2).max(60).optional(),
+  discoveryColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/, 'Use a six-digit hex colour').optional(),
+  isFeatured: z.boolean().default(false),
+  displayPriority: z.number().int().min(0).max(10000).default(100),
   coordinates,
   operatingHours: z.record(z.string(), z.unknown()).optional(),
   notes: z.string().max(1000).optional(),
@@ -84,6 +83,16 @@ const staffSchema = z.object({
   stateIds: idList,
   hubIds: idList,
 });
+const staffUpdateSchema = z.object({
+  firstName: z.string().trim().min(1).max(100).optional(),
+  lastName: z.string().trim().min(1).max(100).optional(),
+  phone: z.string().trim().min(7).max(30).optional(),
+  roleIds: idList.optional(),
+  scopeType: z.enum(['global', 'multi_state', 'single_state', 'hub']).optional(),
+  stateIds: idList.optional(),
+  hubIds: idList.optional(),
+  reason: z.string().trim().min(3).max(500).optional(),
+}).strict();
 const partnerSchema = z.object({
   ...person,
   name: z.string().trim().min(2).max(150),
@@ -96,7 +105,7 @@ const partnerSchema = z.object({
   devicePolicy: z.record(z.string(), z.unknown()).optional(),
   reason,
 });
-const runnerSchema = z.object({
+const marketAssociateSchema = z.object({
   ...person,
   stateIds: z.array(z.string().min(1)).min(1),
   hubIds: idList,
@@ -104,7 +113,7 @@ const runnerSchema = z.object({
   reason,
 });
 const assignmentSchema = z.object({
-  runnerId: z.string().min(1),
+  marketAssociateId: z.string().min(1),
   marketId: z.string().min(1),
   preferredHubId: z.string().optional(),
   priority: z.number().int().positive().default(100),
@@ -135,23 +144,35 @@ function crud(
 export function createPlatformAdminRouter() {
   const router = Router();
   const controller = new PlatformController();
+  const marketVendors = new AdminMarketVendorController();
 
   router.get('/permissions', asyncHandler(controller.permissions));
   router.get('/roles', asyncHandler(controller.roles));
   router.post('/roles', validateBody(z.object({
     key: z.string().min(3), name: z.string().min(2), description: z.string().default(''),
     permissionKeys: idList, defaultScopeType: z.enum(['global', 'multi_state', 'single_state', 'hub', 'self']),
-    isSystem: z.boolean().default(false), isActive: z.boolean().default(true),
+    isActive: z.boolean().default(true),
   })), asyncHandler(controller.createRole));
   router.get('/roles/:id', asyncHandler(controller.roleDetail));
-  router.patch('/roles/:id', asyncHandler(controller.updateRole));
+  router.patch('/roles/:id', validateBody(z.object({
+    key: z.string().min(3).optional(),
+    name: z.string().min(2).optional(),
+    description: z.string().optional(),
+    permissionKeys: idList.optional(),
+    defaultScopeType: z.enum(['global', 'multi_state', 'single_state', 'hub', 'self']).optional(),
+    isActive: z.boolean().optional(),
+    reason,
+  }).strict()), asyncHandler(controller.updateRole));
+  router.delete('/roles/:id', validateBody(lifecycleSchema), asyncHandler(controller.archiveRole));
 
   router.get('/staff', asyncHandler(controller.listStaff));
   router.post('/staff', validateBody(staffSchema), asyncHandler(controller.createStaff));
   router.get('/staff/:id', asyncHandler(controller.staffDetail));
-  router.patch('/staff/:id', asyncHandler(controller.updateStaff));
+  router.patch('/staff/:id', validateBody(staffUpdateSchema), asyncHandler(controller.updateStaff));
   router.post('/staff/:id/suspend', validateBody(lifecycleSchema), asyncHandler(controller.staffStatus));
   router.post('/staff/:id/reactivate', validateBody(lifecycleSchema), asyncHandler(controller.staffStatus));
+  router.post('/staff/:id/restore', validateBody(lifecycleSchema), asyncHandler(controller.staffStatus));
+  router.post('/staff/:id/archive', validateBody(lifecycleSchema), asyncHandler(controller.archiveStaff));
   router.post('/staff/:id/revoke-sessions', validateBody(lifecycleSchema), asyncHandler(controller.revokeStaffSessions));
   router.post('/staff/:id/resend-invitation', asyncHandler(controller.resendStaffInvitation));
   router.post('/staff/:id/cancel-invitation', validateBody(lifecycleSchema), asyncHandler(controller.cancelStaffInvitation));
@@ -164,14 +185,16 @@ export function createPlatformAdminRouter() {
     list: controller.listCities, create: controller.createCity, detail: controller.cityDetail,
     update: controller.updateCity, status: controller.cityStatus,
   }, citySchema);
-  crud(router, '/zones', {
-    list: controller.listZones, create: controller.createZone, detail: controller.zoneDetail,
-    update: controller.updateZone, status: controller.zoneStatus,
-  }, zoneSchema);
   crud(router, '/markets', {
     list: controller.listMarkets, create: controller.createMarket, detail: controller.marketDetail,
     update: controller.updateMarket, status: controller.marketStatus,
   }, marketSchema);
+  router.get('/markets/:id/vendors', requirePermission('market.vendors.view'), asyncHandler(marketVendors.vendors));
+  router.get('/market-vendors/:id', requirePermission('market.vendors.view'), asyncHandler(marketVendors.detail));
+  router.get('/market-vendors/:id/payment-details', requirePermission('market.payments.view'), asyncHandler(marketVendors.paymentDetails));
+  router.patch('/market-vendors/:id', requirePermission('market.vendors.manage'), validateBody(marketVendorUpdateSchema), asyncHandler(marketVendors.update));
+  router.get('/vendor-collections', requirePermission('market.collections.view'), asyncHandler(marketVendors.collections));
+  router.post('/vendor-collections/:id/reconcile', requirePermission('market.payments.reconcile'), validateBody(vendorReconcileSchema), asyncHandler(marketVendors.reconcile));
   router.post('/markets/:id/assign-hub', validateBody(z.object({ hubId: z.string().min(1), reason: z.string().min(3) })), asyncHandler(controller.assignMarketHub));
   crud(router, '/hubs', {
     list: controller.listHubs, create: controller.createHub, detail: controller.hubDetail,
@@ -189,31 +212,32 @@ export function createPlatformAdminRouter() {
   router.post('/partners/:id/resend-invitation', asyncHandler(controller.resendPartnerInvitation));
   router.post('/partners/:id/cancel-invitation', validateBody(lifecycleSchema), asyncHandler(controller.cancelPartnerInvitation));
 
-  router.get('/runners', asyncHandler(controller.listRunners));
-  router.post('/runners', validateBody(runnerSchema), asyncHandler(controller.createRunner));
-  router.get('/runners/:id', asyncHandler(controller.runnerDetail));
-  router.patch('/runners/:id', validateBody(runnerSchema.partial()), asyncHandler(controller.updateRunner));
-  router.post('/runners/:id/activate', validateBody(lifecycleSchema), asyncHandler(controller.runnerStatus));
-  router.post('/runners/:id/suspend', validateBody(lifecycleSchema), asyncHandler(controller.runnerStatus));
-  router.post('/runners/:id/reactivate', validateBody(lifecycleSchema), asyncHandler(controller.runnerStatus));
-  router.post('/runners/:id/resend-invitation', asyncHandler(controller.resendRunnerInvitation));
-  router.post('/runners/:id/cancel-invitation', validateBody(lifecycleSchema), asyncHandler(controller.cancelRunnerInvitation));
+  router.get('/market-associates', asyncHandler(controller.listMarketAssociates));
+  router.post('/market-associates', validateBody(marketAssociateSchema), asyncHandler(controller.createMarketAssociate));
+  router.get('/market-associates/:id', asyncHandler(controller.marketAssociateDetail));
+  router.patch('/market-associates/:id', validateBody(marketAssociateSchema.partial()), asyncHandler(controller.updateMarketAssociate));
+  router.post('/market-associates/:id/activate', validateBody(lifecycleSchema), asyncHandler(controller.marketAssociateStatus));
+  router.post('/market-associates/:id/suspend', validateBody(lifecycleSchema), asyncHandler(controller.marketAssociateStatus));
+  router.post('/market-associates/:id/reactivate', validateBody(lifecycleSchema), asyncHandler(controller.marketAssociateStatus));
+  router.post('/market-associates/:id/resend-invitation', asyncHandler(controller.resendMarketAssociateInvitation));
+  router.post('/market-associates/:id/cancel-invitation', validateBody(lifecycleSchema), asyncHandler(controller.cancelMarketAssociateInvitation));
 
-  router.get('/runner-assignments', asyncHandler(controller.listAssignments));
-  router.post('/runner-assignments', validateBody(assignmentSchema), asyncHandler(controller.createAssignment));
-  router.get('/runner-assignments/:id', asyncHandler(controller.assignmentDetail));
-  router.patch('/runner-assignments/:id', asyncHandler(controller.updateAssignment));
-  router.post('/runner-assignments/:id/activate', validateBody(lifecycleSchema), asyncHandler(controller.assignmentStatus));
-  router.post('/runner-assignments/:id/pause', validateBody(lifecycleSchema), asyncHandler(controller.assignmentStatus));
-  router.post('/runner-assignments/:id/end', validateBody(lifecycleSchema), asyncHandler(controller.assignmentStatus));
+  router.get('/market-associate-assignments', asyncHandler(controller.listAssignments));
+  router.post('/market-associate-assignments', validateBody(assignmentSchema), asyncHandler(controller.createAssignment));
+  router.get('/market-associate-assignments/:id', asyncHandler(controller.assignmentDetail));
+  router.patch('/market-associate-assignments/:id', validateBody(assignmentSchema.partial()), asyncHandler(controller.updateAssignment));
+  router.post('/market-associate-assignments/:id/activate', validateBody(lifecycleSchema), asyncHandler(controller.assignmentStatus));
+  router.post('/market-associate-assignments/:id/pause', validateBody(lifecycleSchema), asyncHandler(controller.assignmentStatus));
+  router.post('/market-associate-assignments/:id/end', validateBody(lifecycleSchema), asyncHandler(controller.assignmentStatus));
 
   router.get('/audit-logs', asyncHandler(controller.auditLogs));
   router.get('/audit-logs/:id', asyncHandler(controller.auditDetail));
   router.get('/public-id-counters', asyncHandler(controller.counters));
   router.post('/public-id-counters/repair', validateBody(z.object({
     domain: z.enum([
-      'state', 'city', 'zone', 'market', 'hub', 'partner', 'runner', 'customer', 'staff', 'audit',
+      'state', 'city', 'zone', 'market', 'hub', 'partner', 'marketAssociate', 'customer', 'staff', 'audit',
       'category', 'submission', 'product', 'variant', 'negotiation', 'quote',
+      'marketVendor', 'vendorInvitation', 'vendorCollection', 'vendorPayment',
     ]),
     year: z.number().int().min(2020).optional(), sequence: z.number().int().nonnegative(), reason: z.string().min(5),
   })), asyncHandler(controller.repairCounter));

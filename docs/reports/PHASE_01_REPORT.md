@@ -9,7 +9,7 @@ Branches: local `development` in Admin, Backend, and Shopper
 Phase 1 aligned active product surfaces with the guide without deleting historical MongoDB data or building Phase 2 concepts.
 
 - Removed active Vendor, Booth commerce, internal Driver/Fleet, and related shopper journeys.
-- Standardized active Field Agent terminology to Runner while retaining persisted `field_agent` compatibility.
+- Standardized active Field Agent terminology to Market Associate while retaining persisted `field_agent` compatibility.
 - Reduced new catalog ownership to admin-managed commercial products.
 - Removed dead route consumers, navigation, pages, controllers, services, environment examples, and proven-unused packages.
 - Regenerated Swagger from a generator that now excludes deregistered operations.

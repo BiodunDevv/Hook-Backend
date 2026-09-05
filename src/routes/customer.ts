@@ -20,18 +20,34 @@ import {
   checkoutConfirmSchema,
   checkoutPreviewSchema,
   commerceCartItemSchema,
+  commerceImportSchema,
   paymentInitializeV4Schema,
+  paymentLinkCreateSchema,
 } from "@validations/commerce.schemas";
+import { PaymentLinkController } from "@controllers/payment-link.controller";
 import { requireAuth, requireAccountType } from "@middleware/auth";
 import { AccountType } from "@lib/constants";
 import { asyncHandler } from "@utils/http";
+import { FulfilmentController } from "@controllers/fulfilment.controller";
+import { ProductLikesController } from "@controllers/product-likes.controller";
 
 export function createCustomerRouter() {
   const router = Router();
   const controller = new CustomerController();
+  const paymentLinks = new PaymentLinkController();
   const negotiations = new NegotiationController();
+  const fulfilment = new FulfilmentController();
+  const likes = new ProductLikesController();
 
   router.use(requireCustomerIdentity);
+
+  router.post(
+    "/commerce/import",
+    requireAuth,
+    requireAccountType(AccountType.CUSTOMER),
+    validateBody(commerceImportSchema),
+    asyncHandler(controller.importCommerce),
+  );
 
   router.get("/cart", asyncHandler(controller.getCart));
   router.post(
@@ -51,6 +67,25 @@ export function createCustomerRouter() {
     asyncHandler(controller.clearCartState),
   );
   router.get("/commerce/config", asyncHandler(controller.commerceConfig));
+
+  router.get(
+    "/likes",
+    requireAuth,
+    requireAccountType(AccountType.CUSTOMER),
+    asyncHandler(likes.list),
+  );
+  router.put(
+    "/likes/:productId",
+    requireAuth,
+    requireAccountType(AccountType.CUSTOMER),
+    asyncHandler(likes.add),
+  );
+  router.delete(
+    "/likes/:productId",
+    requireAuth,
+    requireAccountType(AccountType.CUSTOMER),
+    asyncHandler(likes.remove),
+  );
 
   router.get(
     "/addresses",
@@ -85,6 +120,20 @@ export function createCustomerRouter() {
     asyncHandler(controller.defaultAddress),
   );
   router.post(
+    "/checkout/preview",
+    requireAuth,
+    requireAccountType(AccountType.CUSTOMER),
+    validateBody(checkoutPreviewSchema),
+    asyncHandler(controller.checkoutCombinedPreview),
+  );
+  router.post(
+    "/checkout/confirm",
+    requireAuth,
+    requireAccountType(AccountType.CUSTOMER),
+    validateBody(checkoutConfirmSchema),
+    asyncHandler(controller.checkoutCombinedConfirm),
+  );
+  router.post(
     "/checkout/states/:stateId/preview",
     requireAuth,
     requireAccountType(AccountType.CUSTOMER),
@@ -100,6 +149,34 @@ export function createCustomerRouter() {
   );
   router.get("/orders", asyncHandler(controller.listOrders));
   router.get("/orders/:id", asyncHandler(controller.getOrder));
+  router.get(
+    "/orders/:id/fulfilment",
+    requireAuth,
+    requireAccountType(AccountType.CUSTOMER),
+    asyncHandler(fulfilment.customerFulfilment),
+  );
+  router.post(
+    "/orders/:id/returns",
+    requireAuth,
+    requireAccountType(AccountType.CUSTOMER),
+    validateBody(
+      z
+        .object({
+          reasonType: z.enum([
+            "DAMAGED",
+            "WRONG_ITEM",
+            "NOT_DELIVERED",
+            "CUSTOMER_PREFERENCE",
+            "OTHER",
+          ]),
+          reason: z.string().min(3).max(2000),
+          orderItemIds: z.array(z.string().min(1)).min(1),
+          evidenceAssetIds: z.array(z.string().min(1)).max(10).default([]),
+        })
+        .strict(),
+    ),
+    asyncHandler(fulfilment.customerReturn),
+  );
   router.post(
     "/orders/:id/cancel",
     validateBody(z.object({ reason: z.string().optional() })),
@@ -112,6 +189,7 @@ export function createCustomerRouter() {
   );
 
   router.get("/negotiations", asyncHandler(negotiations.list));
+  router.get("/negotiations-active", asyncHandler(negotiations.active));
   router.post(
     "/negotiations",
     validateBody(negotiationCreateSchema),
@@ -132,6 +210,19 @@ export function createCustomerRouter() {
     requireAccountType(AccountType.CUSTOMER),
     validateBody(paymentInitializeV4Schema),
     asyncHandler(controller.initializePayment),
+  );
+  router.post(
+    "/payments/links",
+    requireAuth,
+    requireAccountType(AccountType.CUSTOMER),
+    validateBody(paymentLinkCreateSchema),
+    asyncHandler(paymentLinks.create),
+  );
+  router.post(
+    "/payments/links/:id/revoke",
+    requireAuth,
+    requireAccountType(AccountType.CUSTOMER),
+    asyncHandler(paymentLinks.revoke),
   );
   router.get(
     "/payments/:orderId",

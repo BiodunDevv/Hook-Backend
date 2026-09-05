@@ -2,6 +2,7 @@ import type { MongoRepository as Repository } from '@lib/mongo-repository';
 import { AppDataSource } from '@config/data-source';
 import { AccountStatus, AccountType, DEFAULT_DELIVERY_FEE, DELIVERY_SLA_HOURS, OrderStatus, OrderType, PaymentMode, PaymentStatus, ProductStatus, ScopeType } from '@lib/constants';
 import { EmailService } from '@emails/email.service';
+import { getEmailSettings } from '@services/email-settings.service';
 import { Cart } from '@models/cart/cart.model';
 import { CartItem } from '@models/cart/cart-item.model';
 import { Logistics } from '@models/logistics/logistics.model';
@@ -9,14 +10,109 @@ import { OrderItem } from '@models/orders/order-item.model';
 import { Order } from '@models/orders/order.model';
 import { Product } from '@models/products/product.model';
 import { Payment } from '@models/payments/payment.model';
+import { OrderFulfilmentGroup } from '@models/orders/order-fulfilment-group.model';
+import { Shipment } from '@models/fulfilment/fulfilment.model';
 import { User } from '@models/users/user.model';
 import { CustomerOwner } from './cart.service';
 import { HttpError } from '@utils/http';
 import { Otp } from '@models/auth/otp.model';
 import { randomInt } from 'crypto';
 import { nextPublicId } from './public-id.service';
+import { publishRealtime } from './realtime.service';
+import { createCommerceNotification } from './commerce-notification.service';
 
 type CheckoutBody = Pick<Order, 'deliveryAddress' | 'deliveryNotes' | 'scheduledDeliveryAt' | 'guestEmail' | 'guestName' | 'paymentMode' | 'orderType' | 'giftRecipient'>;
+
+const DISPATCHED_SHIPMENT_STATUSES = new Set(['PICKED_UP', 'IN_TRANSIT', 'OUT_FOR_DELIVERY', 'DELIVERED']);
+
+function displayNumber(order: any) {
+  const reference = String(order.publicId || order.orderCode || '');
+  const sequence = reference.match(/(\d+)$/)?.[1];
+  return sequence ? `Order #${sequence}` : 'Order';
+}
+
+function customerStatusLabel(status: unknown) {
+  const labels: Record<string, string> = {
+    AWAITING_PAYMENT: 'Awaiting payment',
+    VERIFICATION_PENDING: 'Payment review',
+    OPERATIONS_REVIEW: 'Order confirmed',
+    APPROVED_FOR_FULFILMENT: 'Preparing your order',
+    IN_FULFILMENT: 'Market Associate is sourcing your items',
+    PARTIALLY_RECEIVED: 'Some items reached Hook Hub',
+    READY_FOR_CONSOLIDATION: 'Checked at Hook Hub',
+    READY_FOR_DISPATCH: 'Packed for delivery',
+    BOOKED_WITH_PROVIDER: 'Delivery is being arranged',
+    AWAITING_PICKUP: 'Ready to leave Hook Hub',
+    PICKED_UP: 'Dispatched from Hook Hub',
+    OUT_FOR_DELIVERY: 'Out for delivery',
+    IN_TRANSIT: 'On the way',
+    PARTIALLY_IN_TRANSIT: 'Some deliveries are on the way',
+    PARTIALLY_DELIVERED: 'Partially delivered',
+    DELIVERED: 'Delivered',
+    COLLECTED: 'Collected',
+    COMPLETED: 'Completed',
+    ON_HOLD: 'We are resolving an issue',
+    RETURN_IN_PROGRESS: 'Return in progress',
+    REFUNDED: 'Refunded',
+    CANCELLED: 'Cancelled',
+  };
+  return labels[String(status || '').toUpperCase()] || 'Order received';
+}
+
+function timelineFor(order: any, shipment?: any) {
+  const events = [...(order.timeline || [])]
+    .map((event: any) => ({ status: String(event.status || ''), at: event.at || event.createdAt }))
+    .filter((event: any) => event.status);
+  const occurred = new Map(events.map((event: any) => [event.status, event.at]));
+  const status = String(order.commerceStatus || order.status || 'AWAITING_PAYMENT').toUpperCase();
+  const sequence = ['AWAITING_PAYMENT', 'OPERATIONS_REVIEW', 'IN_FULFILMENT', 'READY_FOR_CONSOLIDATION', 'READY_FOR_DISPATCH', 'IN_TRANSIT', 'DELIVERED'];
+  const stageByStatus: Record<string, number> = {
+    AWAITING_PAYMENT: 0,
+    VERIFICATION_PENDING: 1,
+    OPERATIONS_REVIEW: 1,
+    APPROVED_FOR_FULFILMENT: 2,
+    IN_FULFILMENT: 2,
+    PARTIALLY_RECEIVED: 3,
+    READY_FOR_CONSOLIDATION: 3,
+    READY_FOR_DISPATCH: 4,
+    BOOKED_WITH_PROVIDER: 4,
+    AWAITING_PICKUP: 4,
+    PICKED_UP: 5,
+    IN_TRANSIT: 5,
+    OUT_FOR_DELIVERY: 5,
+    PARTIALLY_IN_TRANSIT: 5,
+    PARTIALLY_DELIVERED: 5,
+    DELIVERED: 6,
+    COLLECTED: 6,
+    COMPLETED: 6,
+  };
+  const inferredIndex = stageByStatus[status] ?? events.reduce((last: number, event: any) => Math.max(last, stageByStatus[event.status] ?? 0), 0);
+  return sequence.map((step, index) => ({
+    key: step.toLowerCase(),
+    label: customerStatusLabel(step),
+    status: index < inferredIndex ? 'completed' : index === inferredIndex ? 'current' : 'upcoming',
+    occurredAt: occurred.get(step) || (step === 'AWAITING_PAYMENT' ? order.createdAt : undefined),
+  })).concat((shipment?.trackingEvents || []).map((event: any, index: number) => ({
+    key: `tracking-${index}`,
+    label: customerStatusLabel(event.status),
+    status: 'completed',
+    occurredAt: event.at,
+  })));
+}
+
+function safeItem(item: any) {
+  return {
+    id: item.publicId,
+    productId: typeof item.productId === 'string' && !/^[a-f\d]{24}$/i.test(item.productId) ? item.productId : undefined,
+    title: item.productSnapshot?.title || item.productTitle,
+    imageUrl: item.productSnapshot?.image || item.productImage,
+    variants: item.variantSnapshot || item.selectedVariants || {},
+    quantity: Number(item.quantity || 0),
+    unitPriceMinor: Number(item.unitPriceMinor ?? Math.round(Number(item.unitPrice || 0) * 100)),
+    lineTotalMinor: Number(item.totalPriceMinor ?? Math.round(Number(item.totalPrice || 0) * 100)),
+    deliveryStatus: item.deliveryStatus,
+  };
+}
 
 export class OrderService {
   private readonly email = new EmailService();
@@ -138,9 +234,20 @@ export class OrderService {
         orderCode: order.orderCode,
         amount: order.total,
         itemCount,
+        lines: cartItems.map((item) => ({
+          title: item.product?.title || 'Product',
+          quantity: Number(item.quantity || 0),
+          amount: Number(item.unitPrice || 0) * Number(item.quantity || 0),
+        })),
+        subtotal: order.subtotal,
+        deliveryFee: order.deliveryFee,
+        deliveryAddress: order.deliveryAddress?.formattedAddress,
+        expectedDeliveryDate: order.estimatedDeliveryAt
+          ? new Date(order.estimatedDeliveryAt).toLocaleDateString('en-NG', { dateStyle: 'medium' })
+          : undefined,
       });
     }
-    const hookOpsEmail = process.env.HOOK_OPS_EMAIL || process.env.BREVO_FROM_EMAIL;
+    const hookOpsEmail = (await getEmailSettings()).hookOpsEmail;
     if (hookOpsEmail && body.paymentMode === PaymentMode.PAY_ON_DELIVERY) {
       await this.email.sendHookNewOrder({
         to: hookOpsEmail,
@@ -155,44 +262,174 @@ export class OrderService {
       where: { id: order.id },
       relations: { items: true, logistics: true },
     });
-    return { ...result, provisionalAccount: provisionalUser?.accountStatus === 'pending_password' ? { email: provisionalUser.email, nextStep: 'set_password' } : undefined };
+    const response = { ...result, provisionalAccount: provisionalUser?.accountStatus === 'pending_password' ? { email: provisionalUser.email, nextStep: 'set_password' } : undefined };
+    publishRealtime({ type: 'order.updated', entityId: order.publicId || order.id, version: 1 }, owner.userId ? { accountId: owner.userId, admin: true } : { admin: true });
+    return response;
   }
 
   async listCustomerOrders(owner: CustomerOwner) {
-    const orders = await Order.find(this.ownerWhere(owner)).sort({ createdAt: -1 }).lean({ virtuals: true });
-    return Promise.all(orders.map(async (order) => ({
-      ...order,
-      items: await OrderItem.find({ orderId: order.id }).lean({ virtuals: true }),
-      payment: await Payment.findOne({ orderId: order.id }).lean({ virtuals: true }),
-    }))) as any;
+    const orders = await Order.find(this.ownerWhere(owner))
+      .select('-legacyCommerceSnapshot -timeline -customerSnapshot -addressSnapshot')
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .lean({ virtuals: true });
+    const orderIds = orders.map((order) => order.id);
+    const [items, payments, groups] = await Promise.all([
+      orderIds.length ? OrderItem.find({ orderId: { $in: orderIds } }).lean({ virtuals: true }) : [],
+      orderIds.length ? Payment.find({ orderId: { $in: orderIds } }).select('-gatewayResponse -authorizationUrl -accessCode').lean({ virtuals: true }) : [],
+      orderIds.length ? OrderFulfilmentGroup.find({ orderId: { $in: orderIds } }).sort({ createdAt: 1 }).lean({ virtuals: true }) : [],
+    ]);
+    const itemMap = new Map<string, any[]>();
+    (items as any[]).forEach((item) => itemMap.set(String(item.orderId), [...(itemMap.get(String(item.orderId)) || []), item]));
+    const paymentMap = new Map<string, any[]>();
+    (payments as any[]).forEach((payment) => paymentMap.set(String(payment.orderId), [...(paymentMap.get(String(payment.orderId)) || []), payment]));
+    const groupMap = new Map<string, any[]>();
+    (groups as any[]).forEach((group) => groupMap.set(String(group.orderId), [...(groupMap.get(String(group.orderId)) || []), group]));
+    return orders.map((order) => {
+      const orderPayments = paymentMap.get(order.id) || [];
+      const orderItems = itemMap.get(order.id) || [];
+      const subtotalMinor = Number(order.subtotalMinor ?? Math.round(Number(order.subtotal || 0) * 100));
+      const vatMinor = Number(order.vatMinor || 0);
+      const deliveryFeeMinor = Number(order.deliveryFeeMinor ?? Math.round(Number(order.deliveryFee || 0) * 100));
+      return {
+        id: order.publicId || order.orderCode,
+        displayNumber: displayNumber(order),
+        createdAt: order.createdAt,
+        status: order.commerceStatus || order.status,
+        statusLabel: customerStatusLabel(order.commerceStatus || order.status),
+        paymentStatus: order.commercePaymentStatus || order.paymentStatus,
+        paymentMethod: order.commercePaymentMethod || order.paymentMode,
+        itemCount: orderItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0),
+        items: orderItems.map(safeItem),
+        subtotalMinor,
+        vatRate: Number(order.vatRate || 0),
+        vatMinor,
+        deliveryFeeMinor,
+        discountMinor: Math.round(Number(order.discount || 0) * 100),
+        totalMinor: Number(order.totalMinor ?? Math.round(Number(order.total || 0) * 100)),
+        currency: order.currency || 'NGN',
+        payment: orderPayments[0] ? { status: orderPayments[0].commerceStatus || orderPayments[0].status } : undefined,
+        deliveryCount: (groupMap.get(order.id) || []).length || 1,
+      };
+    }) as any;
   }
 
   async getCustomerOrder(owner: CustomerOwner, id: string) {
     const identifier = id.match(/^[a-f\d]{24}$/i) ? { $or: [{ _id: id }, { publicId: id }, { orderCode: id }] } : { $or: [{ publicId: id }, { orderCode: id }] };
     const order = await Order.findOne({ ...identifier, ...this.ownerWhere(owner) }).lean({ virtuals: true });
     if (!order) throw new HttpError(404, 'Order not found');
+    const [items, payments, fulfilmentGroups, shipments] = await Promise.all([
+      OrderItem.find({ orderId: order.id }).lean({ virtuals: true }),
+      Payment.find({ orderId: order.id }).select('-gatewayResponse -authorizationUrl -accessCode').lean({ virtuals: true }),
+      OrderFulfilmentGroup.find({ orderId: order.id }).sort({ createdAt: 1 }).lean({ virtuals: true }),
+      Shipment.find({ orderId: order.id }).sort({ createdAt: 1 }).lean({ virtuals: true }),
+    ]);
+    const subtotalMinor = Number(order.subtotalMinor ?? Math.round(Number(order.subtotal || 0) * 100));
+    const vatMinor = Number(order.vatMinor || 0);
+    const deliveryFeeMinor = Number(order.deliveryFeeMinor ?? Math.round(Number(order.deliveryFee || 0) * 100));
+    const safeItems = items.map(safeItem);
+    const deliveries = (fulfilmentGroups.length ? fulfilmentGroups : [{ publicId: 'legacy', sourceStateId: order.sourceStateId, status: order.commerceStatus || order.status }]).map((group: any, index: number) => {
+      const shipment = shipments.find((entry: any) => entry.fulfilmentGroupId === group.publicId)
+        || shipments.find((entry: any) => String(entry.sourceStateId) === String(group.sourceStateId))
+        || (shipments.length === 1 ? shipments[0] : undefined);
+      const shipmentStatus = String(shipment?.status || '').toUpperCase();
+      const trackingVisible = DISPATCHED_SHIPMENT_STATUSES.has(shipmentStatus);
+      const groupItems = items.filter((item: any) => !item.fulfilmentGroupId || item.fulfilmentGroupId === group.publicId).map(safeItem);
+      const payment = payments.find((entry: any) => entry.fulfilmentGroupId === group.publicId);
+      return {
+        id: group.publicId || `delivery-${index + 1}`,
+        label: `Delivery ${index + 1}`,
+        status: shipment?.status || group.status || order.commerceStatus || order.status,
+        statusLabel: customerStatusLabel(shipment?.status || group.status || order.commerceStatus || order.status),
+        eta: shipment?.estimatedDeliveryAt,
+        items: groupItems,
+        payment: payment ? { status: payment.commerceStatus || payment.status, amountMinor: Number(payment.amountMinor || 0) } : undefined,
+        timeline: timelineFor({ ...order, commerceStatus: shipment?.status || group.status }, shipment),
+        shipment: shipment ? {
+          provider: trackingVisible ? shipment.provider : undefined,
+          trackingReference: trackingVisible ? shipment.trackingNumber : undefined,
+          status: shipment.status,
+          dispatchedAt: trackingVisible ? shipment.pickedUpAt || shipment.bookedAt : undefined,
+          deliveredAt: shipment.deliveredAt,
+        } : undefined,
+      };
+    });
+    const primaryShipment = shipments[0];
     return {
-      ...order,
-      items: await OrderItem.find({ orderId: order.id }).lean({ virtuals: true }),
-      payment: await Payment.findOne({ orderId: order.id }).lean({ virtuals: true }),
+      id: order.publicId || order.orderCode,
+      displayNumber: displayNumber(order),
+      createdAt: order.createdAt,
+      status: order.commerceStatus || order.status,
+      statusLabel: customerStatusLabel(order.commerceStatus || order.status),
+      paymentStatus: order.commercePaymentStatus || order.paymentStatus,
+      paymentMethod: order.commercePaymentMethod || order.paymentMode,
+      itemCount: safeItems.reduce((sum, item) => sum + item.quantity, 0),
+      address: order.addressSnapshot ? {
+        label: order.addressSnapshot.label,
+        recipientName: order.addressSnapshot.recipientName,
+        phone: order.addressSnapshot.phone,
+        formattedAddress: order.addressSnapshot.formattedAddress || [order.addressSnapshot.line1, order.addressSnapshot.line2, order.addressSnapshot.localGovernmentArea, order.addressSnapshot.cityName, order.addressSnapshot.stateName].filter(Boolean).join(', '),
+        stateName: order.addressSnapshot.stateName,
+        cityName: order.addressSnapshot.cityName,
+        localGovernmentArea: order.addressSnapshot.localGovernmentArea,
+      } : {
+        formattedAddress: [order.deliveryAddress?.street, order.deliveryAddress?.city, order.deliveryAddress?.state].filter(Boolean).join(', '),
+        phone: order.deliveryAddress?.phone,
+      },
+      items: safeItems,
+      subtotalMinor,
+      vatRate: Number(order.vatRate || 0),
+      vatMinor,
+      deliveryFeeMinor,
+      discountMinor: Math.round(Number(order.discount || 0) * 100),
+      totalMinor: Number(order.totalMinor ?? Math.round(Number(order.total || 0) * 100)),
+      currency: order.currency || 'NGN',
+      timeline: timelineFor(order, primaryShipment),
+      deliveries,
+      canCancel: ['PENDING', 'AWAITING_PAYMENT'].includes(String(order.commerceStatus || order.status).toUpperCase())
+        && !['CONFIRMED', 'PAID'].includes(String(order.commercePaymentStatus || order.paymentStatus).toUpperCase()),
     } as any;
   }
 
   async cancelCustomerOrder(owner: CustomerOwner, id: string, reason?: string) {
     const order = await this.getCustomerOrder(owner, id);
-    if (![OrderStatus.PENDING, OrderStatus.CONFIRMED].includes(order.status)) {
-      throw new HttpError(400, 'This order can no longer be cancelled');
+    const stored = await Order.findOne({ $or: [{ publicId: order.id }, { orderCode: order.id }], userId: owner.userId });
+    if (!stored || !order.canCancel) throw new HttpError(409, 'This order can no longer be cancelled', undefined, 'INVALID_STATE_TRANSITION');
+    stored.status = OrderStatus.CANCELLED;
+    stored.commerceStatus = 'CANCELLED';
+    stored.cancelledAt = new Date();
+    stored.cancellationReason = reason;
+    stored.timeline = [...(stored.timeline || []), { status: 'CANCELLED', at: new Date(), actorType: 'customer', actorId: owner.userId }];
+    const saved = await stored.save();
+    const { PaymentLink } = await import('@models/payments/payment-link.model');
+    await PaymentLink.updateMany({ orderId: stored.id, status: { $in: ['active', 'processing'] } }, { $set: { status: 'cancelled', cancelledAt: new Date() } });
+    publishRealtime({ type: 'order.updated', entityId: saved.publicId || saved.id, version: Number(saved.__v || 1) }, { accountId: owner.userId, admin: true });
+    if (owner.userId) {
+      await createCommerceNotification({
+        eventKey: `order:${saved.publicId || saved.id}:cancelled`,
+        userId: owner.userId,
+        title: 'Order cancelled',
+        body: `Your order ${saved.publicId || saved.orderCode} has been cancelled.`,
+        type: 'order_cancelled',
+        data: { orderId: saved.publicId || saved.id },
+      }).catch(() => undefined);
+      const customer = await AppDataSource.getRepository(User).findOne({ where: { id: owner.userId } });
+      if (customer?.email) {
+        await this.email.sendOrderCancelled({
+          to: customer.email,
+          name: customer.firstName,
+          orderCode: saved.publicId || saved.orderCode || '',
+          amount: Number(saved.total || 0),
+          reason,
+        }).catch(() => undefined);
+      }
     }
-    order.status = OrderStatus.CANCELLED;
-    order.cancelledAt = new Date();
-    order.cancellationReason = reason;
-    return this.orders.save(order);
+    return this.getCustomerOrder(owner, saved.publicId || saved.orderCode);
   }
 
   private ownerWhere(owner: CustomerOwner) {
     if (owner.userId) return { userId: owner.userId };
-    if (owner.guestId) return { guestId: owner.guestId };
-    throw new HttpError(401, 'Authentication or guest session required');
+    throw new HttpError(401, 'Customer authentication required');
   }
 
   private async ensureGuestAccount(email: string, name: string, guestId?: string) {

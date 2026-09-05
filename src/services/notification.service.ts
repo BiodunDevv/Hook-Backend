@@ -1,9 +1,13 @@
 import type { MongoRepository as Repository } from '@lib/mongo-repository';
 import { DeviceToken } from '@models/notifications/device-token.model';
 import { Notification } from '@models/notifications/notification.model';
+import { publishRealtime } from '@services/realtime.service';
 import { HttpError } from '@utils/http';
 
-type NotificationOwner = { userId?: string; guestId?: string };
+type NotificationOwner = { userId: string };
+
+const NOTIFICATION_LIST_FIELDS = 'title body type isRead readAt createdAt';
+const NOTIFICATION_DETAIL_FIELDS = `${NOTIFICATION_LIST_FIELDS} data`;
 
 export class NotificationService {
   constructor(
@@ -12,7 +16,6 @@ export class NotificationService {
   ) {}
 
   async registerDevice(owner: NotificationOwner, body: Partial<DeviceToken>) {
-    if (!owner.userId && !owner.guestId) throw new HttpError(400, 'A user or guest session is required');
     if (!body.expoPushToken?.startsWith('ExponentPushToken[') && !body.expoPushToken?.startsWith('ExpoPushToken[')) {
       throw new HttpError(400, 'Invalid Expo push token');
     }
@@ -20,10 +23,11 @@ export class NotificationService {
     const existing = await this.devices.findOne({ where: { expoPushToken: body.expoPushToken } });
     const payload = {
       userId: owner.userId,
-      guestId: owner.guestId,
       expoPushToken: body.expoPushToken,
       platform: body.platform || 'unknown',
       deviceName: body.deviceName,
+      deviceId: body.deviceId,
+      sessionId: body.sessionId,
       isActive: true,
       lastSeenAt: new Date(),
     };
@@ -38,7 +42,7 @@ export class NotificationService {
 
   async unregisterDevice(owner: NotificationOwner, expoPushToken?: string) {
     if (expoPushToken) {
-      const existing = await this.devices.findOne({ where: { expoPushToken } });
+      const existing = await this.devices.findOne({ where: { expoPushToken, userId: owner.userId } });
       if (existing) await this.devices.update(existing.id, { isActive: false });
       return { message: 'Device unregistered.' };
     }
@@ -49,8 +53,7 @@ export class NotificationService {
   }
 
   async create(owner: NotificationOwner, title: string, body: string, type = 'general', data?: Record<string, unknown>) {
-    if (!owner.userId && !owner.guestId) return undefined;
-    return this.notifications.save(this.notifications.create({
+    const notification = await this.notifications.save(this.notifications.create({
       ...owner,
       title,
       body,
@@ -58,43 +61,68 @@ export class NotificationService {
       data,
       isRead: false,
     }));
+    publishRealtime(
+      { type: 'notification.created', entityId: notification?.id, version: 1 },
+      { accountId: owner.userId },
+    );
+    return notification;
   }
 
-  async list(owner: NotificationOwner) {
+  async list(owner: NotificationOwner, options: { limit?: number; cursor?: string } = {}) {
     const where = this.ownerWhere(owner);
-    const data = await this.notifications.find({ where, order: { createdAt: 'DESC' } });
-    const unread = data.filter((item) => !item.isRead).length;
-    return { data, unread, total: data.length };
+    const limit = Math.min(Math.max(Number(options.limit || 30), 1), 100);
+    const pageWhere = options.cursor
+      ? { ...where, createdAt: { $lt: new Date(options.cursor) } }
+      : where;
+    const [rows, unread, total] = await Promise.all([
+      this.notifications.find({ where: pageWhere, order: { createdAt: 'DESC' }, take: limit + 1, select: NOTIFICATION_LIST_FIELDS }),
+      this.notifications.count({ where: { ...where, isRead: false } }),
+      this.notifications.count({ where }),
+    ]);
+    const hasMore = rows.length > limit;
+    const data = rows.slice(0, limit);
+    const last = data[data.length - 1];
+    return {
+      data,
+      unread,
+      total,
+      hasMore,
+      nextCursor: hasMore && last?.createdAt ? new Date(last.createdAt).toISOString() : null,
+    };
   }
 
   async detail(owner: NotificationOwner, id: string) {
-    const notification = await this.notifications.findOne({ where: { id, ...this.ownerWhere(owner) } });
+    const notification = await this.notifications.findOne({ where: { id, ...this.ownerWhere(owner) }, select: NOTIFICATION_DETAIL_FIELDS });
     if (!notification) throw new HttpError(404, 'Notification not found');
     return notification;
   }
 
   async markRead(owner: NotificationOwner, id: string) {
-    const notification = await this.notifications.findOne({ where: { id, ...this.ownerWhere(owner) } });
+    const notification = await this.notifications.findOne({ where: { id, ...this.ownerWhere(owner) }, select: NOTIFICATION_LIST_FIELDS });
     if (!notification) throw new HttpError(404, 'Notification not found');
     await this.notifications.update(notification.id, { isRead: true, readAt: new Date() });
-    return this.notifications.findOne({ where: { id: notification.id } });
+    this.publishNotificationUpdate(owner, notification.id);
+    return this.notifications.findOne({ where: { id: notification.id }, select: NOTIFICATION_DETAIL_FIELDS });
   }
 
   async markAllRead(owner: NotificationOwner) {
     const where = this.ownerWhere(owner);
     await this.notifications.update({ ...where, isRead: false }, { isRead: true, readAt: new Date() });
+    this.publishNotificationUpdate(owner);
     return this.list(owner);
   }
 
   async delete(owner: NotificationOwner, id: string) {
-    const notification = await this.notifications.findOne({ where: { id, ...this.ownerWhere(owner) } });
+    const notification = await this.notifications.findOne({ where: { id, ...this.ownerWhere(owner) }, select: NOTIFICATION_LIST_FIELDS });
     if (!notification) throw new HttpError(404, 'Notification not found');
     await this.notifications.delete({ id: notification.id });
+    this.publishNotificationUpdate(owner, notification.id);
     return { message: 'Notification deleted.' };
   }
 
   async clearAll(owner: NotificationOwner) {
     await this.notifications.delete(this.ownerWhere(owner));
+    this.publishNotificationUpdate(owner);
     return { message: 'Notifications cleared.', data: [], unread: 0, total: 0 };
   }
 
@@ -110,16 +138,23 @@ export class NotificationService {
     await Promise.all(devices.map((device) => this.sendExpoPush(device.expoPushToken, title, body, data)));
   }
 
+  async sendPushToDevice(expoPushToken: string, title: string, body: string, data?: Record<string, unknown>) {
+    await this.sendExpoPush(expoPushToken, title, body, data);
+  }
+
   private ownerWhere(owner: NotificationOwner) {
-    if (owner.userId) return { userId: owner.userId };
-    if (owner.guestId) return { guestId: owner.guestId };
-    throw new HttpError(401, 'Authentication or guest session required');
+    return { userId: owner.userId };
+  }
+
+  private publishNotificationUpdate(owner: NotificationOwner, id?: string) {
+    publishRealtime(
+      { type: 'notification.updated', entityId: id, version: 1 },
+      { accountId: owner.userId },
+    );
   }
 
   private findOwnerDevices(owner: NotificationOwner) {
-    if (owner.userId) return this.devices.find({ where: { userId: owner.userId, isActive: true } });
-    if (owner.guestId) return this.devices.find({ where: { guestId: owner.guestId, isActive: true } });
-    return Promise.resolve([]);
+    return this.devices.find({ where: { userId: owner.userId, isActive: true } });
   }
 
   private async sendExpoPush(expoPushToken: string, title: string, body: string, data?: Record<string, unknown>) {

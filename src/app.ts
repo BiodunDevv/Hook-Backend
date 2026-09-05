@@ -14,11 +14,11 @@ import { createDeviceRouter } from './routes/devices';
 import { createPublicRouter } from './routes/public';
 import { createUploadRouter } from './routes/upload';
 import { createWebhookRouter } from './routes/webhooks';
-import { createGuestSessionRouter } from './routes/guest-sessions';
-import { createPartnerRouter, createRunnerRouter } from './routes/platform-self';
+import { createPartnerRouter, createMarketAssociateRouter } from './routes/platform-self';
 import { createPublicGeographyRouter } from './routes/public-geography';
 import { createCatalogMediaRouter } from './routes/catalog-media';
 import { errorHandler, requestContext, sendError, sendSuccess } from './utils/http';
+import { requestTiming } from '@middleware/request-timing';
 
 export function createApp() {
   const app = express();
@@ -30,6 +30,7 @@ export function createApp() {
   app.disable('x-powered-by');
   app.set('trust proxy', 1);
   app.use(requestContext);
+  app.use(requestTiming);
   app.use(helmet({
     crossOriginResourcePolicy: { policy: 'cross-origin' },
   }));
@@ -49,18 +50,33 @@ export function createApp() {
     try {
       const { PaymentService } = await import('@services/payment.service');
       const signature = String(req.header('x-paystack-signature') || '');
-      sendSuccess(res, await new PaymentService().webhook(req.body as Buffer, signature, req.requestId));
+      sendSuccess(res, await new PaymentService().webhook('paystack', req.body as Buffer, signature, req.requestId));
+    } catch (error) { next(error); }
+  });
+  app.post(`${apiPrefix}/webhooks/opay`, express.raw({ type: 'application/json', limit: '256kb' }), async (req, res, next) => {
+    try {
+      const { PaymentService } = await import('@services/payment.service');
+      const signature = String(req.header('signature') || req.header('x-opay-signature') || '');
+      sendSuccess(res, await new PaymentService().webhook('opay', req.body as Buffer, signature, req.requestId));
     } catch (error) { next(error); }
   });
   app.get(`${apiPrefix}/payments/paystack/callback`, (req, res) => {
     const reference = String(req.query.reference || req.query.trxref || '');
-    const safeReference = /^[A-Za-z0-9._=-]{1,120}$/.test(reference)
-      ? reference
-      : '';
+    if (!/^[A-Za-z0-9._=-]{1,120}$/.test(reference)) {
+      return sendError(
+        res,
+        400,
+        'VALIDATION_ERROR',
+        'A valid payment reference is required',
+      );
+    }
+    const configuredReturnUrl = String(process.env.PAYSTACK_APP_RETURN_URL || '');
     const returnUrl = new URL(
-      process.env.PAYSTACK_APP_RETURN_URL || 'hook://payments/return',
+      configuredReturnUrl.startsWith('hook://')
+        ? configuredReturnUrl
+        : 'hook://payments/return',
     );
-    if (safeReference) returnUrl.searchParams.set('reference', safeReference);
+    returnUrl.searchParams.set('reference', reference);
     returnUrl.searchParams.set('source', 'paystack');
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     res.redirect(302, returnUrl.toString());
@@ -124,16 +140,22 @@ export function createApp() {
   }));
 
   app.use(`${apiPrefix}/auth`, authLimiter, createAuthRouter());
-  app.use(`${apiPrefix}/guest-sessions`, authLimiter, createGuestSessionRouter());
   app.use(`${apiPrefix}/devices`, createDeviceRouter());
   app.use(`${apiPrefix}/admin`, createAdminRouter());
-  app.use(`${apiPrefix}/runner`, createRunnerRouter());
+  app.use(`${apiPrefix}/market-associate`, createMarketAssociateRouter());
   app.use(`${apiPrefix}/partner`, createPartnerRouter());
   app.use(`${apiPrefix}/catalog/media`, uploadLimiter, createCatalogMediaRouter());
   app.use(`${apiPrefix}/public`, createPublicGeographyRouter());
   app.use(`${apiPrefix}/upload`, uploadLimiter, createUploadRouter());
   app.use(`${apiPrefix}/webhooks`, createWebhookRouter());
   app.use(apiPrefix, createPublicRouter());
+  app.use(`${apiPrefix}/guest-sessions`, (req, res) => {
+    res.status(404).json({
+      success: false,
+      error: { code: 'NOT_FOUND', message: 'Route not found' },
+      meta: { requestId: req.requestId, timestamp: new Date().toISOString() },
+    });
+  });
   app.use(apiPrefix, createCustomerRouter());
 
   app.use('/admin', (_req, res) => {

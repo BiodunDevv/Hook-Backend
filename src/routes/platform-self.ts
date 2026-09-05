@@ -1,37 +1,76 @@
 import { Router } from "express";
 import { z } from "zod";
-import { AccountType } from "@lib/constants";
-import { AuthController } from "@controllers/auth.controller";
+import { AccountType, ProductAvailabilityStatus } from "@lib/constants";
+import { routeParam } from "@lib/api-utils";
 import { requireAccountType, requireAuth } from "@middleware/auth";
 import { validateBody } from "@middleware/validate";
 import {
   HookPartner,
-  RunnerMarketAssignment,
-  RunnerProfile,
+  MarketAssociateMarketAssignment,
+  MarketAssociateProfile,
 } from "@models/platform/operations-accounts.model";
 import { Market } from "@models/platform/network.model";
 import { User } from "@models/users/user.model";
 import { asyncHandler, HttpError, sendSuccess } from "@utils/http";
-import { loginSchema } from "@validations/common.schemas";
-import { RunnerCatalogController } from "@controllers/runner/catalog.controller";
-import { runnerSubmissionDraftSchema } from "@validations/catalog.schemas";
+import { MarketAssociateCatalogController } from "@controllers/market-associate/catalog.controller";
+import {
+  negotiationCreateSchema,
+  negotiationOfferSchema,
+  marketAssociateSubmissionDraftSchema,
+} from "@validations/catalog.schemas";
 import { PartnerCommerceController } from "@controllers/partner-commerce.controller";
+import { PartnerNegotiationController } from "@controllers/partner-negotiation.controller";
+import { FulfilmentController } from "@controllers/fulfilment.controller";
 import {
   checkoutConfirmSchema,
   checkoutPreviewSchema,
   commerceCartItemSchema,
 } from "@validations/commerce.schemas";
+import { MarketAssociateMarketVendorController } from '@controllers/market-vendor.controller';
+import { availabilityConfirmSchema, availabilityReportSchema, marketVendorSchema, marketVendorUpdateSchema, vendorCollectionSchema } from '@validations/vendor.schemas';
+import { itemVerifySchema } from '@validations/fulfilment.schemas';
+import { Product } from '@models/products/product.model';
+import { CatalogAvailabilityService } from '@services/catalog-availability.service';
+import { AppDataSource } from '@config/data-source';
+import { DeviceToken } from '@models/notifications/device-token.model';
+import { Notification } from '@models/notifications/notification.model';
+import { NotificationService } from '@services/notification.service';
 
-export function createRunnerRouter() {
-  const router = Router();
-  const auth = new AuthController();
-  const catalog = new RunnerCatalogController();
-  router.post(
-    "/auth/login",
-    validateBody(loginSchema),
-    asyncHandler(auth.runnerLogin),
+function mountNotificationRoutes(router: Router) {
+  const notifications = new NotificationService(
+    AppDataSource.getRepository(DeviceToken),
+    AppDataSource.getRepository(Notification),
   );
-  router.use(requireAuth, requireAccountType(AccountType.RUNNER));
+  router.get(
+    '/notifications',
+    asyncHandler(async (req, res) => {
+      sendSuccess(res, await notifications.list({ userId: req.user!.sub }, {
+        limit: Number(req.query.limit || 30),
+        cursor: typeof req.query.cursor === 'string' ? req.query.cursor : undefined,
+      }));
+    }),
+  );
+  router.patch(
+    '/notifications/read-all',
+    asyncHandler(async (req, res) => {
+      sendSuccess(res, await notifications.markAllRead({ userId: req.user!.sub }));
+    }),
+  );
+  router.patch(
+    '/notifications/:id/read',
+    asyncHandler(async (req, res) => {
+      sendSuccess(res, await notifications.markRead({ userId: req.user!.sub }, routeParam(req.params.id)));
+    }),
+  );
+}
+
+export function createMarketAssociateRouter() {
+  const router = Router();
+  const catalog = new MarketAssociateCatalogController();
+  const fulfilment = new FulfilmentController();
+  const marketVendors = new MarketAssociateMarketVendorController();
+  router.use(requireAuth, requireAccountType(AccountType.MARKETASSOCIATE));
+  mountNotificationRoutes(router);
   router.get(
     "/profile",
     asyncHandler(async (req, res) => {
@@ -39,14 +78,14 @@ export function createRunnerRouter() {
         User.findById(req.user!.sub)
           .select("-password -refreshToken")
           .lean({ virtuals: true }),
-        RunnerProfile.findOne({ accountId: req.user!.sub }).lean({
+        MarketAssociateProfile.findOne({ accountId: req.user!.sub }).lean({
           virtuals: true,
         }),
       ]);
       if (!profile)
         throw new HttpError(
           404,
-          "Runner profile not found",
+          "Market Associate profile not found",
           undefined,
           "NOT_FOUND",
         );
@@ -56,14 +95,22 @@ export function createRunnerRouter() {
   router.patch(
     "/profile",
     asyncHandler(async (req, res) => {
-      const allowed = (({ phone, avatarUrl, preferences }) => ({
-        phone,
-        avatarUrl,
-        preferences,
-      }))(req.body);
+      const { phone, avatarUrl, preferences } = req.body ?? {};
+      const set: Record<string, unknown> = {};
+      const unset: Record<string, unknown> = {};
+      if (phone !== undefined) set.phone = phone;
+      if (preferences !== undefined) set.preferences = preferences;
+      // An empty avatarUrl means "remove my photo"; $set with undefined is a no-op.
+      if (avatarUrl !== undefined) {
+        if (avatarUrl) set.avatarUrl = avatarUrl;
+        else unset.avatarUrl = "";
+      }
       const account = await User.findByIdAndUpdate(
         req.user!.sub,
-        { $set: allowed },
+        {
+          ...(Object.keys(set).length ? { $set: set } : {}),
+          ...(Object.keys(unset).length ? { $unset: unset } : {}),
+        },
         { returnDocument: "after" },
       )
         .select("-password -refreshToken")
@@ -74,18 +121,18 @@ export function createRunnerRouter() {
   router.get(
     "/markets",
     asyncHandler(async (req, res) => {
-      const profile = await RunnerProfile.findOne({
+      const profile = await MarketAssociateProfile.findOne({
         accountId: req.user!.sub,
       }).lean();
       if (!profile)
         throw new HttpError(
           404,
-          "Runner profile not found",
+          "Market Associate profile not found",
           undefined,
           "NOT_FOUND",
         );
-      const assignments = await RunnerMarketAssignment.find({
-        runnerId: profile._id.toString(),
+      const assignments = await MarketAssociateMarketAssignment.find({
+        marketAssociateId: profile._id.toString(),
         status: "active",
       }).lean({ virtuals: true });
       const markets = await Market.find({
@@ -95,17 +142,61 @@ export function createRunnerRouter() {
       sendSuccess(res, { assignments, markets });
     }),
   );
+  router.get('/markets/:id', asyncHandler(marketVendors.market));
+  router.get('/markets/:id/vendors', asyncHandler(marketVendors.vendors));
+  router.post('/markets/:id/vendors', validateBody(marketVendorSchema), asyncHandler(marketVendors.create));
+  router.get('/market-vendors/:id', asyncHandler(marketVendors.detail));
+  router.patch('/market-vendors/:id', validateBody(marketVendorUpdateSchema), asyncHandler(marketVendors.update));
+  router.post('/market-vendors/:id/invite', asyncHandler(marketVendors.invite));
+  router.get('/vendor-collections', asyncHandler(marketVendors.collections));
+  router.post('/product-submissions/:id/collection', validateBody(vendorCollectionSchema), asyncHandler(marketVendors.collection));
+  router.get('/availability-checks', asyncHandler(async (req, res) => {
+    const profile = await MarketAssociateProfile.findOne({ accountId: req.user!.sub, status: 'active' }).lean();
+    if (!profile) throw new HttpError(403, 'Active Market Associate profile required', undefined, 'ACCESS_DENIED');
+    const assignments = await MarketAssociateMarketAssignment.find({ marketAssociateId: profile._id.toString(), status: 'active', activeFrom: { $lte: new Date() }, $or: [{ activeTo: { $exists: false } }, { activeTo: null }, { activeTo: { $gt: new Date() } }] }).select('marketId').lean();
+    const products = await Product.find({ marketId: { $in: assignments.map((assignment) => assignment.marketId) }, availabilityStatus: ProductAvailabilityStatus.UNCONFIRMED, deletedAt: { $exists: false } })
+      .select('publicId title marketId sourceMarketAssociateId status availabilityStatus availabilityCheckDueAt availabilityCheckNote catalogVersion images')
+      .sort({ availabilityCheckDueAt: 1 }).limit(100).lean({ virtuals: true });
+    const sourceMarketAssociateIds = [...new Set(products.map((product) => product.sourceMarketAssociateId).filter(Boolean))];
+    const activeSources = await MarketAssociateProfile.find({ _id: { $in: sourceMarketAssociateIds }, status: 'active' }).select('_id').lean();
+    const activeSourceIds = new Set(activeSources.map((source) => source._id.toString()));
+    sendSuccess(res, products.filter((product) => product.sourceMarketAssociateId === profile._id.toString() || !product.sourceMarketAssociateId || !activeSourceIds.has(product.sourceMarketAssociateId)));
+  }));
+  router.post('/products/:id/availability/confirm', validateBody(availabilityConfirmSchema), asyncHandler(async (req, res) => {
+    sendSuccess(res, await new CatalogAvailabilityService().confirm(req.user!.sub, routeParam(req.params.id), req.body));
+  }));
+  router.post('/products/:id/availability/report', validateBody(availabilityReportSchema), asyncHandler(async (req, res) => {
+    sendSuccess(res, await new CatalogAvailabilityService().report(req.user!.sub, routeParam(req.params.id), req.body));
+  }));
   router.get("/dashboard", asyncHandler(catalog.dashboard));
+  router.get("/fulfilments/dashboard", asyncHandler(fulfilment.marketAssociateDashboard));
+  router.get("/fulfilments", asyncHandler(fulfilment.marketAssociateTasks));
+  router.get("/fulfilments/:id", asyncHandler(fulfilment.marketAssociateTask));
+  router.post(
+    "/fulfilments/:id/issues",
+    validateBody(z.object({ type: z.string().optional(), severity: z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']).optional(), summary: z.string().min(3).max(1000), evidence: z.array(z.unknown()).optional(), orderItemId: z.string().optional(), idempotencyKey: z.string().min(8).optional() }).strict()),
+    asyncHandler(fulfilment.marketAssociateIssue),
+  );
+  router.post(
+    "/fulfilments/:id/items/:orderItemId/verify",
+    validateBody(itemVerifySchema),
+    asyncHandler(fulfilment.verifyItem),
+  );
+  router.post(
+    "/fulfilments/:id/:action",
+    validateBody(z.object({ version: z.coerce.number().int().positive(), actualCostMinor: z.coerce.number().int().nonnegative().optional(), evidence: z.array(z.object({ type: z.string().min(1), url: z.string().url().optional(), assetId: z.string().optional(), note: z.string().max(500).optional() })).optional(), arrivedAt: z.string().datetime().optional() }).passthrough()),
+    asyncHandler(fulfilment.marketAssociateAction),
+  );
   router.get("/product-submissions", asyncHandler(catalog.list));
   router.post(
     "/product-submissions",
-    validateBody(runnerSubmissionDraftSchema),
+    validateBody(marketAssociateSubmissionDraftSchema),
     asyncHandler(catalog.create),
   );
   router.get("/product-submissions/:id", asyncHandler(catalog.detail));
   router.patch(
     "/product-submissions/:id",
-    validateBody(runnerSubmissionDraftSchema),
+    validateBody(marketAssociateSubmissionDraftSchema),
     asyncHandler(catalog.update),
   );
   router.post(
@@ -120,14 +211,11 @@ export function createRunnerRouter() {
 
 export function createPartnerRouter() {
   const router = Router();
-  const auth = new AuthController();
   const commerce = new PartnerCommerceController();
-  router.post(
-    "/auth/login",
-    validateBody(loginSchema),
-    asyncHandler(auth.partnerLogin),
-  );
+  const fulfilment = new FulfilmentController();
+  const negotiations = new PartnerNegotiationController();
   router.use(requireAuth, requireAccountType(AccountType.PARTNER));
+  mountNotificationRoutes(router);
   router.get(
     "/profile",
     asyncHandler(async (req, res) => {
@@ -152,14 +240,22 @@ export function createPartnerRouter() {
   router.patch(
     "/profile",
     asyncHandler(async (req, res) => {
-      const allowed = (({ phone, avatarUrl, preferences }) => ({
-        phone,
-        avatarUrl,
-        preferences,
-      }))(req.body);
+      const { phone, avatarUrl, preferences } = req.body ?? {};
+      const set: Record<string, unknown> = {};
+      const unset: Record<string, unknown> = {};
+      if (phone !== undefined) set.phone = phone;
+      if (preferences !== undefined) set.preferences = preferences;
+      // An empty avatarUrl means "remove my photo"; $set with undefined is a no-op.
+      if (avatarUrl !== undefined) {
+        if (avatarUrl) set.avatarUrl = avatarUrl;
+        else unset.avatarUrl = "";
+      }
       const account = await User.findByIdAndUpdate(
         req.user!.sub,
-        { $set: allowed },
+        {
+          ...(Object.keys(set).length ? { $set: set } : {}),
+          ...(Object.keys(unset).length ? { $unset: unset } : {}),
+        },
         { returnDocument: "after" },
       )
         .select("-password -refreshToken")
@@ -233,7 +329,29 @@ export function createPartnerRouter() {
     validateBody(checkoutConfirmSchema),
     asyncHandler(commerce.confirm),
   );
+  // Negotiation on behalf of an assisted customer.
+  router.get("/negotiations/active-count", asyncHandler(negotiations.activeCount));
+  router.get("/customers/:customerId/negotiations", asyncHandler(negotiations.list));
+  router.get("/customers/:customerId/negotiations-active", asyncHandler(negotiations.active));
+  router.post(
+    "/customers/:customerId/negotiations",
+    validateBody(negotiationCreateSchema),
+    asyncHandler(negotiations.create),
+  );
+  router.get("/customers/:customerId/negotiations/:id", asyncHandler(negotiations.detail));
+  router.post(
+    "/customers/:customerId/negotiations/:id/offers",
+    validateBody(negotiationOfferSchema),
+    asyncHandler(negotiations.offer),
+  );
+  router.post("/customers/:customerId/negotiations/:id/accept", asyncHandler(negotiations.accept));
+  router.post("/customers/:customerId/negotiations/:id/close", asyncHandler(negotiations.close));
+
   router.get("/orders", asyncHandler(commerce.orders));
+  router.get("/fulfilment/custody", asyncHandler(fulfilment.partnerCustodyList));
+  router.get("/fulfilment/custody/:orderId", asyncHandler(fulfilment.partnerCustody));
+  router.post("/fulfilment/custody/:id/receive", validateBody(z.object({ idempotencyKey: z.string().min(8).optional() }).strict()), asyncHandler(fulfilment.receiveCustody));
+  router.post("/fulfilment/custody/:id/release", validateBody(z.object({ code: z.string().regex(/^\d{6}$/), idempotencyKey: z.string().min(8).optional() }).strict()), asyncHandler(fulfilment.releaseCustody));
   router.get("/commerce/config", asyncHandler(commerce.commerceConfig));
   router.post(
     "/orders/:orderId/payment-instructions",

@@ -18,8 +18,6 @@ declare global {
 
     interface Request {
       user?: User;
-      guestId?: string;
-      guestSessionId?: string;
       requestId?: string;
       platformContext?: {
         stateId?: string;

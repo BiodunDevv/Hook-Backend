@@ -1,7 +1,48 @@
 export type NigerianStateSeed = {
   code: string;
   name: string;
+  capitalName: string;
   sortOrder: number;
+};
+
+export const NIGERIAN_STATE_CAPITALS: Record<string, string> = {
+  AB: 'Umuahia',
+  AD: 'Yola',
+  AK: 'Uyo',
+  AN: 'Awka',
+  BA: 'Bauchi',
+  BY: 'Yenagoa',
+  BE: 'Makurdi',
+  BO: 'Maiduguri',
+  CR: 'Calabar',
+  DE: 'Asaba',
+  EB: 'Abakaliki',
+  ED: 'Benin City',
+  EK: 'Ado Ekiti',
+  EN: 'Enugu',
+  FC: 'Abuja',
+  GO: 'Gombe',
+  IM: 'Owerri',
+  JI: 'Dutse',
+  KD: 'Kaduna',
+  KN: 'Kano',
+  KT: 'Katsina',
+  KE: 'Birnin Kebbi',
+  KO: 'Lokoja',
+  KW: 'Ilorin',
+  LA: 'Ikeja',
+  NA: 'Lafia',
+  NI: 'Minna',
+  OG: 'Abeokuta',
+  ON: 'Akure',
+  OS: 'Osogbo',
+  OY: 'Ibadan',
+  PL: 'Jos',
+  RI: 'Port Harcourt',
+  SO: 'Sokoto',
+  TA: 'Jalingo',
+  YO: 'Damaturu',
+  ZA: 'Gusau',
 };
 
 export const NIGERIAN_STATES: NigerianStateSeed[] = [
@@ -42,6 +83,11 @@ export const NIGERIAN_STATES: NigerianStateSeed[] = [
   ['TA', 'Taraba'],
   ['YO', 'Yobe'],
   ['ZA', 'Zamfara'],
-].map(([code, name], index) => ({ code, name, sortOrder: index + 1 }));
+].map(([code, name], index) => ({
+  code,
+  name,
+  capitalName: NIGERIAN_STATE_CAPITALS[code],
+  sortOrder: index + 1,
+}));
 
 export const DEFAULT_OPERATIONAL_STATE_CODE = 'LA';

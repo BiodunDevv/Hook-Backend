@@ -13,8 +13,8 @@ This matrix is the reviewed authorization contract for the Phase 2 platform rout
 | Markets | `markets.view` | `markets.manage`, `markets.assign_hub` | State and preferred Hub |
 | Dispatch Hubs | `hubs.view` | `hubs.manage`, `hubs.assign_markets` | State and Hub |
 | Hook Partners | `partners.view` | `partners.manage` | Partner State; Partner portal is self-only |
-| Runners | `runners.view` | `runners.manage`, `runners.assign` | Any intersecting Runner State; Runner portal is self-only |
-| Runner assignments | `runners.assign` | `runners.assign` | Market State and preferred Hub |
+| Market Associates | `runners.view` | `runners.manage`, `runners.assign` | Any intersecting Market Associate State; Market Associate portal is self-only |
+| Market Associate assignments | `runners.assign` | `runners.assign` | Market State and preferred Hub |
 | Audit records | `audit.view` | No update/delete route | Requester's authorized scope |
 | Public-ID counters | Super Admin | Super Admin with mandatory reason | Global governance |
 
@@ -39,7 +39,7 @@ This matrix is the reviewed authorization contract for the Phase 2 platform rout
 - `SUPER_ADMIN` bypasses individual permission-key checks but not authentication, account status, or route validation.
 - Other roles are evaluated from active Role records on every authenticated request. Token claims do not freeze permissions.
 - State and Hub headers are context requests, not grants. `platformContext` rejects an unauthorized context before controllers execute.
-- Runner and Partner routers require their exact account type and resolve only the authenticated profile.
+- Market Associate and Partner routers require their exact account type and resolve only the authenticated profile.
 
 ## Findings
 

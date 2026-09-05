@@ -4,6 +4,7 @@ import { BaseEntity, createModel, createSchema } from "@models/base.model";
 export interface Payment extends BaseEntity {
   publicId?: string;
   orderId?: string;
+  fulfilmentGroupId?: string;
   giftId?: string;
   resourceType: "order" | "gift";
   transactionRef: string;
@@ -38,13 +39,15 @@ export interface Payment extends BaseEntity {
   providerEventId?: string;
   authorizationUrl?: string;
   accessCode?: string;
+  activeAttemptId?: string;
   commerceMigrationVersion?: number;
   legacyProvider?: string;
 }
 
 const PaymentSchema = createSchema<Payment>({
   publicId: { type: String, unique: true, sparse: true, index: true },
-  orderId: { type: String, unique: true, sparse: true, index: true },
+  orderId: { type: String, sparse: true, index: true },
+  fulfilmentGroupId: { type: String, unique: true, sparse: true, index: true },
   giftId: { type: String, unique: true, sparse: true, index: true },
   resourceType: {
     type: String,
@@ -96,6 +99,7 @@ const PaymentSchema = createSchema<Payment>({
   providerEventId: { type: String, index: true, sparse: true },
   authorizationUrl: { type: String },
   accessCode: { type: String },
+  activeAttemptId: { type: String, index: true, sparse: true },
   commerceMigrationVersion: { type: Number, index: true },
   legacyProvider: { type: String },
   deletedAt: { type: Date },

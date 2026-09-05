@@ -6,15 +6,15 @@ Express request context -> authentication/session validation -> live RBAC -> sta
 
 ## Admin
 
-The source lives under `app/(admin)/dashboard`; public URLs remain `/dashboard/*`. It retains valid operations surfaces and adds Administration, Markets, Hubs, Partners, and Runners. State and Hub selectors send requested context headers. Staff roles share this shell and receive permission-aware navigation.
+The source lives under `app/(admin)/dashboard`; public URLs remain `/dashboard/*`. It retains valid operations surfaces and adds Administration, Markets, Hubs, Partners, and Market Associates. State and Hub selectors send requested context headers. Staff roles share this shell and receive permission-aware navigation.
 
-## Runner
+## Market Associate
 
-Source lives under `app/(runner)/runner`. `/runner/login`, dashboard, assigned Markets, profile, and security use a Runner-only backend login and account-type guard.
+Source lives under `app/(market-associate)/market-associate`. The shared `/auth/login` screen routes Market Associate identities to `/market-associate/dashboard`; assigned Markets, profile, and security remain protected by the Market Associate account-type guard.
 
 ## Partner
 
-Source lives under `app/(partner)/partner`. `/partner/login`, dashboard, profile, location, and security use a Partner-only backend login and account-type guard.
+Source lives under `app/(partner)/partner`. The shared `/auth/login` screen routes Partner identities to `/partner/dashboard`; profile, location, and security remain protected by the Partner account-type guard.
 
 ## Shopper
 

@@ -1,11 +1,11 @@
 import { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { jwtSecret } from '@config/env';
-import { AccountStatus, AccountType, ScopeType, UserRole } from '@lib/constants';
+import { AccountType, ScopeType, UserRole } from '@lib/constants';
+import { isActiveAccount } from '@lib/account-state';
 import { AccountSession } from '@models/platform/session.model';
 import { User } from '@models/users/user.model';
 import { resolveAccessContext } from '@services/access-control.service';
-import { resolveGuestSession } from '@services/guest-session.service';
 import { HttpError } from '@utils/http';
 
 interface TokenPayload {
@@ -16,32 +16,74 @@ interface TokenPayload {
   sid?: string;
 }
 
+/**
+ * TEMPORARY diagnostic for investigating the partner-cart 401 reports.
+ * Logs only on the failing branch, dev-only, same shape as the existing
+ * slow_request logger. Remove once the root cause is confirmed and fixed.
+ */
+function logAuthFailure(req: Request, reason: string, extra?: Record<string, unknown>) {
+  if (process.env.NODE_ENV === 'production') return;
+  console.warn(JSON.stringify({
+    event: 'auth_401',
+    requestId: req.requestId,
+    method: req.method,
+    route: req.route?.path || req.path,
+    reason,
+    ...extra,
+  }));
+}
+
 async function authenticateToken(token: string, req: Request) {
   let payload: TokenPayload;
   try {
     payload = jwt.verify(token, jwtSecret()) as TokenPayload;
-  } catch {
+  } catch (error) {
+    logAuthFailure(req, 'jwt_verify_failed', {
+      jwtError: error instanceof Error ? error.name : String(error),
+      // Last 12 chars only — enough to correlate requests without logging a usable token.
+      tokenTail: token.slice(-12),
+    });
     throw new HttpError(401, 'Invalid or expired token', undefined, 'TOKEN_INVALID');
   }
   if (!payload.sid) {
+    logAuthFailure(req, 'missing_sid', { sub: payload.sub });
     throw new HttpError(401, 'Legacy session expired. Please sign in again.', undefined, 'TOKEN_INVALID');
   }
   const [session, user] = await Promise.all([
-    AccountSession.findById(payload.sid).lean(),
-    User.findById(payload.sub).lean(),
+    AccountSession.findById(payload.sid).select('revokedAt expiresAt').lean(),
+    User.findById(payload.sub)
+      .select('email role publicId accountType accountStatus scopeType assignedStateIds assignedHubIds permissions isActive')
+      .lean(),
   ]);
   if (!session || session.revokedAt || session.expiresAt <= new Date()) {
+    logAuthFailure(req, !session ? 'session_not_found' : session.revokedAt ? 'session_revoked' : 'session_expired', {
+      sid: payload.sid,
+      sub: payload.sub,
+      revokedAt: session?.revokedAt,
+      expiresAt: session?.expiresAt,
+      now: new Date().toISOString(),
+    });
     throw new HttpError(401, 'Session is no longer active', undefined, 'TOKEN_INVALID');
   }
-  if (!user || !user.isActive || user.accountStatus !== AccountStatus.ACTIVE) {
+  if (!user || !isActiveAccount(user)) {
+    logAuthFailure(req, !user ? 'user_not_found' : 'account_inactive', {
+      sid: payload.sid,
+      sub: payload.sub,
+      accountStatus: user?.accountStatus,
+      isActive: user?.isActive,
+    });
     throw new HttpError(401, 'Account is not active', undefined, 'TOKEN_INVALID');
   }
+
+  // Older shopper records may predate the accountType field.
+  const accountType = user.accountType
+    || (user.role === UserRole.SHOPPER ? AccountType.CUSTOMER : undefined);
 
   req.user = {
     sub: payload.sub,
     email: user.email,
     role: user.role,
-    accountType: user.accountType,
+    accountType,
     publicId: user.publicId,
     permissions: [],
     roleKeys: [],
@@ -51,8 +93,8 @@ async function authenticateToken(token: string, req: Request) {
     sid: payload.sid,
   };
 
-  if (user.accountType === AccountType.STAFF) {
-    const access = await resolveAccessContext(user._id.toString());
+  if (accountType === AccountType.STAFF) {
+    const access = await resolveAccessContext(user._id.toString(), user);
     Object.assign(req.user, {
       permissions: access.permissions,
       roleKeys: access.roleKeys,
@@ -66,6 +108,7 @@ async function authenticateToken(token: string, req: Request) {
 export async function requireAuth(req: Request, _res: Response, next: NextFunction) {
   const [scheme, token] = (req.header('authorization') || '').split(' ');
   if (scheme !== 'Bearer' || !token) {
+    logAuthFailure(req, 'no_bearer_token', { scheme: scheme || null });
     return next(new HttpError(401, 'Authentication token required', undefined, 'AUTHENTICATION_REQUIRED'));
   }
   try {
@@ -87,24 +130,10 @@ export async function optionalAuth(req: Request, _res: Response, next: NextFunct
   next();
 }
 
-export async function optionalCustomerIdentity(req: Request, res: Response, next: NextFunction) {
-  const guestToken = req.header('x-guest-session')?.trim();
-  if (guestToken) {
-    try {
-      const guest = await resolveGuestSession(guestToken);
-      req.guestId = guest.publicId;
-      req.guestSessionId = guest.id;
-    } catch (error) {
-      return next(error);
-    }
-  }
-  return optionalAuth(req, res, next);
-}
-
 export function requireCustomerIdentity(req: Request, res: Response, next: NextFunction) {
-  optionalCustomerIdentity(req, res, () => {
-    if (req.user?.accountType === AccountType.CUSTOMER || req.guestSessionId) return next();
-    return next(new HttpError(401, 'Customer or guest session required', undefined, 'AUTHENTICATION_REQUIRED'));
+  requireAuth(req, res, () => {
+    if (req.user?.accountType === AccountType.CUSTOMER) return next();
+    return next(new HttpError(403, 'Customer account required', undefined, 'ACCESS_DENIED'));
   });
 }
 

@@ -27,7 +27,7 @@ All API routes are under `/api/v1`.
 - Customers/users and staff
 - Categories and commercial catalog
 - Orders
-- Runners (persisted through legacy `field_agent` compatibility)
+- Market Associates (persisted through legacy `field_agent` compatibility)
 - Support deletion requests and checkout analytics
 - Finance, refunds, escrow ledger, reconciliation, audit
 - Negotiations, reports, settings

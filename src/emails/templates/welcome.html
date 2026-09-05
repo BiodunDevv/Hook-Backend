@@ -1,2 +1,34 @@
 <!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>{{emailStyles}}</style></head><body><div class="wrap"><div class="card"><div class="brand">hook<span class="brand-dot">.</span></div><div class="icon">✓</div><h1>Welcome to Hook</h1><p class="lead">Hi {{name}}, your Hook account is ready. You can now discover products, negotiate better prices, and manage orders from your account.</p><p style="text-align:center"><a class="button" href="{{appUrl}}">Open Hook</a></p></div><p class="footer">Need help? Contact {{supportEmail}}</p></div></body></html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      {{emailStyles}}
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <div class="banner">
+          <div class="brand">hook<span class="brand-dot">.</span></div>
+          <p class="greeting">Hello {{name}}</p>
+          <h1>Welcome to Hook</h1>
+        </div>
+        <div class="body">
+          <p class="lead">
+            Your Hook account is ready. You can now discover products, negotiate
+            better prices, and manage orders from your account.
+          </p>
+          <p style="text-align: center">
+            <a class="button" href="{{appUrl}}">Open Hook</a>
+          </p>
+        </div>
+      </div>
+      <p class="footer">
+        <span class="footer-brand">hook<span>.</span></span
+        ><br />Need help? Contact {{supportEmail}}
+      </p>
+    </div>
+  </body>
+</html>

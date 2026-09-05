@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 export type ErrorCode =
   | 'VALIDATION_ERROR'
   | 'AUTHENTICATION_REQUIRED'
+  | 'ACCOUNT_PORTAL_MISMATCH'
   | 'INVALID_CREDENTIALS'
   | 'TOKEN_INVALID'
   | 'ACCESS_DENIED'
@@ -21,6 +22,10 @@ export type ErrorCode =
   | 'PRODUCT_PUBLICATION_REQUIREMENTS_NOT_MET'
   | 'PRODUCT_PRICING_INVALID'
   | 'NEGOTIATION_DISABLED'
+  | 'ACTIVE_NEGOTIATION_EXISTS'
+  | 'NEGOTIATION_EXPIRED'
+  | 'OFFER_LIMIT_REACHED'
+  | 'QUOTE_EXPIRED'
   | 'NEGOTIATION_OFFER_LIMIT_REACHED'
   | 'NEGOTIATION_QUOTE_EXPIRED'
   | 'NEGOTIATION_OWNERSHIP_REQUIRED'
@@ -35,6 +40,7 @@ export type ErrorCode =
   | 'EMAIL_VERIFICATION_REQUIRED'
   | 'ADDRESS_OUTSIDE_COVERAGE'
   | 'ADDRESS_STATE_MISMATCH'
+  | 'ADDRESS_LGA_MISMATCH'
   | 'CHECKOUT_STATE_UNAVAILABLE'
   | 'CHECKOUT_PREVIEW_INVALID'
   | 'CHECKOUT_PREVIEW_EXPIRED'
@@ -48,11 +54,33 @@ export type ErrorCode =
   | 'PAYMENT_INITIALIZATION_NOT_ALLOWED'
   | 'PAYMENT_PROVIDER_UNAVAILABLE'
   | 'PAYMENT_PROVIDER_ERROR'
+  | 'PAYMENT_PROVIDER_NOT_SUPPORTED'
+  | 'PAYMENT_CONFIGURATION_ERROR'
+  | 'PAYMENT_ALREADY_CONFIRMED'
+  | 'PAYMENT_ATTEMPT_IN_PROGRESS'
+  | 'PAYMENT_LINK_EXPIRED'
+  | 'FULFILMENT_GROUP_REQUIRED'
   | 'PAYMENT_RECORD_MISSING'
   | 'PAYMENT_EVIDENCE_MISMATCH'
   | 'WEBHOOK_SIGNATURE_INVALID'
   | 'POD_CONFIRMATION_REQUIRED'
-  | 'POD_OVERRIDE_REQUIRED';
+  | 'POD_OVERRIDE_REQUIRED'
+  | 'ORDER_NOT_COMPLETE'
+  | 'HUB_MISMATCH'
+  | 'PAYMENT_REQUIRED'
+  | 'PAYMENT_NOT_CAPTURED'
+  | 'PROVIDER_NOT_READY'
+  | 'CUSTODY_EXPIRED'
+  | 'RETURN_WINDOW_CLOSED'
+  | 'REFUND_LIMIT_EXCEEDED'
+  | 'MARKET_VENDOR_INVALID'
+  | 'MARKET_VENDOR_REQUIRED'
+  | 'MARKET_VENDOR_DUPLICATE'
+  | 'VENDOR_COLLECTION_EXISTS'
+  | 'VENDOR_PAYMENT_MISSING'
+  | 'AVAILABILITY_CHECK_NOT_PENDING'
+  | 'ITEMS_NOT_VERIFIED'
+  | 'ITEMS_NOT_CONFIRMED'
 
 export class HttpError extends Error {
   constructor(
@@ -102,19 +130,21 @@ export function asyncHandler(
   };
 }
 
-export function sendSuccess<T>(res: Response, data: T, _message?: string) {
+export function sendSuccess<T>(res: Response, data: T, message?: string) {
   const req = res.req;
   res.json({
     success: true,
+    ...(message ? { message } : {}),
     data,
     meta: responseMeta(req.requestId || randomUUID(), extractPagination(data)),
   });
 }
 
-export function sendCreated<T>(res: Response, data: T, _message?: string) {
+export function sendCreated<T>(res: Response, data: T, message?: string) {
   const req = res.req;
   res.status(201).json({
     success: true,
+    ...(message ? { message } : {}),
     data,
     meta: responseMeta(req.requestId || randomUUID(), extractPagination(data)),
   });

@@ -3,7 +3,7 @@
 The active development workflow does not run incremental migrations. `npm run seed` drops the configured MongoDB database once, then recreates the complete Phase 1-4 baseline in this order:
 
 1. Base operational fixtures and accounts.
-2. Phase 2 identity, RBAC, geography, Market, Hub, Partner, and Runner foundations.
+2. Phase 2 identity, RBAC, geography, Market, Hub, Partner, and Market Associate foundations.
 3. Phase 3 commercial catalog, variants, submissions, and negotiation fixtures.
 4. Phase 4 canonical commerce fields, policies, settings, coverage, customer, and address fixtures.
 

@@ -2,7 +2,7 @@
 
 Use `guide.docx` and the Phase 1 documents as authoritative context.
 
-Implement the minimum production foundation for States, Markets, Hook Partners, Runners, Hook Dispatch Hubs, external Logistics Providers, and Paystack without reviving Booth, Vendor portal, or internal Fleet semantics.
+Implement the minimum production foundation for States, Markets, Hook Partners, Market Associates, Hook Dispatch Hubs, external Logistics Providers, and Paystack without reviving Booth, Vendor portal, or internal Fleet semantics.
 
 Before implementation:
 

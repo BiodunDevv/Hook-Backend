@@ -17,7 +17,8 @@ export type ProviderTransaction = {
 };
 
 export interface PaymentProvider {
-  readonly name: "paystack";
+  readonly name: "paystack" | "opay";
+  readiness(): { configured: boolean; mode: "test" | "live"; reason?: string };
   initialize(
     input: ProviderInitializeInput,
   ): Promise<{
@@ -26,6 +27,7 @@ export interface PaymentProvider {
     reference: string;
   }>;
   verify(reference: string): Promise<ProviderTransaction>;
+  refund(input: { reference: string; amountMinor: number; reason?: string }): Promise<{ providerReference: string }>;
   parseWebhook(
     rawBody: Buffer,
     signature: string,

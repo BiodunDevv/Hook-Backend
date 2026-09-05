@@ -23,6 +23,14 @@ export class PaystackProvider implements PaymentProvider {
     return value;
   }
 
+  readiness() {
+    return {
+      configured: Boolean(process.env.PAYSTACK_SECRET_KEY),
+      mode: (String(process.env.PAYSTACK_SECRET_KEY || "").startsWith("sk_live_") ? "live" : "test") as "live" | "test",
+      reason: process.env.PAYSTACK_SECRET_KEY ? undefined : "Secret key is missing",
+    };
+  }
+
   async initialize(input: ProviderInitializeInput) {
     const response = await this.request("/transaction/initialize", {
       method: "POST",
@@ -69,6 +77,22 @@ export class PaystackProvider implements PaymentProvider {
       paidAt: data.paid_at ? new Date(data.paid_at) : undefined,
       raw: data,
     };
+  }
+
+  async refund(input: { reference: string; amountMinor: number; reason?: string }) {
+    const response = await this.request('/refund', {
+      method: 'POST',
+      body: JSON.stringify({
+        transaction: input.reference,
+        amount: String(input.amountMinor),
+        customer_note: input.reason,
+        merchant_note: 'Hook fulfilment refund',
+      }),
+    });
+    const data = response.data as Record<string, any>;
+    const providerReference = String(data?.id || data?.transaction || input.reference);
+    if (!providerReference) throw new HttpError(502, 'Payment provider returned an invalid refund response', undefined, 'PAYMENT_PROVIDER_ERROR');
+    return { providerReference };
   }
 
   parseWebhook(rawBody: Buffer, signature: string) {

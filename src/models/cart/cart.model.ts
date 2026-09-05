@@ -2,15 +2,13 @@ import { BaseEntity, createModel, createSchema } from "@models/base.model";
 
 export interface Cart extends BaseEntity {
   publicId?: string;
-  ownerType?: "guest" | "customer" | "partner_assisted";
+  ownerType?: "customer" | "partner_assisted";
   customerId?: string;
-  guestSessionId?: string;
   partnerId?: string;
   assistedCustomerId?: string;
   version?: number;
   status?: "active" | "converted" | "checked_out" | "abandoned";
   userId?: string;
-  guestId?: string;
   items?: any[];
   subtotal: number;
   deliveryFee: number;
@@ -27,11 +25,10 @@ const CartSchema = createSchema<Cart>({
   publicId: { type: String, unique: true, sparse: true, index: true },
   ownerType: {
     type: String,
-    enum: ["guest", "customer", "partner_assisted"],
+    enum: ["customer", "partner_assisted"],
     index: true,
   },
   customerId: { type: String, index: true, sparse: true },
-  guestSessionId: { type: String, index: true, sparse: true },
   partnerId: { type: String, index: true, sparse: true },
   assistedCustomerId: { type: String, index: true, sparse: true },
   version: { type: Number, default: 1, min: 1 },
@@ -42,7 +39,6 @@ const CartSchema = createSchema<Cart>({
     index: true,
   },
   userId: { type: String, index: true },
-  guestId: { type: String, index: true },
   subtotal: { type: Number, default: 0 },
   deliveryFee: { type: Number, default: 0 },
   total: { type: Number, default: 0 },
@@ -55,9 +51,8 @@ const CartSchema = createSchema<Cart>({
 });
 
 CartSchema.index({ userId: 1, isCheckedOut: 1 });
-CartSchema.index({ guestId: 1, isCheckedOut: 1 });
+CartSchema.index({ customerId: 1, status: 1, isCheckedOut: 1 });
 CartSchema.index({ ownerType: 1, customerId: 1, status: 1 });
-CartSchema.index({ ownerType: 1, guestSessionId: 1, status: 1 });
 CartSchema.index({
   ownerType: 1,
   partnerId: 1,

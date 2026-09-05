@@ -4,7 +4,6 @@ import { MongoRepository } from '@lib/mongo-repository';
 import { AdminAuditLog } from '@models/admin/admin-audit-log.model';
 import { Booth } from '@models/booths/booth.model';
 import { Category } from '@models/categories/category.model';
-import { FieldAgent } from '@models/field-agents/field-agent.model';
 import { Logistics } from '@models/logistics/logistics.model';
 import { Negotiation } from '@models/negotiations/negotiation.model';
 import { OperationalState } from '@models/operations/operational-state.model';
@@ -33,8 +32,7 @@ export const adminRepos = {
   logistics: () => new MongoRepository(Logistics, { order: () => adminRepos.orders(), driver: () => adminRepos.users() }),
   negotiations: () => new MongoRepository(Negotiation, { user: () => adminRepos.users(), product: () => adminRepos.products() }),
   settlements: () => new MongoRepository(Settlement, { vendor: () => adminRepos.vendors(), order: () => adminRepos.orders() }),
-  booths: () => new MongoRepository(Booth, { fieldAgent: () => adminRepos.fieldAgents() }),
-  fieldAgents: () => new MongoRepository(FieldAgent, { agent: () => adminRepos.users() }),
+  booths: () => new MongoRepository(Booth),
   auditLogs: () => new MongoRepository(AdminAuditLog),
   operationalStates: () => new MongoRepository(OperationalState),
   fulfilments: () => new MongoRepository(VendorFulfilment, { vendor: () => adminRepos.vendors(), order: () => adminRepos.orders() }),

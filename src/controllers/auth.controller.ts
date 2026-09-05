@@ -9,7 +9,6 @@ import { Order } from '@models/orders/order.model';
 import { User } from '@models/users/user.model';
 import { AuthService } from '@services/auth.service';
 import { sendCreated, sendSuccess } from '@utils/http';
-import { AccountType } from '@lib/constants';
 
 export class AuthController {
   private readonly auth = new AuthService(
@@ -33,33 +32,21 @@ export class AuthController {
   };
 
   login = async (req: Request, res: Response) => {
-    sendSuccess(res, await this.auth.login(req.body.email, req.body.password, { guestId: req.guestSessionId }));
+    const requestedPortal = req.header('x-hook-portal');
+    const portal = requestedPortal === 'staff' || requestedPortal === 'customer'
+      ? requestedPortal
+      : 'auto';
+    sendSuccess(res, await this.auth.login(req.body.email, req.body.password, portal));
   };
 
   googleLogin = async (req: Request, res: Response) => {
     sendSuccess(res, await this.auth.loginWithGoogle({
       idToken: req.body.idToken,
-      guestId: req.guestSessionId,
     }));
   };
 
-  adminLogin = async (req: Request, res: Response) => {
-    sendSuccess(
-      res,
-      await this.auth.login(req.body.email, req.body.password, { adminOnly: true }),
-    );
-  };
-
-  runnerLogin = async (req: Request, res: Response) => {
-    sendSuccess(res, await this.auth.login(req.body.email, req.body.password, {
-      expectedAccountType: AccountType.RUNNER,
-    }));
-  };
-
-  partnerLogin = async (req: Request, res: Response) => {
-    sendSuccess(res, await this.auth.login(req.body.email, req.body.password, {
-      expectedAccountType: AccountType.PARTNER,
-    }));
+  appleLogin = async (req: Request, res: Response) => {
+    sendSuccess(res, await this.auth.loginWithApple(req.body));
   };
 
   profile = async (req: Request, res: Response) => {
@@ -75,7 +62,7 @@ export class AuthController {
   };
 
   startSignup = async (req: Request, res: Response) => {
-    sendCreated(res, await this.auth.startSignup(req.body.email, req.body.password, req.guestSessionId), 'Verification code sent to your email');
+    sendCreated(res, await this.auth.startSignup(req.body.email, req.body.password), 'Verification code sent to your email');
   };
 
   verifySignup = async (req: Request, res: Response) => {
@@ -87,7 +74,7 @@ export class AuthController {
   };
 
   completeSignup = async (req: Request, res: Response) => {
-    sendCreated(res, await this.auth.completeSignup(req.body.signupSessionToken, { ...req.body, guestId: req.guestSessionId }), 'Account created successfully');
+    sendCreated(res, await this.auth.completeSignup(req.body.signupSessionToken, req.body), 'Account created successfully');
   };
 
   completeProfile = async (req: Request, res: Response) => {

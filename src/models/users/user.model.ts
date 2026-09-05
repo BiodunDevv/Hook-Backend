@@ -5,8 +5,9 @@ export interface User extends BaseEntity {
   email: string;
   phone?: string;
   password?: string;
-  authProvider?: 'password' | 'google';
+  authProvider?: 'password' | 'google' | 'apple';
   googleId?: string;
+  appleId?: string;
   firstName: string;
   lastName: string;
   role: UserRole;
@@ -43,8 +44,9 @@ const UserSchema = createSchema<User>({
   email: { type: String, required: true, unique: true, trim: true, lowercase: true },
   phone: { type: String, sparse: true, trim: true },
   password: { type: String },
-  authProvider: { type: String, enum: ['password', 'google'], default: 'password', index: true },
+  authProvider: { type: String, enum: ['password', 'google', 'apple'], default: 'password', index: true },
   googleId: { type: String, sparse: true, unique: true, index: true },
+  appleId: { type: String, sparse: true, unique: true, index: true },
   firstName: { type: String, default: '' },
   lastName: { type: String, default: '' },
   role: { type: String, enum: Object.values(UserRole), default: UserRole.SHOPPER, index: true },
@@ -81,6 +83,5 @@ const UserSchema = createSchema<User>({
 UserSchema.index({ role: 1, isActive: 1 });
 UserSchema.index({ role: 1, operationalStateCode: 1 });
 UserSchema.index({ accountType: 1, accountStatus: 1 });
-UserSchema.index({ roleIds: 1, assignedStateIds: 1, assignedHubIds: 1 });
 
 export const User = createModel<User>('User', UserSchema);

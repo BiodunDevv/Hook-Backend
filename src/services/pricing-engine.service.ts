@@ -8,6 +8,8 @@ export interface PricingDecisionInput {
   offerNumber: number;
   maximumOffers: number;
   currency: string;
+  previousCustomerOfferMinor?: number;
+  previousCounterPriceMinor?: number;
 }
 
 export interface PricingDecision {
@@ -34,7 +36,7 @@ export class PricingEngine {
     if (input.currency !== 'NGN') {
       throw new HttpError(400, 'This product cannot be negotiated in the requested currency', undefined, 'PRICING_BOUNDARY_VIOLATION');
     }
-    if (input.maximumOffers !== 3 || input.offerNumber < 1 || input.offerNumber > input.maximumOffers) {
+    if (input.maximumOffers < 1 || input.maximumOffers > 10 || input.offerNumber < 1 || input.offerNumber > input.maximumOffers) {
       throw new HttpError(409, 'Negotiation offer limit reached', undefined, 'NEGOTIATION_OFFER_LIMIT_REACHED');
     }
     const configuredFloor = input.minimumNegotiablePriceMinor;
@@ -46,6 +48,25 @@ export class PricingEngine {
     const allowedRange = input.sellingPriceMinor - floor;
     const threshold = input.sellingPriceMinor - Math.floor((allowedRange * input.offerNumber) / input.maximumOffers);
     const remainingOffers = input.maximumOffers - input.offerNumber;
+    const customerDidNotImprove = Boolean(
+      input.previousCustomerOfferMinor
+      && input.customerOfferMinor <= input.previousCustomerOfferMinor,
+    );
+    if (customerDidNotImprove) {
+      if (input.offerNumber === input.maximumOffers) {
+        return {
+          decision: 'DECLINE',
+          reasonCode: 'FINAL_OFFER_DID_NOT_IMPROVE',
+          remainingOffers: 0,
+        };
+      }
+      return {
+        decision: 'COUNTER',
+        counterPriceMinor: input.previousCounterPriceMinor || threshold,
+        reasonCode: 'CUSTOMER_OFFER_DID_NOT_IMPROVE',
+        remainingOffers,
+      };
+    }
     if (input.customerOfferMinor >= threshold) {
       return {
         decision: 'ACCEPT',

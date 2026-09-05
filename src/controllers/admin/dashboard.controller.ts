@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { isValidObjectId } from 'mongoose';
 import {
   LogisticsStatus,
   NegotiationStatus,
@@ -8,6 +9,9 @@ import {
 import { mongoBetween, mongoIn } from '@lib/mongo-repository';
 import { sendSuccess } from '@utils/http';
 import { adminRepos } from './admin.helpers';
+import { adminDashboardCache } from '@lib/ttl-cache';
+import { User } from '@models/users/user.model';
+import { MarketAssociateProfile } from '@models/platform/operations-accounts.model';
 
 const activeOrderStatuses = [
   OrderStatus.PENDING,
@@ -26,6 +30,15 @@ async function sum(repo: ReturnType<typeof adminRepos.orders>, match: Record<str
 
 export class AdminDashboardController {
   dashboard = async (_req: Request, res: Response) => {
+    const cacheKey = JSON.stringify({
+      stateId: _req.platformContext?.stateId || null,
+      hubId: _req.platformContext?.hubId || null,
+    });
+    const cached = adminDashboardCache.get(cacheKey);
+    if (cached) {
+      sendSuccess(res, cached);
+      return;
+    }
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
     const yesterdayStart = new Date(todayStart);
@@ -39,7 +52,6 @@ export class AdminDashboardController {
     const products = adminRepos.products();
     const orders = adminRepos.orders();
     const logistics = adminRepos.logistics();
-    const runners = adminRepos.fieldAgents();
     const negotiations = adminRepos.negotiations();
 
     const [
@@ -47,7 +59,7 @@ export class AdminDashboardController {
       yesterdayActiveOrders,
       totalNegotiations,
       acceptedNegotiations,
-      activeRunners,
+      activeMarketAssociates,
       publishedProducts,
       revenue,
       grossMerchandise,
@@ -64,7 +76,7 @@ export class AdminDashboardController {
       orders.count({ where: { createdAt: mongoBetween(yesterdayStart, todayStart), status: mongoIn(activeOrderStatuses) } }),
       negotiations.count(),
       negotiations.count({ where: { status: NegotiationStatus.ACCEPTED } }),
-      runners.count({ where: { isActive: true } }),
+      MarketAssociateProfile.countDocuments({ status: 'active' }),
       products.count({ where: { status: ProductStatus.APPROVED } }),
       sum(orders, { status: OrderStatus.DELIVERED }, 'total'),
       sum(orders, {}, 'total'),
@@ -124,7 +136,7 @@ export class AdminDashboardController {
     const growth = (current: number, previous: number) => (
       previous ? Number((((current - previous) / previous) * 100).toFixed(1)) : current ? 100 : 0
     );
-    sendSuccess(res, {
+    const response = {
       grossMerchandise: { value: grossMerchandise, change: growth(currentMonthGmv, previousMonthGmv), caption: 'vs last month' },
       totalRevenue: { value: revenue, change: growth(currentMonthRevenue, previousMonthRevenue), caption: 'vs last month' },
       activeOrders: { value: activeOrders, change: growth(activeOrders, yesterdayActiveOrders), caption: 'vs last day' },
@@ -143,9 +155,11 @@ export class AdminDashboardController {
         change: 0,
         caption: `from ${Number(productRatings?.reviews || 0).toLocaleString('en')} reviews`,
       },
-      activeRunners: { value: activeRunners, change: 0, caption: 'market-side operations' },
+      activeMarketAssociates: { value: activeMarketAssociates, change: 0, caption: 'market-side operations' },
       publishedProducts: { value: publishedProducts, change: 0, caption: 'commercially approved' },
-    });
+    };
+    adminDashboardCache.set(cacheKey, response);
+    sendSuccess(res, response);
   };
 
   analytics = async (_req: Request, res: Response) => {
@@ -164,11 +178,27 @@ export class AdminDashboardController {
       start.setHours(0, 0, 0, 0);
     }
 
-    const orders = await adminRepos.orders().find({
-      where: { createdAt: mongoBetween(start, now) },
-      relations: { user: true },
-      order: { createdAt: 'ASC' },
-    });
+    const [orders, negotiations] = await Promise.all([
+      adminRepos.orders().find({
+        where: { createdAt: mongoBetween(start, now) },
+        select: 'createdAt total userId',
+        order: { createdAt: 'ASC' },
+      }),
+      adminRepos.negotiations().find({
+        where: { createdAt: mongoBetween(start, now) },
+        select: 'status sellingPrice acceptedPrice counterPrice createdAt',
+        order: { createdAt: 'ASC' },
+      }),
+    ]);
+    const userIds = [...new Set((orders as any[]).map((order) => String(order.userId || '')).filter(Boolean))];
+    const userFilters = userIds.flatMap((id) => [
+      ...(isValidObjectId(id) ? [{ _id: id }] : []),
+      { publicId: id },
+    ]);
+    const users = userFilters.length
+      ? await User.find({ $or: userFilters }).select('publicId createdAt').lean({ virtuals: true })
+      : [];
+    const userMap = new Map((users as any[]).flatMap((user) => [[String(user._id), user], [String(user.publicId), user]]));
 
     const buckets = new Map<string, {
       key: string;
@@ -214,7 +244,9 @@ export class AdminDashboardController {
           : `${createdAt.getFullYear()}`;
       const bucket = buckets.get(key);
       if (!bucket) continue;
-      const userCreatedAt = order.user?.createdAt ? new Date(order.user.createdAt) : undefined;
+      const userCreatedAt = userMap.get(String(order.userId))?.createdAt
+        ? new Date(userMap.get(String(order.userId)).createdAt)
+        : undefined;
       const isNewUser = userCreatedAt ? userCreatedAt.toISOString().slice(0, 10) === createdAt.toISOString().slice(0, 10) : false;
       const total = Number(order.total || 0);
       bucket.orders += 1;
@@ -226,10 +258,6 @@ export class AdminDashboardController {
     const salesTrend = Array.from(buckets.values());
     const totalRevenue = salesTrend.reduce((acc, item) => acc + item.revenue, 0);
     const totalOrders = salesTrend.reduce((acc, item) => acc + item.orders, 0);
-    const negotiations = await adminRepos.negotiations().find({
-      where: { createdAt: mongoBetween(start, now) },
-      order: { createdAt: 'ASC' },
-    });
     const negotiationCounts = {
       active: 0,
       accepted: 0,

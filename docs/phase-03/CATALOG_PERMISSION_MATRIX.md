@@ -1,6 +1,6 @@
 # Catalog Permission Matrix
 
-| Capability | Runner | Catalog Reviewer | Commercial | Super Admin |
+| Capability | Market Associate | Catalog Reviewer | Commercial | Super Admin |
 |---|---:|---:|---:|---:|
 | Own draft/submission | Self | No | No | Oversight |
 | Review queue/detail | No | Scoped | Read | Yes |

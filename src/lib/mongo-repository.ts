@@ -11,12 +11,18 @@ type QueryOptions<T> = {
 
 type PopulateMap = Record<string, () => MongoRepository<any>>;
 
-function identifierField(model: Model<any>, identifier: unknown) {
-  if (typeof identifier !== 'string' || isValidObjectId(identifier)) return '_id';
-  for (const field of ['publicId', 'hookId', 'orderCode']) {
-    if (model.schema.path(field)) return field;
-  }
-  return '_id';
+/**
+ * A model can declare more than one id-like field (e.g. Product has both
+ * `publicId` and `hookId`, but only ever populates `hookId`) — picking just
+ * the first declared field meant a lookup by the field nobody actually
+ * writes to would silently 404. Matching against every id-like field the
+ * model has is the only way that's correct regardless of which one holds
+ * the real value.
+ */
+function identifierFields(model: Model<any>, identifier: unknown) {
+  if (typeof identifier !== 'string' || isValidObjectId(identifier)) return ['_id'];
+  const fields = ['publicId', 'hookId', 'orderCode'].filter((field) => model.schema.path(field));
+  return fields.length ? fields : ['_id'];
 }
 
 function normalizeFilter<T>(where: any | Array<any> | undefined, model: Model<T>) {
@@ -24,7 +30,12 @@ function normalizeFilter<T>(where: any | Array<any> | undefined, model: Model<T>
   const normalizeOne = (input: any) => {
     const filter: Record<string, unknown> = { ...input };
     if ('id' in filter) {
-      filter[identifierField(model, filter.id)] = filter.id;
+      const fields = identifierFields(model, filter.id);
+      if (fields.length > 1) {
+        filter.$or = fields.map((field) => ({ [field]: filter.id }));
+      } else {
+        filter[fields[0]] = filter.id;
+      }
       delete filter.id;
     }
     for (const [key, value] of Object.entries(filter)) {
@@ -138,10 +149,12 @@ export class MongoRepository<T extends { id?: string }> {
   }
 
   async update(criteria: string | any, payload: any) {
-    const filter = typeof criteria === 'string'
-      ? { [identifierField(this.model, criteria)]: criteria }
-      : normalizeFilter(criteria, this.model);
-    return this.model.updateMany(filter, { $set: payload });
+    if (typeof criteria === 'string') {
+      const fields = identifierFields(this.model, criteria);
+      const filter = fields.length > 1 ? { $or: fields.map((field) => ({ [field]: criteria })) } : { [fields[0]]: criteria };
+      return this.model.updateMany(filter, { $set: payload });
+    }
+    return this.model.updateMany(normalizeFilter(criteria, this.model), { $set: payload });
   }
 
   async delete(criteria: any) {

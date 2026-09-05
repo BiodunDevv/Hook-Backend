@@ -7,6 +7,17 @@ import { Product } from '@models/products/product.model';
 import { CatalogMediaService } from './catalog-media.service';
 import { byIdentifier } from './catalog.service';
 import { HttpError } from '@utils/http';
+import { publishRealtime } from '@services/realtime.service';
+import { CommerceSettings } from '@models/commerce/commerce.model';
+import { getLowStockThreshold } from '@services/inventory-settings.service';
+
+async function nextAvailabilityDeadline(from = new Date()) {
+  const settings = await CommerceSettings.findOne({ key: 'commerce' })
+    .select('catalogAvailabilityCheckDays')
+    .lean();
+  const days = Math.min(Math.max(Number(settings?.catalogAvailabilityCheckDays || 4), 1), 30);
+  return new Date(from.getTime() + days * 24 * 60 * 60 * 1000);
+}
 
 function versionFilter(record: any, version: number) {
   if (Number(record.catalogVersion || record.__v || 1) !== version) {
@@ -52,7 +63,7 @@ async function productRecord(identifier: string, stateIds?: string[]) {
 export class CommercialCatalogService {
   async dashboard(stateIds?: string[]) {
     const scope = stateIds?.length ? { sourceStateId: { $in: stateIds } } : {};
-    const [counts, awaitingCommercial, staleAvailability, margin] = await Promise.all([
+    const [counts, awaitingCommercial, staleAvailability, margin, awaitingPricing, awaitingNegotiationConfiguration] = await Promise.all([
       Product.aggregate([{ $match: scope }, { $group: { _id: '$status', count: { $sum: 1 } } }]),
       Product.countDocuments({ ...scope, status: ProductStatus.DRAFT, 'commercialApproval.approved': { $ne: true } }),
       Product.countDocuments({
@@ -72,13 +83,15 @@ export class CommercialCatalogService {
           },
         },
       ]),
+      Product.countDocuments({ ...scope, status: ProductStatus.DRAFT, sellingPriceMinor: { $exists: false } }),
+      Product.countDocuments({ ...scope, status: ProductStatus.DRAFT, negotiationRules: { $exists: false } }),
     ]);
     const byStatus = Object.fromEntries(counts.map((item) => [item._id, item.count]));
     return {
       awaitingCommercial,
       drafts: byStatus.draft || 0,
-      awaitingPricing: await Product.countDocuments({ ...scope, status: ProductStatus.DRAFT, sellingPriceMinor: { $exists: false } }),
-      awaitingNegotiationConfiguration: await Product.countDocuments({ ...scope, status: ProductStatus.DRAFT, negotiationRules: { $exists: false } }),
+      awaitingPricing,
+      awaitingNegotiationConfiguration,
       published: byStatus.published || 0,
       paused: byStatus.paused || 0,
       availabilityUnconfirmed: staleAvailability + (byStatus.availability_unconfirmed || 0),
@@ -142,7 +155,7 @@ export class CommercialCatalogService {
       : undefined;
     return {
       ...product,
-      id: product.publicId || product.hookId || product.id,
+      id: product.hookId || product.publicId || product.id,
       catalogVersion: product.catalogVersion || 1,
       pricing,
     };
@@ -189,7 +202,9 @@ export class CommercialCatalogService {
         );
       }
     }
-    return this.detail(updated.publicId || updated._id.toString(), stateIds);
+    const detail = await this.detail(updated.publicId || updated._id.toString(), stateIds);
+    this.publishCatalogUpdate(updated);
+    return detail;
   }
 
   async pricing(identifier: string, input: any, actorId: string, stateIds?: string[]) {
@@ -215,6 +230,7 @@ export class CommercialCatalogService {
       { returnDocument: 'after' },
     ).lean({ virtuals: true });
     if (!updated) throw new HttpError(409, 'This product was updated elsewhere', undefined, 'STALE_VERSION');
+    this.publishCatalogUpdate(updated);
     return this.internalSummary(updated);
   }
 
@@ -253,6 +269,7 @@ export class CommercialCatalogService {
       { returnDocument: 'after' },
     ).lean({ virtuals: true });
     if (!updated) throw new HttpError(409, 'This product was updated elsewhere', undefined, 'STALE_VERSION');
+    this.publishCatalogUpdate(updated);
     return this.internalSummary(updated);
   }
 
@@ -265,8 +282,9 @@ export class CommercialCatalogService {
   ) {
     const current = await productRecord(identifier, stateIds);
     let nextStatus: ProductStatus;
+    let availabilityValidUntil: Date | undefined;
     if (action === 'publish') {
-      const [submission, market, category, variants, mediaCount] = await Promise.all([
+      const [submission, market, category, variants, mediaCount, nextDeadline] = await Promise.all([
         current.sourceSubmissionId ? ProductSubmission.findById(current.sourceSubmissionId).lean() : null,
         current.marketId ? Market.findById(current.marketId).lean() : null,
         current.categoryId ? Category.findById(current.categoryId).lean() : null,
@@ -278,7 +296,9 @@ export class CommercialCatalogService {
           ],
           status: 'ready',
         }),
+        nextAvailabilityDeadline(),
       ]);
+      availabilityValidUntil = nextDeadline;
       const missing: string[] = [];
       if (!submission || submission.status !== 'approved') missing.push('approvedSubmission');
       if (!market || market.status !== 'active') missing.push('activeMarket');
@@ -312,9 +332,12 @@ export class CommercialCatalogService {
           status: nextStatus,
           ...(nextStatus === ProductStatus.PUBLISHED
             ? {
-                publishedAt: new Date(),
-                publishedBy: actorId,
-                commercialApproval: { ...(current.commercialApproval || {}), approved: true, approvedBy: actorId, approvedAt: new Date() },
+              publishedAt: new Date(),
+              publishedBy: actorId,
+              availabilityStatus: ProductAvailabilityStatus.AVAILABLE,
+              lastAvailabilityConfirmedAt: new Date(),
+              availabilityValidUntil,
+              commercialApproval: { ...(current.commercialApproval || {}), approved: true, approvedBy: actorId, approvedAt: new Date() },
               }
             : {}),
           ...(nextStatus === ProductStatus.AVAILABILITY_UNCONFIRMED
@@ -327,61 +350,188 @@ export class CommercialCatalogService {
       { returnDocument: 'after' },
     ).lean({ virtuals: true });
     if (!updated) throw new HttpError(409, 'This product was updated elsewhere', undefined, 'STALE_VERSION');
+    this.publishCatalogUpdate(updated);
     return this.internalSummary(updated);
+  }
+
+  private publishCatalogUpdate(product: any) {
+    const event = {
+      entityId: product.publicId || product._id?.toString(),
+      version: Number(product.catalogVersion || 1),
+      scope: product.sourceStateId ? { stateId: String(product.sourceStateId) } : undefined,
+    };
+    publishRealtime({ type: 'catalog.updated', entityType: 'product', ...event }, { public: true, admin: true });
+    publishRealtime({ type: 'home.updated', entityType: 'product', ...event }, { public: true, admin: true });
+    publishRealtime({ type: 'admin.dashboard.updated', ...event }, { admin: true });
   }
 }
 
-export async function publicProductRepresentation(product: any) {
-  const [category, market, state, variants, media] = await Promise.all([
-    Category.findById(product.categoryId).select('publicId name slug iconUrl').lean({ virtuals: true }),
-    Market.findById(product.marketId).select('publicId name stateId cityId').lean({ virtuals: true }),
-    OperationState.findById(product.sourceStateId).select('publicId name code').lean({ virtuals: true }),
-    ProductVariant.find({ productId: product._id.toString(), active: true, deletedAt: { $exists: false } })
-      .select('publicId sku size colour attributes mediaAssetIds')
-      .lean({ virtuals: true }),
-    CatalogMediaAsset.find({
-      $or: [
-        { publicId: { $in: product.mediaAssetIds || [] } },
-        { _id: { $in: (product.mediaAssetIds || []).filter((id: string) => /^[a-f\d]{24}$/i.test(id)) } },
-      ],
-      status: 'ready',
-    }).sort({ order: 1 }).lean({ virtuals: true }),
-  ]);
-  const mediaService = new CatalogMediaService();
-  const effectivePriceMinor = Number(product.sellingPriceMinor || 0) - Number(product.discountMinor || 0);
+type PublicCatalogPresentationOptions = { compact?: boolean };
+
+function idOf(record: any) {
+  return record?._id?.toString?.() || record?.id || '';
+}
+
+function identifierFilter(ids: string[]) {
+  const mongoIds = ids.filter((id) => /^[a-f\d]{24}$/i.test(String(id)));
   return {
-    publicId: product.publicId,
-    title: product.title,
-    slug: product.slug,
-    description: product.description,
-    media: media.map((asset) => ({
+    $or: [
+      ...(mongoIds.length ? [{ _id: { $in: mongoIds } }] : []),
+      ...(ids.length ? [{ publicId: { $in: ids } }] : []),
+    ],
+  };
+}
+
+function legacyMedia(product: any) {
+  if (!Array.isArray(product.images)) return [];
+  return product.images
+    .map((image: any) => typeof image === 'string' ? { url: image } : image)
+    .filter((image: any) => typeof image?.url === 'string' && image.url.length > 0)
+    .map((image: any) => ({
       type: 'image',
-      url: asset.deliveryType === 'external' ? asset.secureUrl : mediaService.deliveryUrl(asset),
-      width: asset.width,
-      height: asset.height,
+      url: image.url,
+      width: Number(image.width || 0),
+      height: Number(image.height || 0),
       alt: product.title,
-    })),
-    sourceState: state ? { publicId: state.publicId, name: state.name, code: state.code } : null,
-    market: market ? { publicId: market.publicId, name: market.name } : null,
-    category: category ? {
-      publicId: category.publicId,
-      name: category.name,
-      slug: category.slug,
-      iconUrl: category.iconUrl || null,
-    } : null,
-    variants: variants.map((variant: any) => ({
+    }));
+}
+
+/** Hydrates a page with one query per related collection instead of N+1 reads. */
+export async function publicProductRepresentations(products: any[], options: PublicCatalogPresentationOptions = {}) {
+  if (!products.length) return [];
+  const productIdentifiers = [...new Set(products.flatMap((product) => [idOf(product), product.publicId]).filter(Boolean).map(String))];
+  const categoryIds = [...new Set(products.map((product) => String(product.categoryId || '')).filter(Boolean))];
+  const marketIds = [...new Set(products.map((product) => String(product.marketId || '')).filter(Boolean))];
+  const stateIds = [...new Set(products.map((product) => String(product.sourceStateId || '')).filter(Boolean))];
+  const mediaIds = [...new Set(products.flatMap((product) => Array.isArray(product.mediaAssetIds) ? product.mediaAssetIds : []))];
+  const mongoMediaIds = mediaIds.filter((id: string) => /^[a-f\d]{24}$/i.test(String(id)));
+
+  const [categories, markets, states, variants, media] = await Promise.all([
+    categoryIds.length
+      ? Category.find(identifierFilter(categoryIds)).select('publicId name slug iconUrl attributeSchema').lean({ virtuals: true })
+      : Promise.resolve([]),
+    marketIds.length
+      ? Market.find(identifierFilter(marketIds)).select('publicId name stateId cityId').lean({ virtuals: true })
+      : Promise.resolve([]),
+    stateIds.length
+      ? OperationState.find(identifierFilter(stateIds)).select('publicId name code').lean({ virtuals: true })
+      : Promise.resolve([]),
+    options.compact
+      ? Promise.resolve([])
+      : ProductVariant.find({ productId: { $in: productIdentifiers }, active: true, deletedAt: { $exists: false } })
+        .select('publicId productId sku size colour attributes mediaAssetIds')
+        .lean({ virtuals: true }),
+    mediaIds.length
+      ? CatalogMediaAsset.find({
+        $or: [
+          { publicId: { $in: mediaIds } },
+          ...(mongoMediaIds.length ? [{ _id: { $in: mongoMediaIds } }] : []),
+        ],
+        status: 'ready',
+      }).sort({ order: 1 }).lean({ virtuals: true })
+      : Promise.resolve([]),
+  ]);
+
+  const lowStockThreshold = await getLowStockThreshold();
+
+  const mapByIdentifier = (records: any[]) => {
+    const map = new Map<string, any>();
+    records.forEach((item) => {
+      map.set(idOf(item), item);
+      if (item.publicId) map.set(String(item.publicId), item);
+    });
+    return map;
+  };
+  const categoryMap = mapByIdentifier(categories as any[]);
+  const marketMap = mapByIdentifier(markets as any[]);
+  const stateMap = mapByIdentifier(states as any[]);
+  const variantsMap = new Map<string, any[]>();
+  for (const variant of variants as any[]) {
+    const key = String(variant.productId || '');
+    variantsMap.set(key, [...(variantsMap.get(key) || []), variant]);
+  }
+  for (const product of products) {
+    const productId = idOf(product);
+    if (product.publicId && productId !== String(product.publicId)) {
+      variantsMap.set(String(product.publicId), variantsMap.get(productId) || []);
+    }
+  }
+  const mediaMap = new Map<string, any>();
+  for (const asset of media as any[]) {
+    mediaMap.set(idOf(asset), asset);
+    if (asset.publicId) mediaMap.set(String(asset.publicId), asset);
+  }
+  const mediaService = new CatalogMediaService();
+
+  return products.map((product) => {
+    const productId = idOf(product);
+    const category = categoryMap.get(String(product.categoryId));
+    const market = marketMap.get(String(product.marketId));
+    const state = stateMap.get(String(product.sourceStateId));
+    const productMedia = (Array.isArray(product.mediaAssetIds) ? product.mediaAssetIds : [])
+      .map((mediaId: string) => mediaMap.get(String(mediaId)))
+      .filter(Boolean)
+      .map((asset: any) => ({
+        type: 'image',
+        url: asset.deliveryType === 'external' ? asset.secureUrl : mediaService.deliveryUrl(asset),
+        width: asset.width,
+        height: asset.height,
+        alt: product.title,
+      }));
+    const mediaPresentation = productMedia.length ? productMedia : legacyMedia(product);
+    const effectivePriceMinor = Number(product.sellingPriceMinor || 0) - Number(product.discountMinor || 0);
+    const isPurchasable = product.status === ProductStatus.PUBLISHED
+      && [ProductAvailabilityStatus.AVAILABLE, ProductAvailabilityStatus.LIMITED].includes(product.availabilityStatus);
+    const productVariants = options.compact ? [] : (variantsMap.get(productId) || []).map((variant: any) => ({
       publicId: variant.publicId,
       size: variant.size || null,
       colour: variant.colour || null,
       attributes: variant.attributes || {},
-    })),
-    currency: product.currency || 'NGN',
-    sellingPriceMinor: product.sellingPriceMinor,
-    effectivePriceMinor,
-    discountMinor: product.discountMinor || 0,
-    negotiationAvailable: Boolean(product.negotiationRules?.enabled),
-    availabilityStatus: product.availabilityStatus,
-    availabilityNote: product.customerAvailabilityNote,
-    publishedAt: product.publishedAt,
-  };
+    }));
+    const compact = {
+      publicId: product.publicId,
+      title: product.title,
+      slug: product.slug,
+      media: options.compact ? mediaPresentation.slice(0, 1) : mediaPresentation,
+      sourceState: state ? { publicId: state.publicId, name: state.name, code: state.code } : null,
+      market: market ? { publicId: market.publicId, name: market.name } : null,
+      category: category ? {
+        publicId: category.publicId,
+        name: category.name,
+        slug: category.slug,
+        iconUrl: category.iconUrl || null,
+        sizingGuide: (category as any).attributeSchema?.sizingGuide || null,
+      } : null,
+      variants: productVariants,
+      currency: product.currency || 'NGN',
+      sellingPriceMinor: product.sellingPriceMinor,
+      effectivePriceMinor,
+      discountMinor: product.discountMinor || 0,
+      negotiationAvailable: isPurchasable && Boolean(product.negotiationRules?.enabled),
+      availabilityStatus: product.availabilityStatus,
+      isPurchasable,
+      availableQuantity: Math.max(0, Number(product.quantity || 0) - Number(product.reservedQuantity || 0)),
+      lowStockThreshold,
+    };
+    return options.compact
+      ? compact
+      : {
+          ...compact,
+          description: product.description,
+          media: mediaPresentation,
+          variants: productVariants,
+          availabilityNote: product.customerAvailabilityNote,
+          publishedAt: product.publishedAt,
+        };
+  });
+}
+
+export async function publicProductRepresentation(product: any) {
+  const [representation] = await publicProductRepresentations([product]);
+  return representation;
+}
+
+export async function publicProductSummaryRepresentation(product: any) {
+  const [representation] = await publicProductRepresentations([product], { compact: true });
+  return representation;
 }

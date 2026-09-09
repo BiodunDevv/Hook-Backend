@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import cron, { type ScheduledTask } from 'node-cron';
 import type { Server } from 'http';
+import mongoose from 'mongoose';
 import { createApp } from './app';
 import { assertSafeEnvironment } from './config/env';
 import { disconnectDatabase, initializeDatabase } from './config/data-source';
@@ -37,7 +38,7 @@ function printReady(port: number, apiPrefix: string) {
     ['API', apiUrl],
     ['Docs', docsUrl],
     ['Env', env],
-    ['DB', `MongoDB · ${process.env.MONGODB_DB_NAME || 'hook'}`],
+    ['DB', `MongoDB · ${mongoose.connection.name}`],
   ] as const;
   const width = Math.max(46, ...rows.map(([label, value]) => label.length + value.length + 5));
   const line = (value: string) => `║  ${value.padEnd(width - 4)}║`;
@@ -124,6 +125,6 @@ bootstrap().catch((error: unknown) => {
   console.error('Failed to start Hook API');
   console.error(`Reason: ${message}`);
   console.error('');
-  console.error('Database tip: npm run dev now uses MongoDB from .env. Check MONGODB_URI and MONGODB_DB_NAME.');
+  console.error('Database tip: npm run dev uses the complete MONGODB_URI from .env.');
   process.exit(1);
 });

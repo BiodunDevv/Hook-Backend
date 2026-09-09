@@ -48,7 +48,6 @@ export async function connectDatabase() {
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       await mongoose.connect(uri, {
-        dbName: process.env.MONGODB_DB_NAME || 'hook',
         autoIndex: process.env.NODE_ENV !== 'production',
         serverSelectionTimeoutMS,
       });

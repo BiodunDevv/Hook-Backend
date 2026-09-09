@@ -22,6 +22,7 @@ import { createCommerceNotification } from './commerce-notification.service';
 import { EmailService } from '@emails/email.service';
 import { HttpError } from '@utils/http';
 import { adminReviewCache } from '@lib/ttl-cache';
+import { defaultNegotiationRules } from '@lib/negotiation-defaults';
 
 type SubmissionInput = {
   marketId: string;
@@ -37,6 +38,30 @@ type SubmissionInput = {
   availabilityNote?: string;
   internalSellerReference?: string;
   version?: number;
+};
+
+// Mirrors submissionApproveAsProductSchema (src/validations/catalog.schemas.ts):
+// approving a submission now takes the same field set as Product Inventory's
+// own "New Product" form, plus the ProductSubmission's own optimistic-
+// concurrency version. reason/fields stay optional — an admin completing the
+// remaining product info isn't required to also type a review note.
+type ApproveAsProductInput = {
+  title: string;
+  description?: string;
+  costPrice: number;
+  sellingPrice: number;
+  discountedPrice?: number;
+  minAcceptablePrice: number;
+  quantity: number;
+  categoryId: string;
+  marketId: string;
+  images: string[];
+  colors?: string[];
+  sizes?: string[];
+  status: ProductStatus.DRAFT | ProductStatus.PUBLISHED;
+  version: number;
+  reason?: string;
+  fields?: string[];
 };
 
 function identifierQuery(identifier: string) {
@@ -96,6 +121,24 @@ async function category(identifier: string) {
   const result = await byIdentifier<any>(Category, identifier);
   if (!result.isActive || result.deletedAt) throw new HttpError(409, 'The selected category is inactive', undefined, 'CONFLICT');
   return result;
+}
+
+async function activeMarket(identifier: string) {
+  const result = await byIdentifier<any>(Market, identifier);
+  if (result.status !== 'active') throw new HttpError(409, 'The selected Market is inactive', undefined, 'CONFLICT');
+  return result;
+}
+
+function assertSubmissionPublishReady(product: Record<string, any>) {
+  const missing: string[] = [];
+  if (!String(product.description || '').trim() || String(product.description).trim().length < 20) missing.push('description');
+  if (!Array.isArray(product.images) || !product.images.length) missing.push('images');
+  if (Number(product.quantity || 0) < 1) missing.push('quantity');
+  if (Number(product.costPrice || 0) <= 0) missing.push('costPrice');
+  if (Number(product.sellingPrice || 0) <= 0) missing.push('sellingPrice');
+  if (missing.length) {
+    throw new HttpError(409, 'Complete the required product information before activation', { fields: missing }, 'CONFLICT');
+  }
 }
 
 async function claimMedia(accountId: string, submissionId: string, mediaIds: string[]) {
@@ -443,8 +486,24 @@ export class CatalogReviewService {
     identifier: string,
     actorId: string,
     actorPublicId: string | undefined,
-    action: 'changes_requested' | 'rejected' | 'approved',
+    action: 'changes_requested' | 'rejected',
     input: { reason: string; fields: string[]; version: number },
+    stateIds?: string[],
+  ): Promise<any>;
+  async decide(
+    identifier: string,
+    actorId: string,
+    actorPublicId: string | undefined,
+    action: 'approved',
+    input: ApproveAsProductInput,
+    stateIds?: string[],
+  ): Promise<any>;
+  async decide(
+    identifier: string,
+    actorId: string,
+    actorPublicId: string | undefined,
+    action: 'changes_requested' | 'rejected' | 'approved',
+    input: { reason: string; fields: string[]; version: number } | ApproveAsProductInput,
     stateIds?: string[],
   ) {
     const current = await this.detail(identifier, stateIds);
@@ -476,48 +535,85 @@ export class CatalogReviewService {
       return updated;
     }
 
+    const approveInput = input as ApproveAsProductInput;
     validateSubmissionReady(current, current.media.length);
-    await category(current.categorySuggestionId);
+    // The Market stays fixed to the submission — it is the Market Associate's
+    // own assignment, not something an admin reassigns during review — so the
+    // submission's own marketId always wins here regardless of what the
+    // request body carries.
+    const [resolvedCategory, resolvedMarket] = await Promise.all([
+      category(approveInput.categoryId || current.categorySuggestionId),
+      activeMarket(current.marketId),
+    ]);
+    const isPublished = approveInput.status === ProductStatus.PUBLISHED;
+    const costPrice = Number(approveInput.costPrice);
+    const sellingPrice = Number(approveInput.sellingPrice);
+    const minAcceptablePrice = Number(approveInput.minAcceptablePrice);
+    const images = approveInput.images?.length ? approveInput.images : [];
+    if (isPublished) {
+      assertSubmissionPublishReady({
+        description: approveInput.description,
+        images,
+        quantity: approveInput.quantity,
+        costPrice,
+        sellingPrice,
+      });
+    }
+    const negotiationRules = defaultNegotiationRules({
+      sellingPriceMinor: Math.round(sellingPrice * 100),
+      basePriceMinor: Math.round(costPrice * 100),
+      minAcceptablePriceMinor: Math.round(minAcceptablePrice * 100),
+    }) || { enabled: false, maximumCustomerOffers: 3, acceptedQuoteExpiryMinutes: 30 };
     const transaction = await mongoose.startSession();
     try {
       let result: any;
       await transaction.withTransaction(async () => {
         const productPublicId = await nextPublicId('product');
-        const slug = `${slugify(current.basicTitle)}-${productPublicId.toLowerCase()}`;
+        const slug = `${slugify(approveInput.title || current.basicTitle)}-${productPublicId.toLowerCase()}`;
+        const now = new Date();
         const product = await Product.create([{
           publicId: productPublicId,
           hookId: hookIdFromPublicId(productPublicId),
           sourceSubmissionId: current._id.toString(),
           sourceMarketVendorId: current.marketVendorId,
           sourceMarketAssociateId: current.marketAssociateId,
-          marketId: current.marketId,
-          sourceStateId: current.sourceStateId,
-          categoryId: current.categorySuggestionId,
-          title: current.basicTitle,
+          marketId: resolvedMarket._id.toString(),
+          sourceStateId: resolvedMarket.stateId,
+          categoryId: resolvedCategory._id.toString(),
+          title: approveInput.title || current.basicTitle,
           slug,
-          description: '',
-          basePriceMinor: current.basePriceMinor,
-          sellingPriceMinor: current.basePriceMinor,
+          description: approveInput.description || '',
+          basePriceMinor: Math.round(costPrice * 100),
+          sellingPriceMinor: Math.round(sellingPrice * 100),
           markupMinor: 0,
-          discountMinor: 0,
+          discountMinor: approveInput.discountedPrice
+            ? Math.max(0, Math.round((sellingPrice - Number(approveInput.discountedPrice)) * 100))
+            : 0,
           currency: current.currency,
           mediaAssetIds: current.mediaIds,
-          images: [],
-          quantity: 0,
+          images,
+          colors: approveInput.colors || [],
+          sizes: approveInput.sizes || [],
+          quantity: Number(approveInput.quantity || 0),
           reservedQuantity: 0,
-          costPrice: current.basePriceMinor / 100,
-          sellingPrice: current.basePriceMinor / 100,
-          minAcceptablePrice: current.basePriceMinor / 100,
-          status: ProductStatus.DRAFT,
+          costPrice,
+          sellingPrice,
+          minAcceptablePrice,
+          status: approveInput.status,
           availabilityStatus: current.availabilityStatus,
           customerAvailabilityNote: current.availabilityNote,
-          negotiationRules: { enabled: false, maximumCustomerOffers: 3, acceptedQuoteExpiryMinutes: 30 },
-          commercialApproval: { approved: false, sourceMarketAssociateId: current.marketAssociateId },
+          negotiationRules,
+          commercialApproval: { approved: isPublished, approvedBy: isPublished ? actorId : undefined, approvedAt: isPublished ? now : undefined, sourceMarketAssociateId: current.marketAssociateId },
           source: 'admin',
           viewCount: 0,
           orderCount: 0,
           averageRating: 0,
           catalogMigrationVersion: 3,
+          ...(isPublished ? {
+            publishedAt: now,
+            publishedBy: actorId,
+            lastAvailabilityConfirmedAt: now,
+          } : {}),
         }], { session: transaction });
         for (let index = 0; index < current.variants.length; index += 1) {
           const item = current.variants[index];
@@ -534,7 +630,7 @@ export class CatalogReviewService {
           }], { session: transaction });
         }
         result = await ProductSubmission.findOneAndUpdate(
-          { _id: current._id, version: input.version, status: ProductSubmissionStatus.IN_REVIEW },
+          { _id: current._id, version: approveInput.version, status: ProductSubmissionStatus.IN_REVIEW },
           {
             $set: {
               status: ProductSubmissionStatus.APPROVED,
@@ -544,8 +640,8 @@ export class CatalogReviewService {
             $push: {
               reviewNotes: {
                 action: 'approved',
-                message: input.reason,
-                fields: input.fields,
+                message: approveInput.reason,
+                fields: approveInput.fields || [],
                 actorId,
                 actorPublicId,
                 createdAt: new Date(),
@@ -567,7 +663,7 @@ export class CatalogReviewService {
           { session: transaction },
         );
       });
-      await this.notifySubmissionDecision(current._id.toString(), current.marketAssociateId, current.basicTitle, 'approved', input.reason);
+      await this.notifySubmissionDecision(current._id.toString(), current.marketAssociateId, current.basicTitle, 'approved', approveInput.reason);
       return result;
     } finally {
       await transaction.endSession();

@@ -13,6 +13,7 @@ import { hookIdFromPublicId, nextPublicId } from '@services/public-id.service';
 import { adminCategoryManagersCache, adminProductStatsCache } from '@lib/ttl-cache';
 import { publishRealtime } from '@services/realtime.service';
 import { CommerceSettings } from '@models/commerce/commerce.model';
+import { defaultNegotiationRules } from '@lib/negotiation-defaults';
 
 function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'product';
@@ -217,16 +218,24 @@ export class AdminProductsController {
     const isPublished = body.status === ProductStatus.PUBLISHED;
     if (isPublished) assertAdminPublishReady(body);
     const now = new Date();
+    const basePriceMinor = Math.round(Number(body.costPrice) * 100);
+    const sellingPriceMinor = Math.round(Number(body.sellingPrice) * 100);
+    const negotiationRules = defaultNegotiationRules({
+      sellingPriceMinor,
+      basePriceMinor,
+      minAcceptablePriceMinor: Math.round(Number(body.minAcceptablePrice) * 100),
+    });
     const product = await products.save(products.create({
       ...body,
       categoryId: category._id.toString(),
       marketId: market._id.toString(),
       sourceStateId: market.stateId,
-      basePriceMinor: Math.round(Number(body.costPrice) * 100),
-      sellingPriceMinor: Math.round(Number(body.sellingPrice) * 100),
+      basePriceMinor,
+      sellingPriceMinor,
       discountMinor: body.discountedPrice ? Math.max(0, Math.round((Number(body.sellingPrice) - Number(body.discountedPrice)) * 100)) : 0,
       currency: 'NGN',
       catalogVersion: 1,
+      ...(negotiationRules ? { negotiationRules } : {}),
       ...(isPublished ? {
         availabilityStatus: ProductAvailabilityStatus.AVAILABLE,
         publishedAt: now,
@@ -261,6 +270,16 @@ export class AdminProductsController {
     updates.sourceStateId = market.stateId;
     if (updates.costPrice !== undefined) updates.basePriceMinor = Math.round(Number(updates.costPrice) * 100);
     if (updates.sellingPrice !== undefined) updates.sellingPriceMinor = Math.round(Number(updates.sellingPrice) * 100);
+    // Only fill in a default when negotiation isn't already configured — never
+    // override rules an admin set explicitly via the negotiation-rules editor.
+    if (!product.negotiationRules?.enabled) {
+      const negotiationRules = defaultNegotiationRules({
+        sellingPriceMinor: updates.sellingPriceMinor ?? product.sellingPriceMinor,
+        basePriceMinor: updates.basePriceMinor ?? product.basePriceMinor,
+        minAcceptablePriceMinor: Math.round(Number(updates.minAcceptablePrice ?? product.minAcceptablePrice) * 100),
+      });
+      if (negotiationRules) updates.negotiationRules = negotiationRules;
+    }
     const nextStatus = updates.status || product.status;
     if (nextStatus === ProductStatus.PUBLISHED) assertAdminPublishReady({ ...product, ...updates });
     if (nextStatus === ProductStatus.PUBLISHED && product.status !== ProductStatus.PUBLISHED) {

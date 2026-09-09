@@ -39,12 +39,11 @@ import {
   refundSchema,
 } from "@validations/common.schemas";
 import {
-  commercialProductSchema,
   lifecycleReasonSchema,
   negotiationRulesSchema,
-  pricingSchema,
   reviewReasonSchema,
   reviewStartSchema,
+  submissionApproveAsProductSchema,
 } from "@validations/catalog.schemas";
 import { asyncHandler } from "@utils/http";
 import {
@@ -241,7 +240,7 @@ export function createAdminRouter() {
   router.post(
     "/catalog/review/:id/approve",
     requirePermission("catalog.submission.approve"),
-    validateBody(reviewReasonSchema),
+    validateBody(submissionApproveAsProductSchema),
     asyncHandler(catalogReview.approve),
   );
   router.post(
@@ -249,69 +248,6 @@ export function createAdminRouter() {
     requirePermission("catalog.submission.reject"),
     validateBody(reviewReasonSchema),
     asyncHandler(catalogReview.reject),
-  );
-
-  router.get(
-    "/commercial/dashboard",
-    requirePermission("catalog.product.view"),
-    asyncHandler(commercial.dashboard),
-  );
-  router.get(
-    "/commercial/products",
-    requirePermission("catalog.product.view"),
-    asyncHandler(commercial.list),
-  );
-  router.get(
-    "/commercial/products/:id",
-    requirePermission("catalog.product.view"),
-    asyncHandler(commercial.detail),
-  );
-  router.get(
-    "/commercial/products/:id/preview",
-    requirePermission("catalog.product.view"),
-    asyncHandler(commercial.preview),
-  );
-  router.patch(
-    "/commercial/products/:id",
-    requirePermission("catalog.product.edit"),
-    validateBody(commercialProductSchema),
-    asyncHandler(commercial.update),
-  );
-  router.patch(
-    "/commercial/products/:id/pricing",
-    requirePermission("catalog.pricing.edit"),
-    validateBody(pricingSchema),
-    asyncHandler(commercial.pricing),
-  );
-  router.patch(
-    "/commercial/products/:id/negotiation-rules",
-    requirePermission("catalog.negotiation_rules.edit"),
-    validateBody(negotiationRulesSchema),
-    asyncHandler(commercial.rules),
-  );
-  router.post(
-    "/commercial/products/:id/publish",
-    requirePermission("catalog.product.publish"),
-    validateBody(lifecycleReasonSchema),
-    asyncHandler(commercial.publish),
-  );
-  router.post(
-    "/commercial/products/:id/pause",
-    requirePermission("catalog.product.pause"),
-    validateBody(lifecycleReasonSchema),
-    asyncHandler(commercial.pause),
-  );
-  router.post(
-    "/commercial/products/:id/unpublish",
-    requirePermission("catalog.product.unpublish"),
-    validateBody(lifecycleReasonSchema),
-    asyncHandler(commercial.unpublish),
-  );
-  router.post(
-    "/commercial/products/:id/availability-unconfirmed",
-    requirePermission("catalog.product.pause"),
-    validateBody(lifecycleReasonSchema),
-    asyncHandler(commercial.availabilityUnconfirmed),
   );
 
   router.get(
@@ -331,7 +267,7 @@ export function createAdminRouter() {
   );
   router.post(
     "/products",
-    requireSuperAdmin,
+    requirePermission("products.create"),
     validateBody(adminProductCreateSchema),
     asyncHandler(products.create),
   );
@@ -361,6 +297,36 @@ export function createAdminRouter() {
     "/products/:id",
     requireSuperAdmin,
     asyncHandler(products.remove),
+  );
+  router.patch(
+    "/products/:id/negotiation-rules",
+    requirePermission("catalog.negotiation_rules.edit"),
+    validateBody(negotiationRulesSchema),
+    asyncHandler(commercial.rules),
+  );
+  router.post(
+    "/products/:id/publish",
+    requirePermission("catalog.product.publish"),
+    validateBody(lifecycleReasonSchema),
+    asyncHandler(commercial.publish),
+  );
+  router.post(
+    "/products/:id/pause",
+    requirePermission("catalog.product.pause"),
+    validateBody(lifecycleReasonSchema),
+    asyncHandler(commercial.pause),
+  );
+  router.post(
+    "/products/:id/unpublish",
+    requirePermission("catalog.product.unpublish"),
+    validateBody(lifecycleReasonSchema),
+    asyncHandler(commercial.unpublish),
+  );
+  router.post(
+    "/products/:id/availability-check",
+    requirePermission("catalog.availability.manage"),
+    validateBody(lifecycleReasonSchema),
+    asyncHandler(commercial.availabilityUnconfirmed),
   );
 
   // ── Orders ─────────────────────────────────────────────────────────────

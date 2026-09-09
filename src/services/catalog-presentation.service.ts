@@ -2,10 +2,22 @@ import { Category } from '@models/categories/category.model';
 import { Market } from '@models/platform/network.model';
 import { OperationState } from '@models/platform/geography.model';
 import { MarketAssociateProfile } from '@models/platform/operations-accounts.model';
+import { User } from '@models/users/user.model';
 import { CatalogMediaAsset } from '@models/catalog/catalog.model';
 import { MarketVendor } from '@models/catalog/market-vendor.model';
 import { Product } from '@models/products/product.model';
 import { CatalogMediaService } from './catalog-media.service';
+
+async function marketAssociateName(record: any) {
+  // If a caller already attached a presented marketAssociate (e.g. a nested
+  // fetch elsewhere), trust it and skip the lookup.
+  if (record.marketAssociate?.publicId) return record.marketAssociate;
+  const profile = await MarketAssociateProfile.findById(record.marketAssociateId).select('publicId accountId').lean({ virtuals: true });
+  if (!profile) return null;
+  const account = await User.findById(profile.accountId).select('firstName lastName').lean();
+  const name = [account?.firstName, account?.lastName].filter(Boolean).join(' ').trim();
+  return { publicId: profile.publicId, name: name || undefined };
+}
 
 export async function presentSubmission(record: any) {
   const [market, category, state, marketAssociate, rawMedia, product, marketVendor] = await Promise.all([
@@ -16,9 +28,7 @@ export async function presentSubmission(record: any) {
       ? record.category
       : Category.findById(record.categorySuggestionId).select('publicId name slug').lean({ virtuals: true }),
     OperationState.findById(record.sourceStateId).select('publicId name code').lean({ virtuals: true }),
-    record.marketAssociate?.publicId
-      ? record.marketAssociate
-      : MarketAssociateProfile.findById(record.marketAssociateId).select('publicId').lean({ virtuals: true }),
+    marketAssociateName(record),
     record.media
       ? record.media
       : CatalogMediaAsset.find({
@@ -44,7 +54,7 @@ export async function presentSubmission(record: any) {
   return {
     id: record.publicId,
     publicId: record.publicId,
-    marketAssociate: marketAssociate ? { publicId: marketAssociate.publicId } : null,
+    marketAssociate: marketAssociate ? { publicId: marketAssociate.publicId, name: marketAssociate.name } : null,
     marketId: market?.publicId,
     market: market ? { publicId: market.publicId, name: market.name } : null,
     sourceStateId: state?.publicId,
@@ -128,22 +138,6 @@ export function presentCommercialSummary(record: any) {
       height: asset.height,
       format: asset.format,
     })),
-    publishedAt: record.publishedAt,
-    updatedAt: record.updatedAt,
-  };
-}
-
-export function presentCommercialList(record: any) {
-  return {
-    id: record.publicId,
-    publicId: record.publicId,
-    title: record.title,
-    slug: record.slug,
-    status: record.status,
-    catalogVersion: record.catalogVersion,
-    pricing: record.pricing,
-    negotiationRules: record.negotiationRules,
-    availabilityStatus: record.availabilityStatus,
     publishedAt: record.publishedAt,
     updatedAt: record.updatedAt,
   };

@@ -55,7 +55,10 @@ export class AdminCatalogReviewController {
     action: 'changes_requested' | 'approved' | 'rejected',
   ) => {
     const before = await this.review.detail(routeParam(req.params.id), stateScope(req));
-    const updated = await this.review.decide(
+    // action and req.body are only known together at runtime — each route
+    // wires its own schema (reviewReasonSchema vs submissionApproveAsProductSchema)
+    // via validateBody, so the shape is already guaranteed before this runs.
+    const updated = await (this.review.decide as any)(
       routeParam(req.params.id),
       req.user!.sub,
       req.user!.publicId,

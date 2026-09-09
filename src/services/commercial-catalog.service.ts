@@ -545,7 +545,11 @@ export class CommercialCatalogService {
         ]);
       availabilityValidUntil = nextDeadline;
       const missing: string[] = [];
-      if (!submission || submission.status !== "approved")
+      // Products created directly (Product Inventory, or a Product Submission
+      // approved into a live product) have no sourceSubmissionId at all — only
+      // require an approved submission when the product actually originated
+      // from one.
+      if (current.sourceSubmissionId && (!submission || submission.status !== "approved"))
         missing.push("approvedSubmission");
       if (!market || market.status !== "active") missing.push("activeMarket");
       if (!category || !category.isActive) missing.push("activeCategory");

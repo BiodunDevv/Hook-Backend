@@ -124,7 +124,7 @@ export const vendorBankSchema = z.object({
   bankCode: z.string().min(1),
 });
 
-const productBaseSchema = z.object({
+export const productBaseSchema = z.object({
   title: z.string().min(2),
   description: z.string().optional(),
   costPrice: z.coerce.number().positive(),
@@ -146,7 +146,7 @@ const productBaseSchema = z.object({
   sizes: z.array(z.string()).optional(),
 });
 
-function validateNegotiationFloor(
+export function validateNegotiationFloor(
   data: { minAcceptablePrice?: number; sellingPrice?: number },
   ctx: z.RefinementCtx,
 ) {

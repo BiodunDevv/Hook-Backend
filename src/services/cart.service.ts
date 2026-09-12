@@ -16,6 +16,8 @@ import {
 import { HttpError } from "@utils/http";
 import { Types } from "mongoose";
 import { publishRealtime } from "@services/realtime.service";
+import { ensureLegacyProductOptions } from './legacy-product-options.service';
+import { Market } from '@models/platform/network.model';
 
 function identifierFilter(identifier: string) {
   return Types.ObjectId.isValid(identifier)
@@ -107,7 +109,7 @@ export class CartService {
         deletedAt: null,
       })
         .select(
-          "_id publicId hookId marketId sourceStateId sellingPriceMinor discountMinor currency catalogVersion status availabilityStatus",
+          "_id publicId hookId marketId sourceStateId sellingPriceMinor discountMinor currency catalogVersion status availabilityStatus colors sizes",
         )
         .lean({ virtuals: true }),
       this.findActiveCart(owner),
@@ -140,6 +142,10 @@ export class CartService {
         "VALIDATION_ERROR",
       );
     }
+    const linkedMarket = await Market.findOne(identifierFilter(product.marketId)).select('_id name').lean();
+    if (!linkedMarket?.name) throw new HttpError(409, 'Product market is unavailable. Refresh this product.', undefined, 'PRODUCT_NOT_AVAILABLE');
+    product.marketId = linkedMarket._id.toString();
+    await ensureLegacyProductOptions(product, variantId);
     const variant = variantId
       ? await ProductVariant.findOne({
           ...identifierFilter(variantId),
@@ -162,6 +168,7 @@ export class CartService {
         productId,
         customerId: owner.userId,
         status: NegotiatedQuoteStatus.ACTIVE,
+        quantity,
         expiresAt: { $gt: new Date() },
         ...(variant ? { variantId: variant._id.toString() } : {}),
       }).lean({ virtuals: true });
@@ -266,6 +273,8 @@ export class CartService {
           );
         }
         existing.quantity = nextQuantity;
+        existing.marketId = product.marketId;
+        existing.stateId = product.sourceStateId;
         existing.totalPriceMinor =
           nextQuantity * Number(existing.unitPriceMinor || unitPriceMinor);
         existing.unitPrice =
@@ -475,7 +484,7 @@ export class CartService {
       productIds.length
         ? Product.find({ _id: { $in: productIds } })
             .select(
-              "_id publicId hookId title slug images sellingPriceMinor discountMinor currency catalogVersion status availabilityStatus customerAvailabilityNote",
+              "_id publicId hookId title slug images marketId sellingPriceMinor discountMinor currency catalogVersion status availabilityStatus customerAvailabilityNote",
             )
             .lean({ virtuals: true })
         : [],
@@ -493,6 +502,13 @@ export class CartService {
         .select('_id publicId originalPriceMinor agreedPriceMinor expiresAt status')
         .lean({ virtuals: true }),
     ]);
+    const marketIds = [...new Set([...items.map((item) => item.marketId), ...products.map((product) => product.marketId)].filter((value): value is string => Boolean(value)))];
+    const markets = marketIds.length ? await Market.find({ $or: [{ publicId: { $in: marketIds } }, { _id: { $in: marketIds.filter((id) => Types.ObjectId.isValid(id)) } }] }).select('_id publicId name').lean() : [];
+    const marketMap = new Map<string, { publicId: string; name: string }>();
+    for (const market of markets) {
+      const value = { publicId: market.publicId, name: market.name };
+      marketMap.set(market._id.toString(), value); marketMap.set(market.publicId, value);
+    }
     const productMap = new Map(products.map((product) => [product._id.toString(), product]));
     const quoteMap = new Map(quotes.map((quote) => [quote._id.toString(), quote]));
     const stateMap = new Map<string, { publicId: string; name: string; code: string }>();
@@ -513,8 +529,10 @@ export class CartService {
         blockingReasons.push("PRODUCT_CHANGED");
       const enrichedItem = {
         ...item,
-        productId: product?.hookId || product?.publicId || item.productId,
+        productId: product?.publicId || product?.hookId || item.productId,
         publicStateId: stateMap.get(String(item.stateId))?.publicId,
+        marketId: item.marketId || product?.marketId,
+        market: marketMap.get(String(item.marketId)) || marketMap.get(String(product?.marketId)),
         product: product ? this.cartProduct(product) : undefined,
         negotiatedQuote: item.quoteId && quoteMap.get(item.quoteId) ? {
           id: quoteMap.get(item.quoteId)!.publicId,
@@ -607,7 +625,7 @@ export class CartService {
       : [];
     return {
       id: product.hookId || product.publicId,
-      publicId: product.hookId || product.publicId,
+      publicId: product.publicId || product.hookId,
       title: product.title,
       slug: product.slug,
       imageUrl: images[0] || null,

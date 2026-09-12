@@ -6,7 +6,7 @@ import { HttpError } from '@utils/http';
 
 type NotificationOwner = { userId: string };
 
-const NOTIFICATION_LIST_FIELDS = 'title body type isRead readAt createdAt';
+const NOTIFICATION_LIST_FIELDS = 'title body type data isRead readAt createdAt';
 const NOTIFICATION_DETAIL_FIELDS = `${NOTIFICATION_LIST_FIELDS} data`;
 
 export class NotificationService {

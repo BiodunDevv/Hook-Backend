@@ -2,7 +2,7 @@ import { ProductAvailabilityStatus, ProductStatus } from '@lib/constants';
 import { CommerceSettings } from '@models/commerce/commerce.model';
 import { Product } from '@models/products/product.model';
 import { MarketAssociateMarketAssignment, MarketAssociateProfile } from '@models/platform/operations-accounts.model';
-import { byIdentifier } from '@services/catalog.service';
+import { byProductIdentifier } from '@services/catalog.service';
 import { MarketVendorService } from '@services/market-vendor.service';
 import { publishRealtime } from '@services/realtime.service';
 import { HttpError } from '@utils/http';
@@ -25,7 +25,7 @@ function publishUpdate(product: any) {
 async function marketAssociateForProduct(accountId: string, identifier: string) {
   const marketAssociate = await MarketAssociateProfile.findOne({ accountId, status: 'active' }).lean();
   if (!marketAssociate) throw new HttpError(403, 'Active Market Associate profile required', undefined, 'ACCESS_DENIED');
-  const product = await byIdentifier<any>(Product, identifier);
+  const product = await byProductIdentifier<any>(identifier);
   const marketAssociateId = product.sourceMarketAssociateId || product.commercialApproval?.sourceMarketAssociateId;
   const assignment = await MarketAssociateMarketAssignment.findOne({ marketAssociateId: marketAssociate._id.toString(), marketId: product.marketId, status: 'active', activeFrom: { $lte: new Date() }, $or: [{ activeTo: { $exists: false } }, { activeTo: null }, { activeTo: { $gt: new Date() } }] }).lean();
   if (!assignment) throw new HttpError(403, 'An active Market assignment is required', undefined, 'RUNNER_MARKET_ASSIGNMENT_REQUIRED');
@@ -39,7 +39,7 @@ async function marketAssociateForProduct(accountId: string, identifier: string) 
 
 export class CatalogAvailabilityService {
   async request(identifier: string, input: { reason: string; version: number }, actorId: string, stateIds?: string[]) {
-    const product = await byIdentifier<any>(Product, identifier);
+    const product = await byProductIdentifier<any>(identifier);
     if (stateIds?.length && (!product.sourceStateId || !stateIds.includes(product.sourceStateId))) throw new HttpError(404, 'Product not found', undefined, 'NOT_FOUND');
     if (![ProductStatus.PUBLISHED, ProductStatus.PAUSED, ProductStatus.AVAILABILITY_UNCONFIRMED].includes(product.status)) throw new HttpError(409, 'This Product cannot enter an availability check', undefined, 'INVALID_STATE_TRANSITION');
     const settings = await CommerceSettings.findOne({ key: 'commerce' }).lean();

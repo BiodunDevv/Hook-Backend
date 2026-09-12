@@ -4,7 +4,6 @@ import { PaymentService } from '@services/payment.service';
 import { HttpError, sendSuccess } from '@utils/http';
 import { adminRepos, getPagination, paginated, routeParam } from './admin.helpers';
 import { auditAdminAction } from '@lib/audit';
-import { CheckoutEvent } from '@models/analytics/checkout-event.model';
 import {
   CommerceOutboxEvent,
   CommerceSettings,
@@ -93,17 +92,6 @@ export class AdminCommerceController {
     await adminRepos.refundRequests().save(request);
     await auditAdminAction(req, 'refund.approve', 'refund_request', request.id, { amount: request.amount, orderId: request.orderId });
     sendSuccess(res, request);
-  };
-
-  checkoutAnalytics = async (_req: Request, res: Response) => {
-    const [counts, paymentSelection, sessions] = await Promise.all([
-      CheckoutEvent.aggregate([{ $group: { _id: '$event', count: { $sum: 1 } } }]),
-      CheckoutEvent.aggregate([{ $match: { event: 'payment_method_selected' } }, { $group: { _id: '$paymentMode', count: { $sum: 1 } } }]),
-      CheckoutEvent.distinct('sessionId'),
-    ]);
-    const countMap = Object.fromEntries((counts as any[]).map((row) => [row._id, row.count]));
-    const paymentMap = Object.fromEntries((paymentSelection as any[]).map((row) => [row._id, row.count]));
-    sendSuccess(res, { counts: countMap, paymentSelection: { payNow: paymentMap.pay_now || 0, payOnDelivery: paymentMap.pay_on_delivery || 0 }, totalSessions: sessions.length });
   };
 
   podQueue = async (req: Request, res: Response) => {

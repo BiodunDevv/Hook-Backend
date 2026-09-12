@@ -13,7 +13,6 @@ export type Permission =
   | 'financials.refund' | 'financials.reconcile'
   | 'refunds.view' | 'refunds.manage'
   | 'deletions.view' | 'deletions.manage'
-  | 'analytics.checkout'
   | 'reports.view'
   | 'ai_negotiation.view'
   | 'settings.view'

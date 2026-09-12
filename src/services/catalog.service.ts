@@ -78,6 +78,28 @@ export async function byIdentifier<T>(model: any, identifier: string, select?: s
   return record as T;
 }
 
+/**
+ * byIdentifier() above only matches _id/publicId — it doesn't know about
+ * hookId, so it 404s on the exact identifier the admin UI actually uses
+ * everywhere else for Products. Product Inventory's own list/detail/edit
+ * routes go through adminRepos.products(), whose MongoRepository wrapper
+ * already resolves _id/publicId/hookId per-model; this mirrors that so every
+ * Product-specific service (lifecycle, negotiation rules, availability
+ * checks) accepts the same identifier the rest of the product screen does.
+ */
+export async function byProductIdentifier<T>(identifier: string, select?: string): Promise<T> {
+  const isObjectId = /^[a-f\d]{24}$/i.test(identifier);
+  const query = Product.findOne(
+    isObjectId
+      ? { $or: [{ _id: identifier }, { publicId: identifier }, { hookId: identifier }] }
+      : { $or: [{ publicId: identifier }, { hookId: identifier }] },
+  );
+  if (select) query.select(select);
+  const record = await query.lean({ virtuals: true });
+  if (!record) throw new HttpError(404, 'Product not found', undefined, 'NOT_FOUND');
+  return record as T;
+}
+
 function slugify(value: string) {
   return value.toLowerCase().normalize('NFKD').replace(/[^\w\s-]/g, '').trim().replace(/[\s_-]+/g, '-');
 }
@@ -177,8 +199,8 @@ export class MarketAssociateCatalogService {
   async dashboard(accountId: string) {
     const { marketAssociate } = await marketAssociateContext(accountId);
     const marketAssociateId = marketAssociate._id.toString();
-    const [assignments, counts, recentPublished] = await Promise.all([
-      MarketAssociateMarketAssignment.countDocuments({ marketAssociateId, status: 'active' }),
+    const [assignmentRows, counts, recentPublished] = await Promise.all([
+      MarketAssociateMarketAssignment.find({ marketAssociateId, status: 'active' }).select('marketId').lean(),
       ProductSubmission.aggregate([
         { $match: { marketAssociateId, deletedAt: { $exists: false } } },
         { $group: { _id: '$status', count: { $sum: 1 } } },
@@ -190,12 +212,33 @@ export class MarketAssociateCatalogService {
         .lean({ virtuals: true }),
     ]);
     const byStatus = Object.fromEntries(counts.map((item) => [item._id, item.count]));
+    // Mirrors GET /availability-checks: any unconfirmed Product in one of this
+    // Market Associate's assigned markets is theirs to action, unless another
+    // still-active Market Associate already owns that specific check.
+    const marketIds = assignmentRows.map((assignment) => assignment.marketId);
+    const dueProducts = marketIds.length
+      ? await Product.find({
+        marketId: { $in: marketIds },
+        availabilityStatus: ProductAvailabilityStatus.UNCONFIRMED,
+        deletedAt: { $exists: false },
+      }).select('sourceMarketAssociateId').lean()
+      : [];
+    const otherSourceIds = [...new Set(
+      dueProducts.map((product) => product.sourceMarketAssociateId).filter((id): id is string => Boolean(id) && id !== marketAssociateId),
+    )];
+    const otherActiveSourceIds = otherSourceIds.length
+      ? new Set((await MarketAssociateProfile.find({ _id: { $in: otherSourceIds }, status: 'active' }).select('_id').lean()).map((source) => source._id.toString()))
+      : new Set<string>();
+    const availabilityChecksDue = dueProducts.filter(
+      (product) => !product.sourceMarketAssociateId || product.sourceMarketAssociateId === marketAssociateId || !otherActiveSourceIds.has(product.sourceMarketAssociateId),
+    ).length;
     return {
-      assignedMarkets: assignments,
+      assignedMarkets: assignmentRows.length,
       drafts: byStatus[ProductSubmissionStatus.DRAFT] || 0,
       submitted: byStatus[ProductSubmissionStatus.SUBMITTED] || 0,
       changesRequested: byStatus[ProductSubmissionStatus.CHANGES_REQUESTED] || 0,
       approved: byStatus[ProductSubmissionStatus.APPROVED] || 0,
+      availabilityChecksDue,
       recentPublished,
     };
   }

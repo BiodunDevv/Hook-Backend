@@ -8,7 +8,6 @@ import {
   cartQuantitySchema,
   customerRefundRequestSchema,
   deletionRequestSchema,
-  checkoutEventSchema,
 } from "@validations/common.schemas";
 import {
   negotiationCreateSchema,
@@ -196,6 +195,8 @@ export function createCustomerRouter() {
     asyncHandler(negotiations.create),
   );
   router.get("/negotiations/:id", asyncHandler(negotiations.detail));
+  router.post('/negotiations/:id/messages', validateBody(z.object({ message: z.string().trim().min(1).max(500) }).strict()), asyncHandler(negotiations.message));
+  router.post('/negotiations/:id/actions/:actionId/confirm', validateBody(z.object({ quantity: z.number().int().min(1).max(20), variantId: z.string().min(1).max(100) }).strict()), asyncHandler(negotiations.confirmAction));
   router.post(
     "/negotiations/:id/offers",
     validateBody(negotiationOfferSchema),
@@ -238,11 +239,6 @@ export function createCustomerRouter() {
     "/support/account-deletion",
     validateBody(deletionRequestSchema),
     asyncHandler(controller.requestDeletion),
-  );
-  router.post(
-    "/analytics/checkout-events",
-    validateBody(checkoutEventSchema),
-    asyncHandler(controller.recordCheckoutEvent),
   );
 
   router.get("/notifications", asyncHandler(controller.listNotifications));

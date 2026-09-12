@@ -39,6 +39,25 @@ async function activeCatalogRelations(categoryIdentifier: string, marketIdentifi
   return { category, market };
 }
 
+/**
+ * Resolves the vendor an admin picked for a product's "Vendor" field to its
+ * internal id, and confirms it actually belongs to the product's own market
+ * — a vendor is only ever attached to one market, so cross-market assignment
+ * would silently misrepresent who supplies the product. An empty string is
+ * the deliberate "no vendor / None" selection and resolves to `undefined`,
+ * clearing the field rather than leaving a stale reference.
+ */
+async function resolveSourceVendor(identifier: unknown, marketObjectId: string) {
+  const value = String(identifier ?? '').trim();
+  if (!value) return undefined;
+  const vendor = await MarketVendor.findOne(referenceFilter(value) as any).lean({ virtuals: true });
+  if (!vendor) throw new HttpError(404, 'Vendor not found', undefined, 'NOT_FOUND');
+  if (String(vendor.marketId) !== String(marketObjectId)) {
+    throw new HttpError(409, 'Select a vendor that belongs to this product\'s Market', undefined, 'CONFLICT');
+  }
+  return vendor._id.toString();
+}
+
 async function availabilityDeadline() {
   const settings = await CommerceSettings.findOne({ key: 'commerce' }).select('catalogAvailabilityCheckDays').lean();
   const days = Math.min(Math.max(Number(settings?.catalogAvailabilityCheckDays || 4), 1), 30);
@@ -268,6 +287,11 @@ export class AdminProductsController {
     updates.categoryId = category._id.toString();
     updates.marketId = market._id.toString();
     updates.sourceStateId = market.stateId;
+    // Only touch the vendor link if the field was actually sent — omitting it
+    // leaves whatever vendor (or lack of one) the product already has.
+    if ('sourceMarketVendorId' in req.body) {
+      updates.sourceMarketVendorId = await resolveSourceVendor(req.body.sourceMarketVendorId, market._id.toString());
+    }
     if (updates.costPrice !== undefined) updates.basePriceMinor = Math.round(Number(updates.costPrice) * 100);
     if (updates.sellingPrice !== undefined) updates.sellingPriceMinor = Math.round(Number(updates.sellingPrice) * 100);
     // Only fill in a default when negotiation isn't already configured — never

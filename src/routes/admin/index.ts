@@ -61,6 +61,8 @@ import { AdminNotificationsController } from "@controllers/admin/notifications.c
 import { AdminDeliveryController } from "@controllers/admin/delivery.controller";
 import { UploadController } from "@controllers/upload.controller";
 import { upload } from "@middleware/upload";
+import { AppReleasesController } from '@controllers/admin/app-releases.controller';
+import { appReleaseSchema, versionAnnouncementSchema } from '@lib/app-release-policy';
 
 export function createAdminRouter() {
   const router = Router();
@@ -91,6 +93,11 @@ export function createAdminRouter() {
   // ── All routes below require a valid admin token ───────────────────────
   router.use(requireAuth, requireAdmin);
   router.use(platformContext);
+  const releases = new AppReleasesController();
+  router.get('/app-releases', requirePermission('app_releases.view'), asyncHandler(releases.list));
+  router.post('/app-releases', requirePermission('app_releases.manage'), validateBody(z.union([versionAnnouncementSchema, appReleaseSchema])), asyncHandler(releases.create));
+  router.post('/app-releases/:id/publish', requirePermission('app_releases.manage'), validateBody(z.object({ storeAvailable: z.literal(true) }).strict()), asyncHandler(releases.publish));
+  router.post('/app-releases/:id/withdraw', requirePermission('app_releases.manage'), validateBody(z.object({}).strict()), asyncHandler(releases.withdraw));
   router.post(
     "/uploads/images",
     requirePermission("markets.manage"),
@@ -469,11 +476,6 @@ export function createAdminRouter() {
     requirePermission("deletions.manage"),
     validateBody(deletionUpdateSchema),
     asyncHandler(commerce.updateDeletion),
-  );
-  router.get(
-    "/analytics/checkout",
-    requirePermission("analytics.checkout"),
-    asyncHandler(commerce.checkoutAnalytics),
   );
 
   // ── Financials (view gated by permission, write stays super_admin) ─────

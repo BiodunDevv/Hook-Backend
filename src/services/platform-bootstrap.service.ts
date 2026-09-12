@@ -23,9 +23,9 @@ const domains: Record<string, string[]> = {
   financials: ['view', 'refund', 'reconcile'],
   refunds: ['view', 'manage'],
   deletions: ['view', 'manage'],
-  analytics: ['checkout'],
   reports: ['view'],
   ai_negotiation: ['view', 'manage', 'transcript.view'],
+  app_releases: ['view', 'manage'],
   settings: ['view', 'manage'],
   audit: ['view'],
   'commerce.pod': ['review', 'override', 'eligibility'],
@@ -58,7 +58,7 @@ function domainLabel(domain: string) {
   return domainLabels[domain] || domain;
 }
 
-const readPermissions = PLATFORM_PERMISSION_KEYS.filter((key) => key.endsWith('.view') && key !== 'market.payments.view');
+const readPermissions = PLATFORM_PERMISSION_KEYS.filter((key) => key.endsWith('.view') && key !== 'market.payments.view' && key !== 'app_releases.view');
 const operationsPermissions = PLATFORM_PERMISSION_KEYS.filter((key) =>
   /^(states|cities|zones|markets|hubs|runners|partners|audit|delivery\.)/.test(key),
 );
@@ -130,7 +130,9 @@ const roles = [
     key: 'COMMERCIAL_MANAGER',
     name: 'Commercial Manager',
     scope: ScopeType.MULTI_STATE,
-    permissions: [...commercialManage, 'products.create', 'products.review', 'products.edit', 'catalog.availability.view', 'catalog.availability.manage', 'audit.view'],
+    // market.vendors.view lets this role see (and pick from) a Market's
+    // vendor list when reassigning which vendor supplies a product.
+    permissions: [...commercialManage, 'products.create', 'products.review', 'products.edit', 'catalog.availability.view', 'catalog.availability.manage', 'market.vendors.view', 'audit.view'],
   },
   {
     key: 'COMMERCIAL_OFFICER',
@@ -159,7 +161,7 @@ const roles = [
   { key: 'LOGISTICS_OFFICER', name: 'Logistics Officer', scope: ScopeType.MULTI_STATE, permissions: ['hubs.view', 'markets.view', 'runners.view', 'orders.view', 'orders.edit'] },
   { key: 'CUSTOMER_SUPPORT_OFFICER', name: 'Customer Support Officer', scope: ScopeType.MULTI_STATE, permissions: supportPermissions },
   { key: 'FINANCE_OFFICER', name: 'Finance Officer', scope: ScopeType.MULTI_STATE, permissions: [...financePermissions, 'market.payments.view', 'market.payments.reconcile'] },
-  { key: 'MANAGEMENT_VIEWER', name: 'Management Viewer', scope: ScopeType.GLOBAL, permissions: [...readPermissions, 'analytics.checkout'] },
+  { key: 'MANAGEMENT_VIEWER', name: 'Management Viewer', scope: ScopeType.GLOBAL, permissions: [...readPermissions] },
 ];
 
 export async function ensurePlatformAccessCatalog() {
@@ -179,11 +181,12 @@ export async function ensurePlatformAccessCatalog() {
     updateOne: {
       filter: { key: role.key },
       update: {
+        ...(role.key === 'SUPER_ADMIN' ? {} : { $setOnInsert: { permissionKeys: role.permissions } }),
         $set: {
           key: role.key,
           name: role.name,
           description: `${role.name} platform role`,
-          permissionKeys: role.permissions,
+          ...(role.key === 'SUPER_ADMIN' ? { permissionKeys: role.permissions } : {}),
           defaultScopeType: role.scope,
           // Only SUPER_ADMIN is a true system role that can never be edited
           // or deleted — every other seeded role is just a sensible default

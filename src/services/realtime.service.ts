@@ -7,6 +7,8 @@ import { isActiveAccount } from '@lib/account-state';
 import { AccountSession } from '@models/platform/session.model';
 import { User } from '@models/users/user.model';
 import { resolveAccessContext } from '@services/access-control.service';
+import { z } from 'zod';
+import { HttpError } from '@utils/http';
 import {
   adminCategoryManagersCache,
   adminCategoryCache,
@@ -31,9 +33,12 @@ export type RealtimeEventType =
   | 'notification.updated'
   | 'order.updated'
   | 'admin.dashboard.updated'
-  | 'admin.operations.updated';
+  | 'admin.operations.updated'
+  | 'negotiation.updated' | 'negotiation.messages' | 'negotiation.processing'
+  | 'app-release.updated';
 
 export interface RealtimeEvent {
+  data?: unknown;
   type: RealtimeEventType;
   entityType?: 'product' | 'market' | 'category' | 'home' | 'cart' | 'order' | 'notification';
   entityId?: string;
@@ -51,6 +56,7 @@ export interface RealtimeTargets {
 }
 
 type SocketIdentity = {
+  accountType?: string;
   kind: 'customer' | 'staff' | 'public';
   accountId?: string;
   stateIds?: string[];
@@ -107,7 +113,7 @@ async function authenticateSocket(socket: Socket): Promise<SocketIdentity> {
         isSuperAdmin: access.roleKeys.includes('SUPER_ADMIN'),
       };
     }
-    return { kind: user.accountType === AccountType.CUSTOMER ? 'customer' : 'staff', accountId: user._id.toString() };
+    return { kind: user.accountType === AccountType.CUSTOMER ? 'customer' : 'staff', accountType: user.accountType, accountId: user._id.toString() };
   }
 
   return { kind: 'public' };
@@ -161,6 +167,44 @@ class RealtimeService {
         }
       }
       socket.emit('realtime.ready', { version: 1, occurredAt: new Date().toISOString() });
+      const inputSchema = z.object({ negotiationId: z.string().min(1).max(80), message: z.string().trim().min(1).max(1000).optional(), requestId: z.string().min(8).max(200).optional() }).strict();
+      const acknowledge = async (raw: unknown, ack: unknown, execute: (id: string, input: z.infer<typeof inputSchema>, actor: { customerId: string; partnerId?: string }) => Promise<unknown>) => {
+        if (typeof ack !== 'function') return;
+        try {
+          const current = await authenticateSocket(socket);
+          const input = inputSchema.parse(raw);
+          if (!current.accountId || current.kind === 'public') throw new HttpError(401, 'Sign in to negotiate');
+          let actor: { customerId: string; partnerId?: string };
+          if (current.kind === 'customer') actor = { customerId: current.accountId };
+          else if (current.accountType === AccountType.PARTNER) {
+            const { HookPartner } = await import('@models/platform/operations-accounts.model');
+            const { Negotiation } = await import('@models/negotiations/negotiation.model');
+            const partner = await HookPartner.findOne({ accountId: current.accountId, status: 'active' }).select('_id').lean();
+            const owned = partner ? await Negotiation.findOne({ publicId: input.negotiationId, initiatingPartnerId: partner._id.toString() }).select('customerId').lean() : null;
+            if (!owned?.customerId || !partner) throw new HttpError(404, 'Negotiation not found');
+            actor = { customerId: owned.customerId, partnerId: partner._id.toString() };
+          } else throw new HttpError(403, 'Customer or active Partner required');
+          const { NegotiationService } = await import('./negotiation.service');
+          await new NegotiationService().detail(actor, input.negotiationId);
+          ack({ ok: true, data: await execute(input.negotiationId, input, actor) });
+        } catch (error) {
+          ack({ ok: false, error: { code: error instanceof HttpError ? error.code : 'VALIDATION_ERROR', message: error instanceof HttpError ? error.message : 'Invalid negotiation request' } });
+        }
+      };
+      socket.on('negotiation.subscribe', (raw, ack) => void acknowledge(raw, ack, async (id, _input, actor) => {
+        socket.data.negotiationId = id;
+        const { NegotiationService } = await import('./negotiation.service');
+        return new NegotiationService().detail(actor, id);
+      }));
+      socket.on('negotiation.unsubscribe', () => { delete socket.data.negotiationId; });
+      socket.on('negotiation.send', (raw, ack) => void acknowledge(raw, ack, async (id, input, actor) => {
+        if (!input.message || !input.requestId) throw new HttpError(400, 'Message and request ID required');
+        const now = Date.now();
+        if (now - Number(socket.data.lastNegotiationSend || 0) < 500) throw new HttpError(429, 'Please wait before sending again');
+        socket.data.lastNegotiationSend = now;
+        const { NegotiationCommandService } = await import('./negotiation-command.service');
+        return new NegotiationCommandService().run(actor, id, input.requestId, { message: input.message });
+      }));
     });
 
     return this.io;

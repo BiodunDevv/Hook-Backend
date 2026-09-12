@@ -11,6 +11,7 @@ import { startFulfilmentWorker, stopFulfilmentWorker } from './services/fulfilme
 import { realtime } from './services/realtime.service';
 import { escalateOverdueAvailabilityChecks } from './services/catalog-availability.service';
 import { sendDailyAvailabilityDigests } from './services/availability-digest.service';
+import { deliverNegotiationStartNotifications } from './services/negotiation-notifications.service';
 
 dotenv.config({ quiet: true });
 
@@ -62,6 +63,7 @@ ${rows.map(([label, value]) => line(`${label.padEnd(8)}${value}`)).join('\n')}
 
 let server: Server | undefined;
 let expiryTimer: NodeJS.Timeout | undefined;
+let negotiationNotificationTimer: NodeJS.Timeout | undefined;
 let availabilityDigestTask: ScheduledTask | undefined;
 let shuttingDown = false;
 
@@ -70,6 +72,7 @@ async function shutdown(signal: string) {
   shuttingDown = true;
   console.log(`\n🛑 ${signal} received. Shutting down Hook API...`);
   if (expiryTimer) clearInterval(expiryTimer);
+  if (negotiationNotificationTimer) clearInterval(negotiationNotificationTimer);
   availabilityDigestTask?.stop();
   stopFulfilmentWorker();
   realtime.close();
@@ -91,6 +94,8 @@ async function bootstrap() {
   printRuntimeServices();
   await initializeDatabase();
   await ensurePlatformAccessCatalog();
+  negotiationNotificationTimer = setInterval(() => { void deliverNegotiationStartNotifications().catch(() => console.warn('[negotiation-notifications] Delivery will retry')); }, 5_000);
+  negotiationNotificationTimer.unref();
   expiryTimer = setInterval(() => {
     void Promise.all([expireNegotiationsAndQuotes(), escalateOverdueAvailabilityChecks()]).catch((error) => {
       console.error('[catalog-expiry] Failed to process catalog deadlines', error);

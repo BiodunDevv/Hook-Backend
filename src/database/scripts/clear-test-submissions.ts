@@ -11,11 +11,10 @@ type Target = { label: string; model: AnyModel; filter: Record<string, unknown> 
 
 const execute = process.argv.includes('--execute');
 
-// The two "Test" / "Test 2" submissions a Market Associate created while
-// trying the capture flow (SUB-2026-000061 / SUB-2026-000062). "Test 2"'s
-// product was already soft-deleted; this also removes the still-live "Test"
-// product and both submission records, plus everything downstream of them.
-const SUBMISSION_PUBLIC_IDS = ['SUB-2026-000061', 'SUB-2026-000062'];
+// The "Test" submission a Market Associate created while trying the capture
+// flow (SUB-2026-000063), which produced live product PRD-2026-000090. This
+// removes both records plus everything downstream of them.
+const SUBMISSION_PUBLIC_IDS = ['SUB-2026-000063'];
 
 function unique(values: unknown[]) {
   return [...new Set(values.filter(Boolean).map(String))];

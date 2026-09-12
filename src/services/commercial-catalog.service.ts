@@ -9,11 +9,12 @@ import { Market } from "@models/platform/network.model";
 import { OperationState } from "@models/platform/geography.model";
 import { Product } from "@models/products/product.model";
 import { CatalogMediaService } from "./catalog-media.service";
-import { byIdentifier } from "./catalog.service";
+import { byIdentifier, byProductIdentifier } from "./catalog.service";
 import { HttpError } from "@utils/http";
 import { publishRealtime } from "@services/realtime.service";
 import { CommerceSettings } from "@models/commerce/commerce.model";
 import { getLowStockThreshold } from "@services/inventory-settings.service";
+import { legacyProductOptions } from '@lib/legacy-product-options';
 
 async function nextAvailabilityDeadline(from = new Date()) {
   const settings = await CommerceSettings.findOne({ key: "commerce" })
@@ -101,14 +102,14 @@ function derivedPricing(
 }
 
 async function productRecord(identifier: string, stateIds?: string[]) {
-  const product = await byIdentifier<any>(Product, identifier);
+  const product = await byProductIdentifier<any>(identifier);
   if (
     stateIds?.length &&
     (!product.sourceStateId || !stateIds.includes(product.sourceStateId))
   ) {
     throw new HttpError(404, "Product not found", undefined, "NOT_FOUND");
   }
-  return product;
+  return product as any;
 }
 
 export class CommercialCatalogService {
@@ -823,29 +824,9 @@ export async function publicProductRepresentations(
         ProductAvailabilityStatus.LIMITED,
       ].includes(product.availabilityStatus);
     const storedVariants = variantsMap.get(productId) || [];
-    const legacyColors = [
-      ...new Set(
-        (product.colors || [])
-          .map((value: unknown) => String(value).trim())
-          .filter(Boolean),
-      ),
-    ];
-    const legacySizes = [
-      ...new Set(
-        (product.sizes || [])
-          .map((value: unknown) => String(value).trim())
-          .filter(Boolean),
-      ),
-    ];
     const fallbackVariants = storedVariants.length
       ? []
-      : legacyColors.length && legacySizes.length
-        ? legacyColors.flatMap((colour) =>
-            legacySizes.map((size) => ({ colour, size })),
-          )
-        : legacyColors.length
-          ? legacyColors.map((colour) => ({ colour }))
-          : legacySizes.map((size) => ({ size }));
+      : legacyProductOptions(product);
     const productVariants = options.compact
       ? []
       : [...storedVariants, ...fallbackVariants].map((variant: any) => ({
@@ -856,6 +837,7 @@ export async function publicProductRepresentations(
         }));
     const compact = {
       publicId: product.publicId,
+      hookId: product.hookId || undefined,
       title: product.title,
       slug: product.slug,
       media: options.compact

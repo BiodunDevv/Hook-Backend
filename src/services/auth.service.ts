@@ -20,6 +20,7 @@ import {
   revokeAccountSession,
   revokeAccountSessions,
   rotateAccountSession,
+  type SessionMetadata,
 } from './account-session.service';
 import { nextPublicId } from './public-id.service';
 
@@ -80,7 +81,7 @@ export class AuthService {
     };
   }
 
-  async login(email: string, password: string, portal: 'customer' | 'staff' | 'auto' = 'auto') {
+  async login(email: string, password: string, portal: 'customer' | 'staff' | 'auto' = 'auto', metadata?: SessionMetadata) {
     const normalizedEmail = email.toLowerCase().trim();
     const user = await this.userRepo.findOne({
       where: { email: normalizedEmail },
@@ -131,7 +132,7 @@ export class AuthService {
     }
 
     user.lastLoginAt = new Date();
-    const response = await this.buildAuthResponse(user);
+    const response = await this.buildAuthResponse(user, metadata);
     await this.userRepo.update(user.id, {
       lastLoginAt: user.lastLoginAt,
       refreshToken: undefined,
@@ -139,7 +140,7 @@ export class AuthService {
     return response;
   }
 
-  async loginWithGoogle(input: { idToken: string }) {
+  async loginWithGoogle(input: { idToken: string }, metadata?: SessionMetadata) {
     const payload = await verifyGoogleIdToken(input.idToken);
     const email = payload.email!.toLowerCase().trim();
     const firstName = payload.given_name || '';
@@ -192,7 +193,7 @@ export class AuthService {
 
     if (!user) throw new HttpError(401, 'Google sign-in could not be completed');
     const authUser = user;
-    const response = await this.buildAuthResponse(authUser);
+    const response = await this.buildAuthResponse(authUser, metadata);
     await Promise.all([
       this.userRepo.update(authUser.id, { refreshToken: undefined, lastLoginAt: new Date() }),
     ]);
@@ -206,7 +207,7 @@ export class AuthService {
     return response;
   }
 
-  async loginWithApple(input: { identityToken: string; firstName?: string; lastName?: string }) {
+  async loginWithApple(input: { identityToken: string; firstName?: string; lastName?: string }, metadata?: SessionMetadata) {
     const payload = await verifyAppleIdentityToken(input.identityToken);
     let user = await this.userRepo.findOne({ where: payload.email ? [{ appleId: payload.sub }, { email: payload.email }] : { appleId: payload.sub } });
     const isNewUser = !user;
@@ -247,7 +248,7 @@ export class AuthService {
       await this.userRepo.save(user);
     }
     if (!user) throw new HttpError(401, 'Apple sign-in could not be completed');
-    const response = await this.buildAuthResponse(user);
+    const response = await this.buildAuthResponse(user, metadata);
     if (isNewUser) await this.email.sendWelcome({ email: user.email, name: `${user.firstName} ${user.lastName}`.trim() });
     return response;
   }
@@ -354,7 +355,7 @@ export class AuthService {
     };
   }
 
-  async completeSignup(sessionToken: string, body: Partial<User>) {
+  async completeSignup(sessionToken: string, body: Partial<User>, metadata?: SessionMetadata) {
     const session = await this.findSignupSession(sessionToken);
     if (!session.isEmailVerified) throw new HttpError(400, 'Verify your email before completing signup');
     const existing = await this.userRepo.findOne({ where: { email: session.email } });
@@ -381,7 +382,7 @@ export class AuthService {
       lastLoginAt: new Date(),
     }));
 
-    const response = await this.buildAuthResponse(user);
+    const response = await this.buildAuthResponse(user, metadata);
     await Promise.all([
       this.userRepo.update(user.id, { refreshToken: undefined }),
       this.signupSessions!.delete({ id: session.id }),
@@ -395,7 +396,7 @@ export class AuthService {
     return response;
   }
 
-  async verifyOtp(email: string, code: string) {
+  async verifyOtp(email: string, code: string, metadata?: SessionMetadata) {
     const otp = await this.findValidOtp(email, code, 'email_verification');
     const user = await this.userRepo.findOne({ where: { email } });
     if (!user) throw new HttpError(404, 'User not found');
@@ -411,7 +412,7 @@ export class AuthService {
       name: `${user.firstName || ''} ${user.lastName || ''}`.trim(),
     });
 
-    return this.buildAuthResponse(user);
+    return this.buildAuthResponse(user, metadata);
   }
 
   async completeProfile(userId: string, body: Partial<User>) {
@@ -465,7 +466,7 @@ export class AuthService {
     return { message: 'If the admin email exists, a password reset code has been sent.' };
   }
 
-  async resetPassword(email: string, code: string, password: string) {
+  async resetPassword(email: string, code: string, password: string, metadata?: SessionMetadata) {
     const otp = await this.findValidOtp(email, code, 'password_reset');
     const user = await this.userRepo.findOne({ where: { email } });
     if (!user) throw new HttpError(404, 'User not found');
@@ -481,7 +482,7 @@ export class AuthService {
     ]);
 
     await revokeAccountSessions(user.id, 'password_reset');
-    const response = await this.buildAuthResponse(user);
+    const response = await this.buildAuthResponse(user, metadata);
     return { message: 'Password reset successfully.', ...response };
   }
 
@@ -578,7 +579,7 @@ export class AuthService {
     await this.otpRepo.update(id, { isUsed: true });
   }
 
-  private buildAuthResponse(user: User) {
-    return issueAccountSession(user);
+  private buildAuthResponse(user: User, metadata?: SessionMetadata) {
+    return issueAccountSession(user, metadata);
   }
 }

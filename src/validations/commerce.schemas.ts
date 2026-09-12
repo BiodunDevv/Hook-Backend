@@ -2,6 +2,7 @@ import { z } from "zod";
 import { CommercePaymentMethod, DeliveryMethod } from "@lib/constants";
 
 const publicId = z.string().trim().min(3).max(40);
+const variantIdentifier = z.union([publicId, z.string().trim().regex(/^legacy_opt_[a-f0-9]{32}$/)]);
 const phone = z
   .string()
   .trim()
@@ -44,7 +45,7 @@ export const commerceCartItemSchema = z
   .object({
     productId: publicId,
     quantity: z.coerce.number().int().min(1).max(99),
-    variantId: publicId.optional(),
+    variantId: variantIdentifier.optional(),
     quoteId: publicId.optional(),
     selectedVariants: z
       .object({
@@ -61,7 +62,7 @@ export const commerceImportSchema = z.object({
   cartItems: z.array(z.object({
     clientLineId: z.string().trim().min(1).max(120),
     productId: publicId,
-    variantId: publicId.optional(),
+    variantId: variantIdentifier.optional(),
     selectedVariants: z.object({
       color: z.string().trim().max(80).optional(),
       size: z.string().trim().max(80).optional(),

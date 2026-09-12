@@ -12,7 +12,6 @@ import { User } from "@models/users/user.model";
 import { DeviceToken } from "@models/notifications/device-token.model";
 import { Notification } from "@models/notifications/notification.model";
 import { AccountDeletionRequest } from "@models/support/account-deletion-request.model";
-import { CheckoutEvent } from "@models/analytics/checkout-event.model";
 import { SavedPaymentMethod } from "@models/payments/saved-payment-method.model";
 import { CartService } from "@services/cart.service";
 import { NotificationService } from "@services/notification.service";
@@ -480,16 +479,4 @@ export class CustomerController {
     sendCreated(res, request);
   };
 
-  recordCheckoutEvent = async (req: Request, res: Response) => {
-    const repo = AppDataSource.getRepository(CheckoutEvent);
-    sendCreated(
-      res,
-      await repo.save(
-        repo.create({
-          ...req.body,
-          userId: req.user!.sub,
-        }),
-      ),
-    );
-  };
 }

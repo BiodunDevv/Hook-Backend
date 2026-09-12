@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "build": "tsc && tsc-alias",
+    "test:negotiation": "tsx --test tests/negotiation-*.test.ts",
     "docs:swagger": "node scripts/generate-swagger.js",
     "format": "prettier --write \"src/**/*.ts\"",
     "dev": "nodemon --config nodemon.json",

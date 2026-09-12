@@ -23,11 +23,14 @@ export const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
   guestId: z.string().min(12).optional(),
+  deviceId: z.string().trim().min(1).max(120).optional(),
+  deviceName: z.string().trim().min(1).max(120).optional(),
+  platform: z.string().trim().min(1).max(40).optional(),
 });
 
 export const registerSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(6),
+  password: z.string().min(8),
 });
 
 export const profileSchema = z.object({
@@ -43,11 +46,14 @@ export const passwordResetRequestSchema = z.object({ email: z.string().email() }
 export const passwordResetSchema = z.object({
   email: z.string().email(),
   code: z.string().min(4),
-  password: z.string().min(6),
+  password: z.string().min(8),
+  deviceId: z.string().trim().min(1).max(120).optional(),
+  deviceName: z.string().trim().min(1).max(120).optional(),
+  platform: z.string().trim().min(1).max(40).optional(),
 });
 export const changePasswordSchema = z.object({
   currentPassword: z.string().min(1),
-  newPassword: z.string().min(6),
+  newPassword: z.string().min(8),
 });
 
 export const cartItemSchema = z.object({
@@ -204,6 +210,11 @@ export const adminProductUpdateSchema = productBaseSchema.extend({
     ProductStatus.UNPUBLISHED,
     ProductStatus.DISABLED,
   ]).optional(),
+  // Which market vendor supplies this product. Admin-only reassignment —
+  // create doesn't take it, since a product's vendor is normally set by a
+  // Market Associate's own submission. An empty string clears the link
+  // ("no vendor for this product"); the controller resolves it to null.
+  sourceMarketVendorId: z.string().trim().max(80).optional(),
 }).partial().superRefine(validateNegotiationFloor);
 
 export const adminOrderCreateSchema = z.object({
@@ -325,13 +336,6 @@ export const deletionRequestSchema = z.object({ reason: z.string().trim().max(10
 export const deletionUpdateSchema = z.object({
   status: z.enum(['identity_verified', 'cooling_off', 'approved', 'anonymized', 'cancelled']),
   assignedTo: idSchema.optional(),
-});
-export const checkoutEventSchema = z.object({
-  sessionId: z.string().min(8).max(100),
-  orderId: idSchema.optional(),
-  event: z.enum(['payment_options_shown', 'payment_method_selected', 'checkout_abandoned', 'payment_initiated', 'payment_completed', 'refund_requested', 'order_cancelled', 'delivered']),
-  paymentMode: z.nativeEnum(PaymentMode).optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 export const logisticsStatusSchema = z.object({ status: z.nativeEnum(LogisticsStatus) });
 export const productReviewSchema = z.object({

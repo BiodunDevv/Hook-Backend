@@ -1,4 +1,4 @@
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import mongoose from 'mongoose';
 import { AccountType, NegotiatedQuoteStatus, NegotiationStatus, ProductAvailabilityStatus, ProductStatus } from '@lib/constants';
 import { NegotiatedQuote, ProductVariant } from '@models/catalog/catalog.model';
@@ -7,11 +7,16 @@ import { Negotiation } from '@models/negotiations/negotiation.model';
 import { Product } from '@models/products/product.model';
 import { User } from '@models/users/user.model';
 import { nextPublicId } from './public-id.service';
-import { AzureNegotiationService, detectNegotiationLanguage } from './azure-negotiation.service';
+import { AzureNegotiationService, detectNegotiationLanguage, assertAzureConfigured } from './azure-negotiation.service';
+import { negotiationContext } from './negotiation-context.service';
+import { negotiationWriteFence } from '@lib/negotiation-execution';
 import { PricingEngine } from './pricing-engine.service';
 import { createCommerceNotification } from './commerce-notification.service';
 import { EmailService } from '@emails/email.service';
 import { HttpError } from '@utils/http';
+import { classifyNegotiationMessage, negotiationMoneyFromMessage } from '@lib/negotiation-intent';
+import { ensureLegacyProductOptions } from './legacy-product-options.service';
+import { publishRealtime } from './realtime.service';
 
 /**
  * `partnerId` is set only for partner-assisted sessions. The negotiation is
@@ -45,19 +50,8 @@ function requestHash(value: unknown) {
 }
 
 function amountFromMessage(message?: string) {
-  if (!message) return undefined;
-  const normalized = message.trim();
-  const hasPriceContext =
-    /(?:₦|\bngn\b|\bnaira\b|\d[\d,]*(?:\.\d+)?\s*[km]\b)/i.test(normalized)
-    || /^\s*[0-9][0-9,]*(?:\.[0-9]+)?\s*$/.test(normalized)
-    || /\b(offer|pay|price|take|give|accept|deal|final|last price)\b/i.test(normalized);
-  if (!hasPriceContext) return undefined;
-  const match = normalized.match(/(?:₦|ngn\s*)?([0-9][0-9,]*(?:\.[0-9]+)?)\s*([km])?/i);
-  if (!match) return undefined;
-  const amount = Number(match[1].replaceAll(',', ''));
-  if (!Number.isFinite(amount) || amount <= 0) return undefined;
-  const multiplier = match[2]?.toLowerCase() === 'k' ? 1_000 : match[2]?.toLowerCase() === 'm' ? 1_000_000 : 1;
-  return Math.round(amount * multiplier * 100);
+  if (!message || ['quantity', 'cart', 'selection', 'alternatives', 'checkout'].includes(classifyNegotiationMessage(message).intent)) return undefined;
+  return negotiationMoneyFromMessage(message);
 }
 
 function productCard(product?: any) {
@@ -66,7 +60,7 @@ function productCard(product?: any) {
     id: product.publicId,
     title: product.title || product.name,
     imageUrl: product.images?.[0] || null,
-    effectivePriceMinor: product.effectivePriceMinor || product.sellingPriceMinor,
+    effectivePriceMinor: product.effectivePriceMinor ?? Math.max(0, Number(product.sellingPriceMinor || 0) - Number(product.discountMinor || 0)),
     currency: product.currency || 'NGN',
   };
 }
@@ -75,10 +69,14 @@ function present(session: any, response?: Record<string, unknown>, product?: any
   return {
     negotiationId: session.publicId,
     status: session.status,
+    quantity: session.quantity,
+    shoppingEnabled: true,
     offerCount: session.offerCount,
     maximumOffers: session.maximumOffers,
     remainingOffers: Math.max(0, session.maximumOffers - session.offerCount),
-    transcript: session.transcript,
+    transcript: (session.transcript || []).map((entry: Record<string, unknown>, index: number) => ({ ...entry, id: entry.id || `${session.publicId}:legacy:${index + 1}`, sequence: entry.sequence || index + 1 })),
+    version: session.version,
+    processing: Boolean(session.commandLock && new Date(session.commandLock.expiresAt) > new Date()),
     expiresAt: session.expiresAt,
     quoteId: session.quoteId,
     language: session.language || 'english',
@@ -121,9 +119,7 @@ export class NegotiationService {
 
   async start(identity: NegotiationIdentity, input: { productId: string; variantId: string; quantity: number; message?: string }) {
     const settings = await CommerceSettings.findOne({ key: 'commerce' }).lean();
-    if (settings?.negotiationEnabled === false) {
-      throw new HttpError(409, 'Hook negotiation is currently unavailable', undefined, 'NEGOTIATION_DISABLED');
-    }
+    assertAzureConfigured(settings?.negotiationEnabled !== false && settings?.negotiationAzureWordingEnabled !== false);
     const product = await Product.findOne({
       ...identifier(input.productId),
       status: ProductStatus.PUBLISHED,
@@ -132,6 +128,7 @@ export class NegotiationService {
       deletedAt: { $exists: false },
     }).lean({ virtuals: true });
     if (!product) throw new HttpError(404, 'Negotiable product not found', undefined, 'NOT_FOUND');
+    await ensureLegacyProductOptions(product, input.variantId);
     const variant = await ProductVariant.findOne({
       ...identifier(input.variantId),
       productId: product._id.toString(),
@@ -164,9 +161,13 @@ export class NegotiationService {
     const sessionMinutes = settings?.negotiationSessionMinutes || 10;
     const quoteMinutes = settings?.negotiationQuoteMinutes || 30;
     const language = detectNegotiationLanguage(input.message);
+    await this.language.ready();
     const publicId = await nextPublicId('negotiation');
     const session = await Negotiation.create({
       publicId,
+      sourceStateId: product.sourceStateId,
+      marketId: product.marketId,
+      startNotificationPending: true,
       // Also supplies initiatingPartnerId for partner-assisted sessions.
       ...identityFilter(identity),
       channel: identity.partnerId ? 'partner_assisted' : 'shopper',
@@ -177,7 +178,7 @@ export class NegotiationService {
       status: NegotiationStatus.ACTIVE,
       offerCount: 0,
       maximumOffers,
-      transcript: input.message ? [{ role: 'customer', message: input.message, createdAt: new Date() }] : [],
+      transcript: input.message ? [{ id: randomUUID(), sequence: 1, kind: 'text', role: 'customer', message: input.message, createdAt: new Date() }] : [],
       language,
       rulesSnapshot: {
         sellingPriceMinor: product.sellingPriceMinor,
@@ -201,6 +202,7 @@ export class NegotiationService {
     submittedPriceMinor: number | undefined,
     idempotencyKey: string,
     customerMessage?: string,
+    resolvedIntent?: 'offer' | 'conversation',
   ) {
     if (!idempotencyKey || idempotencyKey.length < 8 || idempotencyKey.length > 200) {
       throw new HttpError(400, 'A valid Idempotency-Key header is required', undefined, 'VALIDATION_ERROR');
@@ -210,11 +212,10 @@ export class NegotiationService {
       ...identityFilter(identity),
     }).lean({ virtuals: true });
     if (!session) throw new HttpError(404, 'Negotiation not found', undefined, 'NOT_FOUND');
-    const offeredPriceMinor = submittedPriceMinor || amountFromMessage(customerMessage);
-    const hash = requestHash({ offeredPriceMinor, customerMessage });
+    const hash = requestHash({ submittedPriceMinor, customerMessage });
     const prior = session.idempotencyResults?.find((entry) => entry.key === idempotencyKey);
     if (prior) {
-      if (prior.requestHash !== hash) {
+      if (prior.requestHash !== hash && prior.requestHash !== requestHash({ offeredPriceMinor: submittedPriceMinor || amountFromMessage(customerMessage), customerMessage })) {
         throw new HttpError(409, 'This idempotency key was used with another offer', undefined, 'IDEMPOTENCY_CONFLICT');
       }
       return prior.response;
@@ -222,14 +223,15 @@ export class NegotiationService {
     if (session.status !== NegotiationStatus.ACTIVE) {
       throw new HttpError(409, 'This negotiation is no longer active', undefined, 'INVALID_STATE_TRANSITION');
     }
-    if (session.offerCount >= session.maximumOffers) {
-      throw new HttpError(409, 'You have used every offer in this negotiation', undefined, 'OFFER_LIMIT_REACHED');
-    }
     if (session.expiresAt && session.expiresAt <= new Date()) {
       await Negotiation.updateOne({ _id: session._id, status: NegotiationStatus.ACTIVE }, { $set: { status: NegotiationStatus.EXPIRED } });
       throw new HttpError(410, 'This negotiation has expired', undefined, 'NEGOTIATION_QUOTE_EXPIRED');
     }
     if (!session.rulesSnapshot) throw new HttpError(409, 'Negotiation pricing snapshot is unavailable', undefined, 'PRICING_BOUNDARY_VIOLATION');
+    const settings = await CommerceSettings.findOne({ key: 'commerce' }).select('negotiationEnabled negotiationAzureWordingEnabled').lean();
+    assertAzureConfigured(settings?.negotiationEnabled !== false && settings?.negotiationAzureWordingEnabled !== false && session.rulesSnapshot.azureWordingEnabled !== false);
+    const intent = submittedPriceMinor ? 'offer' : resolvedIntent || (await this.language.shoppingIntent(customerMessage || '')).intent;
+    const offeredPriceMinor = submittedPriceMinor || (intent === 'offer' ? amountFromMessage(customerMessage) : undefined);
     if (!offeredPriceMinor) {
       const product = await Product.findById(session.productId)
         .select('title description sellingPriceMinor discountMinor')
@@ -249,6 +251,7 @@ export class NegotiationService {
           message: entry.message,
         })),
         enabled: session.rulesSnapshot.azureWordingEnabled !== false,
+        facts: await negotiationContext(session),
       });
       const response = {
         negotiationId: session.publicId,
@@ -258,15 +261,15 @@ export class NegotiationService {
         providerFallback: guidance.fallbackUsed,
       };
       const updated = await Negotiation.findOneAndUpdate(
-        { _id: session._id, version: session.version, 'idempotencyResults.key': { $ne: idempotencyKey } },
+        { _id: session._id, version: session.version, ...negotiationWriteFence(), 'idempotencyResults.key': { $ne: idempotencyKey } },
         {
           $set: { language },
           $inc: { version: 1 },
           $push: {
             transcript: {
               $each: [
-                { role: 'customer', message: customerMessage, createdAt: new Date() },
-                { role: 'hook', message: guidance.message, createdAt: new Date() },
+                { id: randomUUID(), sequence: session.transcript.length + 1, kind: 'text', requestId: idempotencyKey, role: 'customer', message: customerMessage, createdAt: new Date() },
+                { id: randomUUID(), sequence: session.transcript.length + 2, kind: 'text', role: 'hook', message: guidance.message, createdAt: new Date() },
               ],
             },
             providerTelemetry: guidance.telemetry,
@@ -277,6 +280,9 @@ export class NegotiationService {
       ).lean({ virtuals: true });
       if (!updated) throw new HttpError(409, 'The negotiation changed before this message completed', undefined, 'IDEMPOTENCY_CONFLICT');
       return response;
+    }
+    if (session.offerCount >= session.maximumOffers) {
+      throw new HttpError(409, 'You have used every offer in this negotiation', undefined, 'OFFER_LIMIT_REACHED');
     }
     const offerNumber = session.offerCount + 1;
     const previousCustomerOfferMinor = Math.max(
@@ -325,6 +331,7 @@ export class NegotiationService {
       remainingOffers: decision.remainingOffers,
       bestPriceMinor: shouldLockBestPrice ? bestAvailablePrice : bestAgreedPrice || decision.counterPriceMinor,
       finalized: responseStatus !== NegotiationStatus.ACTIVE,
+      facts: await negotiationContext(session),
     });
     const responseMessage = wording.message;
     const response: Record<string, unknown> = {
@@ -354,7 +361,7 @@ export class NegotiationService {
           response.quoteExpiresAt = quote.expiresAt;
         }
         const updated = await Negotiation.findOneAndUpdate(
-          { _id: session._id, version: session.version, 'idempotencyResults.key': { $ne: idempotencyKey } },
+          { _id: session._id, version: session.version, ...negotiationWriteFence(), 'idempotencyResults.key': { $ne: idempotencyKey } },
           {
             $set: {
               status: response.status,
@@ -372,8 +379,8 @@ export class NegotiationService {
             $push: {
               transcript: {
                 $each: [
-                  { role: 'customer', message: customerMessage || 'Customer submitted an offer.', offeredPriceMinor, createdAt: new Date() },
-                  { role: 'hook', message: responseMessage, decision: decision.decision, createdAt: new Date() },
+                  { id: randomUUID(), sequence: session.transcript.length + 1, kind: 'text', requestId: idempotencyKey, role: 'customer', message: customerMessage || 'Customer submitted an offer.', offeredPriceMinor, createdAt: new Date() },
+                  { id: randomUUID(), sequence: session.transcript.length + 2, kind: 'text', role: 'hook', message: responseMessage, decision: decision.decision, createdAt: new Date() },
                 ],
               },
               providerTelemetry: wording.telemetry,
@@ -446,6 +453,7 @@ export class NegotiationService {
             },
             $push: {
               transcript: {
+                id: randomUUID(), sequence: session.transcript.length + 1, kind: 'receipt',
                 role: 'hook',
                 message: `Your best price of ₦${Math.round(bestPrice / 100).toLocaleString('en-NG')} is locked for ${quoteMinutes} minutes.`,
                 decision: 'ACCEPT',
@@ -459,6 +467,7 @@ export class NegotiationService {
         if (!updated.modifiedCount) throw new HttpError(409, 'Negotiation state changed before acceptance', undefined, 'INVALID_STATE_TRANSITION');
       });
       await this.notifyQuoteAgreed({ publicId: session.publicId, productId: session.productId, customerId: identity.customerId }, bestPrice, quote.expiresAt);
+      publishRealtime({ type: 'negotiation.updated', entityId: session.publicId }, { accountId: identity.customerId });
       return {
         negotiationId: session.publicId,
         status: NegotiationStatus.AGREED,
@@ -478,6 +487,7 @@ export class NegotiationService {
       { returnDocument: 'after' },
     ).lean({ virtuals: true });
     if (!updated) throw new HttpError(404, 'Active negotiation not found', undefined, 'NOT_FOUND');
+    publishRealtime({ type: 'negotiation.updated', entityId: updated.publicId }, { accountId: identity.customerId });
     return present(updated);
   }
 
@@ -492,12 +502,13 @@ export class NegotiationService {
       session.status = NegotiationStatus.EXPIRED;
     }
     const [product, variant] = await Promise.all([
-      Product.findById(session.productId).select('publicId title name images effectivePriceMinor sellingPriceMinor currency').lean(),
+      Product.findById(session.productId).select('publicId title name images effectivePriceMinor sellingPriceMinor discountMinor currency').lean(),
       session.variantId ? ProductVariant.findById(session.variantId).select('publicId').lean() : null,
     ]);
     let quote;
     if (session.quoteId) quote = await NegotiatedQuote.findById(session.quoteId).select('publicId agreedPriceMinor originalPriceMinor expiresAt status').lean();
-    return present(session, { variantId: variant?.publicId, ...(quote ? { quote: { id: quote.publicId, agreedPriceMinor: quote.agreedPriceMinor, originalPriceMinor: quote.originalPriceMinor, expiresAt: quote.expiresAt, status: quote.status } } : {}) }, product);
+    const peopleNegotiating = await Negotiation.distinct('customerId', { productId: session.productId, status: NegotiationStatus.ACTIVE, $or: [{ expiresAt: { $gt: new Date() } }, { expiresAt: { $exists: false } }] });
+    return present(session, { peopleNegotiating: peopleNegotiating.length, variantId: variant?.publicId, ...(quote ? { quote: { id: quote.publicId, agreedPriceMinor: quote.agreedPriceMinor, originalPriceMinor: quote.originalPriceMinor, expiresAt: quote.expiresAt, status: quote.status } } : {}) }, product);
   }
 
   async list(identity: NegotiationIdentity) {

@@ -308,7 +308,7 @@ export class PublicCatalogController {
       return;
     }
     const products = await Product.find({
-      publicId: { $in: ids },
+      $or: [{ publicId: { $in: ids } }, { hookId: { $in: ids } }],
       publishedAt: { $exists: true, $lte: new Date() },
       deletedAt: { $exists: false },
     })

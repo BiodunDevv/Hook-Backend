@@ -6,12 +6,14 @@ import { validateBody } from '@middleware/validate';
 import { MarketAssociateMarketVendorController } from '@controllers/market-vendor.controller';
 import { PaymentLinkController } from '@controllers/payment-link.controller';
 import { paymentLinkInitializeSchema } from '@validations/commerce.schemas';
+import { AppReleasesController } from '@controllers/admin/app-releases.controller';
 
 export function createPublicRouter() {
   const router = Router();
   const controller = new PublicController();
   const marketVendors = new MarketAssociateMarketVendorController();
   const paymentLinks = new PaymentLinkController();
+  router.get('/public/app-release', asyncHandler(new AppReleasesController().publicPolicy));
 
   router.get('/public/legal/:type', asyncHandler(controller.getLegalContent));
 

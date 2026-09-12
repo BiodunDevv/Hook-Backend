@@ -51,9 +51,17 @@ export async function presentAccountUser(user: User) {
   });
 }
 
+export type SessionMetadata = {
+  deviceId?: string;
+  deviceName?: string;
+  platform?: string;
+  ipAddress?: string;
+  userAgent?: string;
+};
+
 export async function issueAccountSession(
   user: User,
-  metadata: { deviceId?: string; deviceName?: string; platform?: string; ipAddress?: string; userAgent?: string } = {},
+  metadata: SessionMetadata = {},
 ) {
   const familyId = randomUUID();
   const session = new AccountSession({

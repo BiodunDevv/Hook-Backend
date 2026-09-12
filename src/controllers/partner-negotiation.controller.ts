@@ -6,6 +6,7 @@ import { User } from '@models/users/user.model';
 import { NegotiationService, type NegotiationIdentity } from '@services/negotiation.service';
 import { recordAudit } from '@services/platform-audit.service';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
+import { NegotiationCommandService } from '@services/negotiation-command.service';
 
 function customerFilter(identifier: string) {
   return /^[a-f\d]{24}$/i.test(identifier)
@@ -71,13 +72,7 @@ export class PartnerNegotiationController {
   };
 
   offer = async (req: Request, res: Response) => {
-    const result = await this.negotiations.offer(
-      await this.identity(req),
-      routeParam(req.params.id),
-      req.body.offeredPriceMinor,
-      req.header('idempotency-key') || '',
-      req.body.message,
-    );
+    const result = await new NegotiationCommandService().run(await this.identity(req), routeParam(req.params.id), req.header('idempotency-key') || '', { offeredPriceMinor: req.body.offeredPriceMinor, message: req.body.message });
     const auditResult = result as Record<string, unknown>;
     await recordAudit(req, {
       action: auditResult.providerFallback ? 'negotiation.azure_fallback' : 'negotiation.offer_processed',

@@ -151,9 +151,23 @@ export class PaymentLinkService {
     if (payment.commerceStatus === CommercePaymentStatus.CONFIRMED) {
       throw new HttpError(409, "This payment is already complete", undefined, "PAYMENT_ALREADY_CONFIRMED");
     }
-    const active = await PaymentAttempt.findOne({ paymentId: String(payment._id), status: { $in: ACTIVE_ATTEMPT_STATUSES }, expiresAt: { $gt: new Date() } });
+    // An unexpired attempt already holds a valid provider checkout URL, so
+    // hand the customer straight back to it rather than refusing. Blocking
+    // here stranded anyone who opened the page and came back — including
+    // after a dropped connection — until the 15 minute window elapsed.
+    const active = await PaymentAttempt.findOne({
+      paymentId: String(payment._id),
+      status: { $in: ACTIVE_ATTEMPT_STATUSES },
+      expiresAt: { $gt: new Date() },
+    });
+    if (active?.authorizationUrl) return this.publicAttempt(active);
+    // An attempt with no URL never reached the provider, so it is dead weight;
+    // retire it and start cleanly instead of making the customer wait it out.
     if (active) {
-      throw new HttpError(409, "A payment attempt is already in progress", undefined, "PAYMENT_ATTEMPT_IN_PROGRESS");
+      await PaymentAttempt.updateOne(
+        { _id: active._id },
+        { $set: { status: "cancelled", completedAt: new Date() } },
+      );
     }
     await PaymentAttempt.updateMany(
       { paymentId: String(payment._id), status: { $in: ACTIVE_ATTEMPT_STATUSES }, expiresAt: { $lte: new Date() } },

@@ -41,7 +41,7 @@ async function main() {
         // Distinct from the signup grant's `welcome:<id>` key so this top-up
         // can run without colliding with a bonus the account already got.
         idempotencyKey: `welcome-topup:${id}`,
-        note: 'Starting Hook Credits',
+        note: 'Starting Hook Coin',
       });
     }
     console.log(`  ${execute ? 'Credited' : 'Would credit'} ${customer.email} +₦${(shortfall / 100).toLocaleString()} (was ₦${(balance / 100).toLocaleString()})`);

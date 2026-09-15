@@ -60,6 +60,7 @@ export class PaymentLinkService {
       orderId: String(order._id),
       fulfilmentGroupId: payment.fulfilmentGroupId,
       customerId,
+      provider: "paystack",
       amountMinor: Number(payment.amountMinor || 0),
       currency: payment.currency || order.currency || "NGN",
       status: "active",
@@ -78,7 +79,7 @@ export class PaymentLinkService {
   async detail(token: string) {
     const link = await this.resolve(token);
     const [order, payment, items, settings, group] = await Promise.all([
-      Order.findById(link.orderId).select("publicId orderCode commerceStatus commercePaymentStatus subtotalMinor vatRate vatMinor deliveryFeeMinor totalMinor currency").lean(),
+      Order.findById(link.orderId).select("publicId orderCode commerceStatus commercePaymentStatus subtotalMinor vatRate vatMinor deliveryFeeMinor couponCode couponDiscountMinor creditsAppliedMinor totalMinor currency").lean(),
       Payment.findById(link.paymentId).select("publicId commerceStatus paidAt gateway amountMinor currency").lean(),
       OrderItem.find({ orderId: link.orderId, ...(link.fulfilmentGroupId ? { fulfilmentGroupId: link.fulfilmentGroupId } : {}) })
         .select("publicId productTitle productImage quantity selectedVariants unitPriceMinor totalPriceMinor currency")
@@ -110,6 +111,9 @@ export class PaymentLinkService {
         vatRate: Number(order.vatRate || 0),
         vatMinor: link.fulfilmentGroupId ? Number(group?.vatShareMinor || 0) : Number(order.vatMinor || 0),
         deliveryFeeMinor: link.fulfilmentGroupId ? Number(group?.deliveryFeeShareMinor || 0) : Number(order.deliveryFeeMinor || 0),
+        couponCode: link.fulfilmentGroupId ? undefined : order.couponCode,
+        couponDiscountMinor: link.fulfilmentGroupId ? 0 : Number(order.couponDiscountMinor || 0),
+        creditsAppliedMinor: link.fulfilmentGroupId ? 0 : Number(order.creditsAppliedMinor || 0),
         totalMinor: link.amountMinor,
         currency: link.currency,
         items: items.map((item) => ({

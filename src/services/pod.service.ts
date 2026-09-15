@@ -15,6 +15,7 @@ import { PaymentService } from "@services/payment.service";
 import { HttpError } from "@utils/http";
 import { isValidObjectId } from "mongoose";
 import { createCommerceNotification } from "@services/commerce-notification.service";
+import { restoreOrderIncentives } from "@services/order-restoration.service";
 
 function orderIdentity(value: string) {
   return isValidObjectId(value)
@@ -181,6 +182,8 @@ export class PodService {
         },
       ];
       await order.save();
+      // Same restoration as a customer-initiated cancellation.
+      await restoreOrderIncentives(String(order._id));
     }
     if (order.userId) {
       const copy =

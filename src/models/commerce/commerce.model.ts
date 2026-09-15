@@ -73,7 +73,7 @@ export interface CommerceSettings extends BaseEntity {
   defaultPodLimitMinor: number;
   previewTtlMinutes: number;
   catalogAvailabilityCheckDays: number;
-  /** Ceiling on how much of one order's subtotal Hook Credits may cover. */
+  /** Ceiling on how much of one order's subtotal Hook Coin may cover. */
   creditSpendCapPercent: number;
   /** Credits granted to every new customer account. */
   welcomeBonusMinor: number;

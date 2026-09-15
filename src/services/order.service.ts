@@ -20,6 +20,7 @@ import { randomInt } from 'crypto';
 import { nextPublicId } from './public-id.service';
 import { publishRealtime } from './realtime.service';
 import { createCommerceNotification } from './commerce-notification.service';
+import { restoreOrderIncentives } from './order-restoration.service';
 
 type CheckoutBody = Pick<Order, 'deliveryAddress' | 'deliveryNotes' | 'scheduledDeliveryAt' | 'guestEmail' | 'guestName' | 'paymentMode' | 'orderType' | 'giftRecipient'>;
 
@@ -306,6 +307,9 @@ export class OrderService {
         vatMinor,
         deliveryFeeMinor,
         discountMinor: Math.round(Number(order.discount || 0) * 100),
+        couponCode: order.couponCode,
+        couponDiscountMinor: Number(order.couponDiscountMinor || 0),
+        creditsAppliedMinor: Number(order.creditsAppliedMinor || 0),
         totalMinor: Number(order.totalMinor ?? Math.round(Number(order.total || 0) * 100)),
         currency: order.currency || 'NGN',
         payment: orderPayments[0] ? { status: orderPayments[0].commerceStatus || orderPayments[0].status } : undefined,
@@ -382,6 +386,9 @@ export class OrderService {
       vatMinor,
       deliveryFeeMinor,
       discountMinor: Math.round(Number(order.discount || 0) * 100),
+      couponCode: order.couponCode,
+      couponDiscountMinor: Number(order.couponDiscountMinor || 0),
+      creditsAppliedMinor: Number(order.creditsAppliedMinor || 0),
       totalMinor: Number(order.totalMinor ?? Math.round(Number(order.total || 0) * 100)),
       currency: order.currency || 'NGN',
       timeline: timelineFor(order, primaryShipment),
@@ -401,6 +408,8 @@ export class OrderService {
     stored.cancellationReason = reason;
     stored.timeline = [...(stored.timeline || []), { status: 'CANCELLED', at: new Date(), actorType: 'customer', actorId: owner.userId }];
     const saved = await stored.save();
+    // Hook Coin goes back to the wallet and the coupon use is freed up.
+    await restoreOrderIncentives(String(stored._id));
     const { PaymentLink } = await import('@models/payments/payment-link.model');
     await PaymentLink.updateMany({ orderId: stored.id, status: { $in: ['active', 'processing'] } }, { $set: { status: 'cancelled', cancelledAt: new Date() } });
     publishRealtime({ type: 'order.updated', entityId: saved.publicId || saved.id, version: Number(saved.__v || 1) }, { accountId: owner.userId, admin: true });

@@ -9,6 +9,7 @@ export interface PaymentLink extends BaseEntity {
   orderId: string;
   fulfilmentGroupId?: string;
   customerId: string;
+  provider: PaymentProviderName;
   amountMinor: number;
   currency: string;
   status: "active" | "processing" | "paid" | "expired" | "revoked" | "cancelled";
@@ -43,6 +44,10 @@ const paymentLinkSchema = createSchema<PaymentLink>({
   orderId: { type: String, required: true, index: true },
   fulfilmentGroupId: { type: String, index: true, sparse: true },
   customerId: { type: String, required: true, index: true },
+  // The interface declared this but the schema did not, so Mongoose silently
+  // dropped it on every link — leaving provider undefined and the hosted
+  // payment page with nothing to initialize against.
+  provider: { type: String, enum: ["paystack"], default: "paystack", index: true },
   amountMinor: { type: Number, required: true, min: 0 },
   currency: { type: String, required: true, default: "NGN" },
   status: {

@@ -5,6 +5,7 @@ import { Order } from '@models/orders/order.model';
 import { Referral } from '@models/promotions/referral.model';
 import { User } from '@models/users/user.model';
 import { CreditService } from '@services/credit.service';
+import { createCommerceNotification } from '@services/commerce-notification.service';
 import { nextPublicId } from '@services/public-id.service';
 import { HttpError } from '@utils/http';
 
@@ -13,6 +14,10 @@ const DEFAULT_REFERRER_BONUS_MINOR = 100000;
 
 // No I/O/0/1 — these codes get read aloud and typed by hand.
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+function formatNaira(minor: number) {
+  return `₦${Math.round(Number(minor || 0) / 100).toLocaleString('en-NG')}`;
+}
 
 function randomCode(length = 7) {
   const bytes = randomBytes(length);
@@ -119,6 +124,15 @@ export class ReferralService {
         idempotencyKey: `referral-bonus:${referral._id}`,
         note: 'A friend you referred completed their first order',
       });
+
+      await createCommerceNotification({
+        eventKey: `credit:referral:${referral._id}`,
+        userId: referral.referrerUserId,
+        title: 'You earned Hook Coin',
+        body: `A friend you referred completed their first order, so ${formatNaira(referral.referrerBonusMinor)} Hook Coin is now in your account.`,
+        type: 'hook_coin',
+        data: { section: 'credits', referralId: String(referral._id) },
+      }).catch(() => undefined);
 
       return claimed;
     } catch (error) {

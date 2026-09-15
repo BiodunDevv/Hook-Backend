@@ -1,8 +1,14 @@
 import { CommerceSettings } from '@models/commerce/commerce.model';
+import { createCommerceNotification } from '@services/commerce-notification.service';
 import { CreditLedger, type CreditEntryType } from '@models/promotions/credit-ledger.model';
 import { HttpError } from '@utils/http';
 
 const DEFAULT_SPEND_CAP_PERCENT = 20;
+
+function formatNaira(minor: number) {
+  return `₦${Math.round(Number(minor || 0) / 100).toLocaleString('en-NG')}`;
+}
+
 const DEFAULT_WELCOME_BONUS_MINOR = 30000;
 
 export class CreditService {
@@ -25,21 +31,59 @@ export class CreditService {
     // backfill script credits existing accounts under its own key, so a
     // key-only check would pay those users a second time the first time they
     // pass through a signup path.
-    const existing = await CreditLedger.exists({ userId, type: 'welcome_bonus' });
-    if (existing) return undefined;
+    const existing = await CreditLedger.findOne({ userId, type: 'welcome_bonus' })
+      .select('amountMinor')
+      .lean();
+
+    // The notification is announced separately from the credit. A user
+    // credited by the backfill script already has the ledger row but was
+    // never told about it, so returning early here would leave them
+    // permanently unaware of their balance.
+    if (existing) {
+      await this.announceWelcomeBonus(userId, Number(existing.amountMinor));
+      return undefined;
+    }
 
     const settings = await CommerceSettings.findOne({ key: 'commerce' })
       .select('welcomeBonusMinor')
       .lean();
     const amountMinor = Number(settings?.welcomeBonusMinor ?? DEFAULT_WELCOME_BONUS_MINOR);
     if (amountMinor <= 0) return undefined;
-    return this.record({
+    const entry = await this.record({
       userId,
       type: 'welcome_bonus',
       amountMinor,
       idempotencyKey: `welcome:${userId}`,
       note: 'Welcome to Hook',
     });
+    await this.announceWelcomeBonus(userId, amountMinor);
+    return entry;
+  }
+
+  /** Idempotent on eventKey, so calling it repeatedly posts only one. */
+  async announceWelcomeBonus(userId: string, amountMinor: number) {
+    if (amountMinor <= 0) return;
+    await this.notify(userId, `credit:welcome:${userId}`, {
+      title: 'You have Hook Coin to spend',
+      body: `We added ${formatNaira(amountMinor)} Hook Coin to your account. Use it when you pay now.`,
+    });
+  }
+
+  /**
+   * Credit movements are otherwise invisible until someone opens the wallet,
+   * so each one posts a notification. createCommerceNotification() dedupes on
+   * eventKey, which mirrors the ledger's own idempotency — a replayed grant
+   * cannot produce a second notification.
+   */
+  private async notify(userId: string, eventKey: string, copy: { title: string; body: string }) {
+    await createCommerceNotification({
+      eventKey,
+      userId,
+      title: copy.title,
+      body: copy.body,
+      type: 'hook_coin',
+      data: { section: 'credits' },
+    }).catch(() => undefined);
   }
 
   async spendCapPercent() {
@@ -97,7 +141,7 @@ export class CreditService {
     if (input.amountMinor <= 0) return undefined;
     const balance = await this.balance(input.userId);
     if (balance < input.amountMinor) {
-      throw new HttpError(409, 'Your Hook Credits balance changed. Review checkout again.', undefined, 'CREDIT_BALANCE_CHANGED');
+      throw new HttpError(409, 'Your Hook Coin balance changed. Review checkout again.', undefined, 'CREDIT_BALANCE_CHANGED');
     }
     return this.record({
       userId: input.userId,
@@ -112,7 +156,7 @@ export class CreditService {
   /** Returns credits when an order they paid for is cancelled. */
   async refund(input: { userId: string; amountMinor: number; orderId: string }) {
     if (input.amountMinor <= 0) return undefined;
-    return this.record({
+    const entry = await this.record({
       userId: input.userId,
       type: 'order_refund',
       amountMinor: Math.abs(input.amountMinor),
@@ -120,5 +164,10 @@ export class CreditService {
       idempotencyKey: `refund:${input.orderId}`,
       note: 'Returned from a cancelled order',
     });
+    await this.notify(input.userId, `credit:refund:${input.orderId}`, {
+      title: 'Hook Coin returned',
+      body: `${formatNaira(input.amountMinor)} Hook Coin is back in your account after your order was cancelled.`,
+    });
+    return entry;
   }
 }

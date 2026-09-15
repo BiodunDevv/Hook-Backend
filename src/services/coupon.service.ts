@@ -128,17 +128,33 @@ export class CouponService {
     }
   }
 
-  /** Frees the usage back up when the order it was applied to is cancelled. */
+  /**
+   * Frees the usage back up when the order it was applied to is cancelled, so
+   * the customer can use the code again and it stops counting against the
+   * coupon's total-usage limit.
+   *
+   * The findOneAndUpdate is the claim: only the caller that actually flips
+   * 'applied' -> 'released' decrements usedCount, so a double cancellation
+   * cannot drive the count below zero. usedCount is floored at 0 regardless,
+   * because legacy rows may have been redeemed before redemptions were
+   * tracked.
+   */
   async release(orderId: string) {
     const redemptions = await CouponRedemption.find({ orderId, status: 'applied' }).lean();
+    let released = 0;
     for (const redemption of redemptions) {
       const claimed = await CouponRedemption.findOneAndUpdate(
         { _id: redemption._id, status: 'applied' },
         { $set: { status: 'released', releasedAt: new Date() } },
       ).lean();
-      if (claimed) await Coupon.updateOne({ _id: redemption.couponId }, { $inc: { usedCount: -1 } });
+      if (!claimed) continue;
+      released += 1;
+      await Coupon.updateOne(
+        { _id: redemption.couponId, usedCount: { $gt: 0 } },
+        { $inc: { usedCount: -1 } },
+      );
     }
-    return redemptions.length;
+    return released;
   }
 
   async list() {

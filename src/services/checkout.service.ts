@@ -152,7 +152,7 @@ export class CheckoutService {
     if (input.useCredits && !creditsEligible) {
       throw new HttpError(
         409,
-        "Hook Credits can only be used when you pay now",
+        "Hook Coin can only be used when you pay now",
         undefined,
         "CREDITS_REQUIRE_PREPAYMENT",
       );

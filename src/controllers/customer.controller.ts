@@ -12,7 +12,6 @@ import { User } from "@models/users/user.model";
 import { DeviceToken } from "@models/notifications/device-token.model";
 import { Notification } from "@models/notifications/notification.model";
 import { AccountDeletionRequest } from "@models/support/account-deletion-request.model";
-import { SavedPaymentMethod } from "@models/payments/saved-payment-method.model";
 import { CartService } from "@services/cart.service";
 import { NotificationService } from "@services/notification.service";
 import { OrderService } from "@services/order.service";
@@ -21,12 +20,16 @@ import { HttpError } from "@utils/http";
 import { routeParam } from "@lib/api-utils";
 import { sendCreated, sendSuccess } from "@utils/http";
 import { RefundRequest } from "@models/orders/refund-request.model";
-import { OrderStatus, PaymentStatus } from "@lib/constants";
+import { OrderStatus, PaymentStatus, POD_PAUSED } from "@lib/constants";
 import { publicCart, publicOrder } from "@lib/public-resource";
 import { AddressService } from "@services/address.service";
 import { CheckoutService } from "@services/checkout.service";
 import { CommerceSettings } from "@models/commerce/commerce.model";
 import { CommerceImportService } from "@services/commerce-import.service";
+import { LogisticsProviderService } from "@services/logistics-provider.service";
+import { CreditService } from "@services/credit.service";
+import { ReferralService } from "@services/referral.service";
+import { CouponService } from "@services/coupon.service";
 
 function owner(req: Request) {
   return { userId: req.user!.sub };
@@ -65,6 +68,10 @@ export class CustomerController {
   private readonly addresses = new AddressService();
   private readonly checkoutV4 = new CheckoutService();
   private readonly commerceImport = new CommerceImportService();
+  private readonly logisticsService = new LogisticsProviderService();
+  private readonly creditService = new CreditService();
+  private readonly referralService = new ReferralService();
+  private readonly couponService = new CouponService();
 
   importCommerce = async (req: Request, res: Response) =>
     sendSuccess(
@@ -206,8 +213,40 @@ export class CustomerController {
     const settings = await CommerceSettings.findOne({ key: "commerce" }).lean();
     sendSuccess(res, {
       currency: settings?.currency || "NGN",
-      podEnabled: settings?.podEnabled || false,
+      podEnabled: POD_PAUSED ? false : settings?.podEnabled || false,
+      podPaused: POD_PAUSED,
       policyVersions: settings?.activePolicyVersions || {},
+    });
+  };
+
+  logisticsProviders = async (_req: Request, res: Response) =>
+    sendSuccess(res, await this.logisticsService.listActive());
+
+  credits = async (req: Request, res: Response) => {
+    const userId = req.user!.sub;
+    const [balanceMinor, history, capPercent] = await Promise.all([
+      this.creditService.balance(userId),
+      this.creditService.history(userId),
+      this.creditService.spendCapPercent(),
+    ]);
+    sendSuccess(res, { balanceMinor, capPercent, currency: "NGN", history });
+  };
+
+  referrals = async (req: Request, res: Response) =>
+    sendSuccess(res, await this.referralService.summary(req.user!.sub));
+
+  /** Lets the app show a coupon's worth before the customer commits to pay. */
+  validateCoupon = async (req: Request, res: Response) => {
+    const result = await this.couponService.validate(String(req.body.code), {
+      userId: req.user!.sub,
+      subtotalMinor: Number(req.body.subtotalMinor || 0),
+      deliveryFeeMinor: Number(req.body.deliveryFeeMinor || 0),
+    });
+    sendSuccess(res, {
+      code: result.code,
+      type: result.type,
+      discountMinor: result.discountMinor,
+      appliesToDelivery: result.appliesToDelivery,
     });
   };
 
@@ -272,78 +311,6 @@ export class CustomerController {
 
   paymentMethodCapability = async (_req: Request, res: Response) => {
     sendSuccess(res, this.payments.capability());
-  };
-
-  listPaymentMethods = async (req: Request, res: Response) => {
-    if (!req.user?.sub)
-      throw new HttpError(
-        401,
-        "Register or sign in to view saved payment methods",
-      );
-    sendSuccess(
-      res,
-      await AppDataSource.getRepository(SavedPaymentMethod).find({
-        where: { userId: req.user.sub, isActive: true },
-        select: [
-          "id",
-          "provider",
-          "brand",
-          "last4",
-          "expiryDisplay",
-          "consentedAt",
-          "isDefault",
-          "createdAt",
-        ],
-      }),
-    );
-  };
-
-  savePaymentMethod = async (req: Request, res: Response) => {
-    if (process.env.OPAY_TOKENIZATION_ENABLED !== "true")
-      throw new HttpError(
-        409,
-        "Saved cards are not enabled for this merchant account",
-      );
-    if (!req.user?.sub)
-      throw new HttpError(401, "Register or sign in to save a payment method");
-    const repo = AppDataSource.getRepository(SavedPaymentMethod);
-    if (req.body.isDefault)
-      await repo.update({ userId: req.user.sub }, { isDefault: false });
-    const method = await repo.save(
-      repo.create({
-        ...req.body,
-        userId: req.user.sub,
-        provider: "opay",
-        consentedAt: new Date(),
-        isActive: true,
-      }),
-    );
-    sendCreated(res, {
-      id: method.id,
-      provider: method.provider,
-      brand: method.brand,
-      last4: method.last4,
-      expiryDisplay: method.expiryDisplay,
-      isDefault: method.isDefault,
-    });
-  };
-
-  removePaymentMethod = async (req: Request, res: Response) => {
-    if (!req.user?.sub)
-      throw new HttpError(
-        401,
-        "Register or sign in to remove a payment method",
-      );
-    const repo = AppDataSource.getRepository(SavedPaymentMethod);
-    const method = await repo.findOne({
-      where: { id: routeParam(req.params.id), userId: req.user.sub },
-    });
-    if (!method) throw new HttpError(404, "Payment method not found");
-    await repo.update(method.id, {
-      isActive: false,
-      providerToken: `revoked:${method.id}`,
-    });
-    sendSuccess(res, { id: method.id, removed: true });
   };
 
   listNotifications = async (req: Request, res: Response) => {

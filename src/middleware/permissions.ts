@@ -16,6 +16,10 @@ export type Permission =
   | 'reports.view'
   | 'ai_negotiation.view'
   | 'settings.view'
+  | 'coupons.view'
+  | 'coupons.manage'
+  | 'credits.view'
+  | 'credits.adjust'
   | string;
 
 /**
@@ -38,5 +42,23 @@ export function requirePermission(permission: Permission) {
       return next();
     }
     return next(new HttpError(403, `Permission denied: ${permission}`, undefined, 'ACCESS_DENIED'));
+  };
+}
+
+/**
+ * Passes when the staff member holds ANY of the listed permissions. For shared
+ * utility endpoints — image upload, say — that several unrelated areas need:
+ * gating those on one area's permission locks every other area out of it.
+ */
+export function requireAnyPermission(...permissions: Permission[]) {
+  return (req: Request, _res: Response, next: NextFunction) => {
+    const user = req.user;
+    if (!user) return next(new HttpError(401, 'Authentication required'));
+
+    if (user.roleKeys?.includes('SUPER_ADMIN')) return next();
+    if (user.accountType === 'staff' && permissions.some((permission) => user.permissions.includes(permission))) {
+      return next();
+    }
+    return next(new HttpError(403, `Permission denied: one of ${permissions.join(', ')}`, undefined, 'ACCESS_DENIED'));
   };
 }

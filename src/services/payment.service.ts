@@ -22,6 +22,7 @@ import { User } from "@models/users/user.model";
 import { nextPublicId } from "@services/public-id.service";
 import { createCommerceNotification } from "@services/commerce-notification.service";
 import { EmailService } from "@emails/email.service";
+import { ReferralService } from "@services/referral.service";
 import { HttpError } from "@utils/http";
 import { paymentProvider, type ProviderName } from "./payments/provider-registry";
 import { PaymentAttempt, PaymentLink } from "@models/payments/payment-link.model";
@@ -36,6 +37,7 @@ function identity(value: string) {
 export class PaymentService {
   private provider = paymentProvider("paystack");
   private email = new EmailService();
+  private referrals = new ReferralService();
   constructor(
     _payments?: Repository<Payment>,
     _orders?: Repository<Order>,
@@ -420,6 +422,12 @@ export class PaymentService {
     this.publishOrderUpdate(order);
     await this.emitOrderApproved(order);
     if (order.userId) {
+      // A referrer's bonus is only released once the person they referred has
+      // actually paid for something, which is what stops signup farming.
+      // qualify() is idempotent, so a replayed webhook cannot pay twice.
+      if (await this.referrals.isFirstPaidOrder(order.userId, String(order.id))) {
+        await this.referrals.qualify(order.userId, String(order.publicId || order.id));
+      }
       await createCommerceNotification({
         eventKey: `order:${order.publicId}:payment-confirmed`,
         userId: order.userId,
@@ -497,7 +505,7 @@ export class PaymentService {
     if (!Number.isSafeInteger(amountMinor) || amountMinor < 1 || amountMinor > captured - refunded) {
       throw new HttpError(409, 'Refund exceeds the captured payment balance', undefined, 'REFUND_LIMIT_EXCEEDED');
     }
-    if (!payment.transactionRef || !['paystack', 'opay'].includes(String(payment.gateway))) {
+    if (!payment.transactionRef || String(payment.gateway) !== 'paystack') {
       throw new HttpError(409, 'This captured payment cannot be refunded through its provider', undefined, 'PAYMENT_METHOD_NOT_ALLOWED');
     }
     const result = await paymentProvider(payment.gateway as ProviderName).refund({ reference: payment.transactionRef, amountMinor, reason: _idempotencyKey });

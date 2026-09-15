@@ -6,6 +6,8 @@ export async function ensureLegacyProductOptions(product: Parameters<typeof lega
   if (!variantId?.startsWith('legacy_opt_')) return;
   const options = legacyProductOptions(product);
   if (!options.some((option) => option.publicId === variantId)) throw new HttpError(409, 'Selected product options changed. Refresh the product.', undefined, 'PRODUCT_VARIANT_UNAVAILABLE');
+  const materialized = await ProductVariant.exists({ publicId: variantId, productId: product._id.toString(), active: true });
+  if (materialized) return; // Avoid rewriting the whole legacy option grid on every cart add.
   const existing = await ProductVariant.exists({ productId: product._id.toString(), migrationSource: { $ne: 'legacy_negotiation_options' } });
   if (existing) return; // Never override a managed catalog variant set.
   try {

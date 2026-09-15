@@ -13,6 +13,7 @@ import {
   OrderType,
   PaymentMode,
   PaymentStatus,
+  POD_PAUSED,
   ProductAvailabilityStatus,
   ProductStatus,
 } from "@lib/constants";
@@ -40,6 +41,9 @@ import {
 import { nextPublicId } from "@services/public-id.service";
 import { createCommerceNotification } from "@services/commerce-notification.service";
 import { EmailService } from "@emails/email.service";
+import { CouponService } from "@services/coupon.service";
+import { CreditService } from "@services/credit.service";
+import { LogisticsProviderService } from "@services/logistics-provider.service";
 import { HttpError } from "@utils/http";
 
 type PreviewInput = {
@@ -47,6 +51,9 @@ type PreviewInput = {
   deliveryMethod: DeliveryMethod;
   paymentMethod: CommercePaymentMethod;
   policyVersions: Record<string, string>;
+  logisticsProviderId?: string;
+  couponCode?: string;
+  useCredits?: boolean;
 };
 
 type CheckoutActor = {
@@ -80,6 +87,90 @@ function storedStateIdentifiers(state: { _id?: unknown; publicId?: string }, fal
 export class CheckoutService {
   private addresses = new AddressService();
   private email = new EmailService();
+  private coupons = new CouponService();
+  private credits = new CreditService();
+  private logisticsProviders = new LogisticsProviderService();
+
+  /**
+   * The single source of truth for checkout money. preview() and confirm()
+   * both call this, so the totals confirm re-derives can never drift from the
+   * ones the customer was quoted — the exact-equality revalidation below
+   * depends on that.
+   *
+   * Order of operations: a coupon discounts the item subtotal (so it also
+   * lowers the VAT basis, which is "product_subtotal") unless it is a
+   * free-delivery coupon, which discounts the shipping line instead. Credits
+   * come off last, capped at a share of the subtotal, and never take the
+   * payable below zero.
+   */
+  private async calculateMoney(input: {
+    customerId: string;
+    subtotalMinor: number;
+    deliveryFeeMinor: number;
+    paymentMethod: CommercePaymentMethod;
+    couponCode?: string;
+    useCredits?: boolean;
+  }) {
+    const coupon = await this.coupons.tryValidate(input.couponCode, {
+      userId: input.customerId,
+      subtotalMinor: input.subtotalMinor,
+      deliveryFeeMinor: input.deliveryFeeMinor,
+    });
+
+    const couponDiscountMinor = coupon?.discountMinor ?? 0;
+    const deliveryDiscountMinor = coupon?.appliesToDelivery ? couponDiscountMinor : 0;
+    const itemDiscountMinor = coupon?.appliesToDelivery ? 0 : couponDiscountMinor;
+
+    const deliveryFeeMinor = Math.max(0, input.deliveryFeeMinor - deliveryDiscountMinor);
+    const vatRate = 0.075;
+    const vatBasisMinor = Math.max(0, input.subtotalMinor - itemDiscountMinor);
+    const vatMinor = Math.round(vatBasisMinor * vatRate);
+    const taxSnapshot = {
+      jurisdiction: "NG",
+      name: "VAT",
+      rate: vatRate,
+      basis: "product_subtotal",
+      version: "ng-vat-7.5-v1",
+    };
+
+    const payableBeforeCredits = Math.max(
+      0,
+      input.subtotalMinor - itemDiscountMinor + vatMinor + deliveryFeeMinor,
+    );
+    // Credits are a prepayment instrument: they come off what Hook collects
+    // up front. On Pay at Handover there is nothing to collect up front, so
+    // there is nothing for them to reduce — they stay in the wallet instead
+    // of silently vanishing against a cash-on-delivery total.
+    const creditsEligible = input.paymentMethod === CommercePaymentMethod.PREPAID;
+    const creditsAppliedMinor = input.useCredits && creditsEligible
+      ? Math.min(
+          await this.credits.spendableFor(input.customerId, input.subtotalMinor),
+          payableBeforeCredits,
+        )
+      : 0;
+
+    if (input.useCredits && !creditsEligible) {
+      throw new HttpError(
+        409,
+        "Hook Credits can only be used when you pay now",
+        undefined,
+        "CREDITS_REQUIRE_PREPAYMENT",
+      );
+    }
+
+    return {
+      coupon,
+      couponDiscountMinor,
+      itemDiscountMinor,
+      creditsEligible,
+      creditsAppliedMinor,
+      vatRate,
+      vatMinor,
+      taxSnapshot,
+      deliveryFeeMinor,
+      totalMinor: Math.max(0, payableBeforeCredits - creditsAppliedMinor),
+    };
+  }
 
   async preview(
     actor: CheckoutActor,
@@ -252,30 +343,39 @@ export class CheckoutService {
       (sum, line) => sum + Number(line.totalPriceMinor),
       0,
     );
+    const logisticsProvider = input.logisticsProviderId
+      ? await this.logisticsProviders.getSelectable(input.logisticsProviderId)
+      : undefined;
     const deliveryPricing = input.deliveryMethod === DeliveryMethod.PARTNER_PICKUP
       ? { scope: "partner" as const, mode: "flat" as const, feeMinor: 0, ruleVersion: "partner-pickup-v1" }
-      : await calculateDeliveryPricing({
-          state: deliveryState,
-          coordinates: addressSnapshot?.coordinates as { latitude: number; longitude: number } | undefined,
-          defaultFeeMinor: settings.defaultDeliveryFeeMinor ?? DEFAULT_DELIVERY_FEE_MINOR,
-        });
-    const vatRate = 0.075;
-    const vatMinor = Math.round(subtotalMinor * vatRate);
-    const taxSnapshot = {
-      jurisdiction: "NG",
-      name: "VAT",
-      rate: vatRate,
-      basis: "product_subtotal",
-      version: "ng-vat-7.5-v1",
-    };
-    const deliveryFeeMinor = deliveryPricing.feeMinor;
-    const totalMinor = subtotalMinor + vatMinor + deliveryFeeMinor;
+      : logisticsProvider
+        ? {
+            scope: "logistics" as const,
+            mode: "flat" as const,
+            feeMinor: Number(logisticsProvider.feeMinor),
+            ruleVersion: `logistics:${logisticsProvider.code}`,
+          }
+        : await calculateDeliveryPricing({
+            state: deliveryState,
+            coordinates: addressSnapshot?.coordinates as { latitude: number; longitude: number } | undefined,
+            defaultFeeMinor: settings.defaultDeliveryFeeMinor ?? DEFAULT_DELIVERY_FEE_MINOR,
+          });
+    const money = await this.calculateMoney({
+      customerId: actor.customerId,
+      subtotalMinor,
+      deliveryFeeMinor: deliveryPricing.feeMinor,
+      paymentMethod: input.paymentMethod,
+      couponCode: input.couponCode,
+      useCredits: input.useCredits,
+    });
+    const { vatRate, vatMinor, taxSnapshot, deliveryFeeMinor, couponDiscountMinor, creditsAppliedMinor, totalMinor, coupon } = money;
     const podLimitMinor = Number(
       deliveryState.podLimitMinor ??
         settings.defaultPodLimitMinor ??
         DEFAULT_POD_LIMIT_MINOR,
     );
     const podEnabled = Boolean(
+      !POD_PAUSED &&
       settings.podEnabled &&
       deliveryState.podEnabled &&
       customer.podEligible !== false,
@@ -335,6 +435,14 @@ export class CheckoutService {
       taxSnapshot,
       deliveryFeeMinor,
       deliveryPricing,
+      logisticsProviderId: logisticsProvider?.publicId,
+      logisticsProviderSnapshot: logisticsProvider
+        ? { publicId: logisticsProvider.publicId, code: logisticsProvider.code, name: logisticsProvider.name, feeMinor: logisticsProvider.feeMinor }
+        : undefined,
+      couponId: coupon?.couponId,
+      couponCode: coupon?.code,
+      couponDiscountMinor,
+      creditsAppliedMinor,
       totalMinor,
       currency: "NGN",
       policyVersions: settings.activePolicyVersions,
@@ -364,6 +472,12 @@ export class CheckoutService {
       taxSnapshot,
       deliveryFeeMinor,
       deliveryPricing,
+      logisticsProvider: logisticsProvider
+        ? { id: logisticsProvider.publicId, code: logisticsProvider.code, name: logisticsProvider.name, feeMinor: logisticsProvider.feeMinor }
+        : undefined,
+      coupon: coupon ? { code: coupon.code, type: coupon.type, discountMinor: coupon.discountMinor } : undefined,
+      couponDiscountMinor,
+      creditsAppliedMinor,
       totalMinor,
       currency: "NGN",
       podDecision: preview.podDecision,
@@ -473,9 +587,20 @@ export class CheckoutService {
       (sum, line) => sum + Number(line.totalPriceMinor),
       0,
     );
-    const currentVatMinor = Math.round(currentSubtotalMinor * Number(preview.vatRate ?? 0.075));
-    let currentDeliveryFeeMinor = Number(preview.deliveryFeeMinor);
-    if (preview.deliveryMethod === DeliveryMethod.HOME_DELIVERY) {
+    // calculateMoney() takes the GROSS delivery fee and applies any
+    // free-delivery coupon itself, so this must be the pre-discount figure
+    // that was quoted — preview.deliveryFeeMinor is already net of it.
+    let currentGrossDeliveryFeeMinor = Number(
+      (preview.deliveryPricing as any)?.feeMinor ?? preview.deliveryFeeMinor,
+    );
+    if (preview.logisticsProviderId) {
+      // Re-resolve the courier: an admin may have withdrawn it or repriced it
+      // since the quote was issued.
+      const provider = await this.logisticsProviders.getSelectable(String(preview.logisticsProviderId));
+      currentGrossDeliveryFeeMinor = Number(provider.feeMinor);
+      if (`logistics:${provider.code}` !== (preview.deliveryPricing as any)?.ruleVersion)
+        throw new HttpError(409, "Delivery pricing changed. Review checkout again.", undefined, "CHECKOUT_REVALIDATION_REQUIRED");
+    } else if (preview.deliveryMethod === DeliveryMethod.HOME_DELIVERY) {
       const address = await this.addresses.getOwned(actor.customerId, String(preview.addressId || ""));
       const deliveryState = await resolveDeliveryState(String(address.stateId));
       if (!deliveryState || deliveryState.deliveryEnabled === false)
@@ -485,17 +610,30 @@ export class CheckoutService {
         state: deliveryState,
         defaultFeeMinor: settings.defaultDeliveryFeeMinor ?? DEFAULT_DELIVERY_FEE_MINOR,
       });
-      currentDeliveryFeeMinor = pricing.feeMinor;
-      if (
-        currentDeliveryFeeMinor !== Number(preview.deliveryFeeMinor) ||
-        pricing.ruleVersion !== (preview.deliveryPricing as any)?.ruleVersion
-      )
+      currentGrossDeliveryFeeMinor = pricing.feeMinor;
+      if (pricing.ruleVersion !== (preview.deliveryPricing as any)?.ruleVersion)
         throw new HttpError(409, "Delivery pricing changed. Review checkout again.", undefined, "CHECKOUT_REVALIDATION_REQUIRED");
     }
+
+    // Re-run the same money math the quote used. This re-validates the coupon
+    // as a side effect, so one that expired or hit its cap in the meantime
+    // throws here rather than silently under-charging.
+    const currentMoney = await this.calculateMoney({
+      customerId: actor.customerId,
+      subtotalMinor: currentSubtotalMinor,
+      deliveryFeeMinor: currentGrossDeliveryFeeMinor,
+      paymentMethod: preview.paymentMethod as CommercePaymentMethod,
+      couponCode: preview.couponCode,
+      useCredits: Number(preview.creditsAppliedMinor || 0) > 0,
+    });
+
     if (
       currentSubtotalMinor !== Number(preview.subtotalMinor) ||
-      currentVatMinor !== Number(preview.vatMinor) ||
-      currentSubtotalMinor + currentVatMinor + currentDeliveryFeeMinor !== Number(preview.totalMinor)
+      currentMoney.vatMinor !== Number(preview.vatMinor) ||
+      currentMoney.deliveryFeeMinor !== Number(preview.deliveryFeeMinor) ||
+      currentMoney.couponDiscountMinor !== Number(preview.couponDiscountMinor || 0) ||
+      currentMoney.creditsAppliedMinor !== Number(preview.creditsAppliedMinor || 0) ||
+      currentMoney.totalMinor !== Number(preview.totalMinor)
     )
       throw new HttpError(409, "Order totals changed. Review checkout again.", undefined, "CHECKOUT_REVALIDATION_REQUIRED");
 
@@ -509,16 +647,34 @@ export class CheckoutService {
     const paymentIds = await Promise.all((pod ? effectiveGroups : [null]).map(() => nextPublicId("payment")));
     let allocatedFee = 0;
     let allocatedVat = 0;
+    let allocatedDiscount = 0;
+    let allocatedCredits = 0;
+    const previewSubtotal = Math.max(Number(preview.subtotalMinor), 1);
+    // Every money line is split across per-state groups by subtotal share,
+    // with the remainder landing on the last group so the parts always sum
+    // back to the whole. Discounts and credits need the same treatment as VAT
+    // and delivery, or per-group settlement drifts from the order total.
+    const share = (total: number, groupSubtotal: number, allocated: number, isLast: boolean) =>
+      isLast ? total - allocated : Math.floor((total * groupSubtotal) / previewSubtotal);
     const groupPlans = effectiveGroups.map((group, index) => {
-      const feeShare = index === effectiveGroups.length - 1
-        ? Number(preview.deliveryFeeMinor) - allocatedFee
-        : Math.floor(Number(preview.deliveryFeeMinor) * group.subtotalMinor / Math.max(Number(preview.subtotalMinor), 1));
+      const isLast = index === effectiveGroups.length - 1;
+      const feeShare = share(Number(preview.deliveryFeeMinor), group.subtotalMinor, allocatedFee, isLast);
       allocatedFee += feeShare;
-      const vatShare = index === effectiveGroups.length - 1
-        ? Number(preview.vatMinor || 0) - allocatedVat
-        : Math.floor(Number(preview.vatMinor || 0) * group.subtotalMinor / Math.max(Number(preview.subtotalMinor), 1));
+      const vatShare = share(Number(preview.vatMinor || 0), group.subtotalMinor, allocatedVat, isLast);
       allocatedVat += vatShare;
-      return { ...group, publicId: groupIds[index], vatShareMinor: vatShare, deliveryFeeShareMinor: feeShare, paymentPublicId: pod ? paymentIds[index] : undefined };
+      const discountShare = share(Number(preview.couponDiscountMinor || 0), group.subtotalMinor, allocatedDiscount, isLast);
+      allocatedDiscount += discountShare;
+      const creditShare = share(Number(preview.creditsAppliedMinor || 0), group.subtotalMinor, allocatedCredits, isLast);
+      allocatedCredits += creditShare;
+      return {
+        ...group,
+        publicId: groupIds[index],
+        vatShareMinor: vatShare,
+        deliveryFeeShareMinor: feeShare,
+        couponDiscountShareMinor: discountShare,
+        creditsAppliedShareMinor: creditShare,
+        paymentPublicId: pod ? paymentIds[index] : undefined,
+      };
     });
     const ids = {
       order: await nextPublicId("order"),
@@ -558,11 +714,19 @@ export class CheckoutService {
           taxSnapshot: preview.taxSnapshot,
           deliveryFeeMinor: preview.deliveryFeeMinor,
           deliveryPricing: preview.deliveryPricing,
+          logisticsProviderId: preview.logisticsProviderId,
+          logisticsProviderSnapshot: preview.logisticsProviderSnapshot,
+          couponId: preview.couponId,
+          couponCode: preview.couponCode,
+          couponDiscountMinor: Number(preview.couponDiscountMinor || 0),
+          creditsAppliedMinor: Number(preview.creditsAppliedMinor || 0),
           totalMinor: preview.totalMinor,
           currency: preview.currency,
           subtotal: preview.subtotalMinor / 100,
           deliveryFee: preview.deliveryFeeMinor / 100,
-          discount: 0,
+          // Legacy major-unit mirror of everything taken off the order.
+          discount:
+            (Number(preview.couponDiscountMinor || 0) + Number(preview.creditsAppliedMinor || 0)) / 100,
           total: preview.totalMinor / 100,
           vendorCount: 0,
           status: pod
@@ -638,13 +802,33 @@ export class CheckoutService {
             subtotalMinor: group.subtotalMinor,
             vatShareMinor: group.vatShareMinor,
             deliveryFeeShareMinor: group.deliveryFeeShareMinor,
+            couponDiscountShareMinor: group.couponDiscountShareMinor,
+            creditsAppliedShareMinor: group.creditsAppliedShareMinor,
             status: "PENDING",
           })),
           { session },
         );
         await Payment.create(
-          (pod ? groupPlans : [{ publicId: undefined, subtotalMinor: Number(preview.subtotalMinor), vatShareMinor: Number(preview.vatMinor || 0), deliveryFeeShareMinor: Number(preview.deliveryFeeMinor), paymentPublicId: ids.payment }]).map((group) =>
-            ({
+          (pod ? groupPlans : [{
+            publicId: undefined,
+            subtotalMinor: Number(preview.subtotalMinor),
+            vatShareMinor: Number(preview.vatMinor || 0),
+            deliveryFeeShareMinor: Number(preview.deliveryFeeMinor),
+            couponDiscountShareMinor: Number(preview.couponDiscountMinor || 0),
+            creditsAppliedShareMinor: Number(preview.creditsAppliedMinor || 0),
+            paymentPublicId: ids.payment,
+          }]).map((group) => {
+            // Charge the discounted figure: the coupon and any credits the
+            // customer applied come off what the gateway actually collects.
+            const payableMinor = Math.max(
+              0,
+              group.subtotalMinor
+                + group.vatShareMinor
+                + group.deliveryFeeShareMinor
+                - group.couponDiscountShareMinor
+                - group.creditsAppliedShareMinor,
+            );
+            return {
               publicId: group.paymentPublicId,
               orderId: order.id,
               fulfilmentGroupId: group.publicId,
@@ -652,8 +836,8 @@ export class CheckoutService {
               transactionRef: `PSK-${group.paymentPublicId}`,
               gateway: "paystack",
               paymentMethod: pod ? "pos" : "card",
-              amount: (group.subtotalMinor + group.vatShareMinor + group.deliveryFeeShareMinor) / 100,
-              amountMinor: group.subtotalMinor + group.vatShareMinor + group.deliveryFeeShareMinor,
+              amount: payableMinor / 100,
+              amountMinor: payableMinor,
               currency: preview.currency,
               gatewayFee: 0,
               amountSettled: 0,
@@ -662,8 +846,8 @@ export class CheckoutService {
                 ? CommercePaymentStatus.DUE_AT_HANDOVER
                 : CommercePaymentStatus.PENDING,
               refundedAmount: 0,
-            }),
-          ),
+            };
+          }),
           { session },
         );
         if (pod) {
@@ -718,6 +902,28 @@ export class CheckoutService {
       });
     } finally {
       await session.endSession();
+    }
+
+    // Booked only after the order transaction commits, so a rolled-back
+    // checkout never burns a coupon use or debits credits. Both are keyed on
+    // the caller's idempotencyKey, so a retried confirm is a no-op.
+    if (preview.couponId && Number(preview.couponDiscountMinor || 0) > 0) {
+      await this.coupons.redeem({
+        couponId: String(preview.couponId),
+        couponCode: String(preview.couponCode),
+        userId: actor.customerId,
+        orderId,
+        discountMinor: Number(preview.couponDiscountMinor),
+        idempotencyKey,
+      }).catch((error) => console.error("[checkout] coupon redeem failed", error));
+    }
+    if (Number(preview.creditsAppliedMinor || 0) > 0) {
+      await this.credits.spend({
+        userId: actor.customerId,
+        amountMinor: Number(preview.creditsAppliedMinor),
+        orderId,
+        idempotencyKey,
+      }).catch((error) => console.error("[checkout] credit spend failed", error));
     }
     const result = await this.orderResult(orderId);
     await createCommerceNotification({

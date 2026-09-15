@@ -20,6 +20,9 @@ const deviceMetadataFields = {
   platform: z.string().trim().min(1).max(40).optional(),
 };
 
+/** Optional on every path that can mint a brand-new customer account. */
+const referralCodeField = { referralCode: z.string().trim().min(4).max(20).optional() };
+
 const otpSchema = z.object({ email: z.string().email(), code: z.string().min(4), ...deviceMetadataFields });
 const refreshSchema = z.object({ refreshToken: z.string().min(1) });
 const logoutSchema = z.object({ refreshToken: z.string().min(1).optional() });
@@ -41,17 +44,20 @@ const signupCompleteSchema = z.object({
   address: z.record(z.string(), z.unknown()).optional(),
   preferences: z.record(z.string(), z.unknown()).optional(),
   ...deviceMetadataFields,
+  ...referralCodeField,
 });
 const passwordVerifySchema = z.object({ email: z.string().email(), code: z.string().min(4) });
 const googleAuthSchema = z.object({
   idToken: z.string().min(20),
   ...deviceMetadataFields,
+  ...referralCodeField,
 });
 const appleAuthSchema = z.object({
   identityToken: z.string().min(20),
   firstName: z.string().trim().max(80).optional(),
   lastName: z.string().trim().max(80).optional(),
   ...deviceMetadataFields,
+  ...referralCodeField,
 });
 
 export function createAuthRouter() {

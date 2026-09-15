@@ -66,6 +66,21 @@ export function createCustomerRouter() {
     asyncHandler(controller.clearCartState),
   );
   router.get("/commerce/config", asyncHandler(controller.commerceConfig));
+  // Public: the checkout picker needs the courier list before sign-in gates.
+  router.get("/logistics-providers", asyncHandler(controller.logisticsProviders));
+
+  router.get("/credits", requireAuth, asyncHandler(controller.credits));
+  router.get("/referrals", requireAuth, asyncHandler(controller.referrals));
+  router.post(
+    "/coupons/validate",
+    requireAuth,
+    validateBody(z.object({
+      code: z.string().trim().min(3).max(40),
+      subtotalMinor: z.coerce.number().int().nonnegative(),
+      deliveryFeeMinor: z.coerce.number().int().nonnegative().default(0),
+    })),
+    asyncHandler(controller.validateCoupon),
+  );
 
   router.get(
     "/likes",

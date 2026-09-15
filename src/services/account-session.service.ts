@@ -85,7 +85,7 @@ export async function issueAccountSession(
   const refreshToken = signRefreshToken(payload);
   session.refreshTokenHash = hash(refreshToken);
   await session.save();
-  return { accessToken, refreshToken, user: await presentAccountUser(user) };
+  return { accessToken, refreshToken, accessExpiresAt: new Date((jwt.decode(accessToken) as jwt.JwtPayload).exp! * 1000).toISOString(), user: await presentAccountUser(user) };
 }
 
 export async function rotateAccountSession(refreshToken: string) {
@@ -125,11 +125,18 @@ export async function rotateAccountSession(refreshToken: string) {
     familyId: session.familyId,
   };
   const nextRefresh = signRefreshToken(nextPayload);
-  session.refreshTokenHash = hash(nextRefresh);
-  session.lastUsedAt = new Date();
-  await session.save();
+  // Compare-and-swap prevents parallel refreshes from issuing two valid successors.
+  const rotated = await AccountSession.updateOne(
+    { _id: session.id, refreshTokenHash: hash(refreshToken), revokedAt: { $exists: false }, expiresAt: { $gt: new Date() } },
+    { $set: { refreshTokenHash: hash(nextRefresh), lastUsedAt: new Date(), expiresAt: refreshExpiry() } },
+  );
+  if (rotated.modifiedCount !== 1) {
+    throw new HttpError(401, 'Session renewal was already processed. Please sign in again.', undefined, 'TOKEN_INVALID');
+  }
+  const accessToken = signAccessToken(nextPayload);
   return {
-    accessToken: signAccessToken(nextPayload),
+    accessToken,
+    accessExpiresAt: new Date((jwt.decode(accessToken) as jwt.JwtPayload).exp! * 1000).toISOString(),
     refreshToken: nextRefresh,
     user: await presentAccountUser(user),
   };

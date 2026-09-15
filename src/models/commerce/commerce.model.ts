@@ -50,6 +50,12 @@ export interface CheckoutPreview extends BaseEntity {
   taxSnapshot?: Record<string, unknown>;
   deliveryFeeMinor: number;
   deliveryPricing?: Record<string, unknown>;
+  logisticsProviderId?: string;
+  logisticsProviderSnapshot?: Record<string, unknown>;
+  couponId?: string;
+  couponCode?: string;
+  couponDiscountMinor: number;
+  creditsAppliedMinor: number;
   totalMinor: number;
   currency: string;
   policyVersions: Record<string, string>;
@@ -67,6 +73,12 @@ export interface CommerceSettings extends BaseEntity {
   defaultPodLimitMinor: number;
   previewTtlMinutes: number;
   catalogAvailabilityCheckDays: number;
+  /** Ceiling on how much of one order's subtotal Hook Credits may cover. */
+  creditSpendCapPercent: number;
+  /** Credits granted to every new customer account. */
+  welcomeBonusMinor: number;
+  referralSignupBonusMinor: number;
+  referralReferrerBonusMinor: number;
   negotiationEnabled: boolean;
   negotiationSessionMode: "fixed" | "unlimited";
   negotiationSessionMinutes: number;
@@ -74,7 +86,7 @@ export interface CommerceSettings extends BaseEntity {
   negotiationQuoteMinutes: number;
   negotiationAzureWordingEnabled: boolean;
   paymentProviders: Array<{
-    provider: "paystack" | "opay";
+    provider: "paystack";
     enabled: boolean;
     displayOrder: number;
     isDefault: boolean;
@@ -94,7 +106,7 @@ export interface CommercePolicyVersion extends BaseEntity {
 }
 
 export interface PaymentWebhookEvent extends BaseEntity {
-  provider: "paystack" | "opay";
+  provider: "paystack";
   providerEventId: string;
   payloadHash: string;
   eventType: string;
@@ -122,7 +134,7 @@ export interface CommerceOutboxEvent extends BaseEntity {
 }
 
 export interface IntegrationException extends BaseEntity {
-  provider: "paystack" | "opay";
+  provider: "paystack";
   type:
     | "signature"
     | "reference"
@@ -226,6 +238,12 @@ const previewSchema = createSchema<CheckoutPreview>({
   taxSnapshot: { type: Object },
   deliveryFeeMinor: { type: Number, required: true, min: 0 },
   deliveryPricing: { type: Object },
+  logisticsProviderId: { type: String },
+  logisticsProviderSnapshot: { type: Object },
+  couponId: { type: String },
+  couponCode: { type: String, uppercase: true },
+  couponDiscountMinor: { type: Number, default: 0, min: 0 },
+  creditsAppliedMinor: { type: Number, default: 0, min: 0 },
   totalMinor: { type: Number, required: true, min: 0 },
   currency: { type: String, default: "NGN" },
   policyVersions: { type: Object, required: true },
@@ -245,6 +263,10 @@ const settingsSchema = createSchema<CommerceSettings>({
   defaultPodLimitMinor: { type: Number, default: 10000000, min: 0 },
   previewTtlMinutes: { type: Number, default: 10, min: 2, max: 30 },
   catalogAvailabilityCheckDays: { type: Number, default: 4, min: 1, max: 30 },
+  creditSpendCapPercent: { type: Number, default: 20, min: 0, max: 100 },
+  welcomeBonusMinor: { type: Number, default: 30000, min: 0 },
+  referralSignupBonusMinor: { type: Number, default: 30000, min: 0 },
+  referralReferrerBonusMinor: { type: Number, default: 100000, min: 0 },
   negotiationEnabled: { type: Boolean, default: true },
   negotiationSessionMode: { type: String, enum: ["fixed", "unlimited"], default: "fixed" },
   negotiationSessionMinutes: { type: Number, default: 10, min: 1, max: 1440 },
@@ -255,7 +277,6 @@ const settingsSchema = createSchema<CommerceSettings>({
     type: [Object],
     default: [
       { provider: "paystack", enabled: true, displayOrder: 1, isDefault: true },
-      { provider: "opay", enabled: false, displayOrder: 2, isDefault: false },
     ],
   },
   lowStockThreshold: { type: Number, default: 5, min: 0, max: 100 },
@@ -284,7 +305,7 @@ const policySchema = createSchema<CommercePolicyVersion>({
 });
 policySchema.index({ type: 1, version: 1 }, { unique: true });
 const webhookSchema = createSchema<PaymentWebhookEvent>({
-  provider: { type: String, enum: ["paystack", "opay"], required: true },
+  provider: { type: String, enum: ["paystack"], required: true },
   providerEventId: { type: String, required: true },
   payloadHash: { type: String, required: true },
   eventType: { type: String, required: true },
@@ -330,7 +351,7 @@ outboxSchema.index(
   { unique: true },
 );
 const exceptionSchema = createSchema<IntegrationException>({
-  provider: { type: String, enum: ["paystack", "opay"], default: "paystack" },
+  provider: { type: String, enum: ["paystack"], default: "paystack" },
   type: {
     type: String,
     enum: [

@@ -1,13 +1,11 @@
 import { HttpError } from "@utils/http";
 import type { PaymentProvider } from "./payment-provider";
-import { OpayProvider } from "./opay.provider";
 import { PaystackProvider } from "./paystack.provider";
 
-export type ProviderName = "paystack" | "opay";
+export type ProviderName = "paystack";
 
 const providers: Record<ProviderName, PaymentProvider> = {
   paystack: new PaystackProvider(),
-  opay: new OpayProvider(),
 };
 
 export function paymentProvider(name: ProviderName) {

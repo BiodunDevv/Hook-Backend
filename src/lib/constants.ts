@@ -300,5 +300,14 @@ export const DELIVERY_SLA_HOURS = 24;
 export const DEFAULT_DELIVERY_FEE = 3000;
 export const DEFAULT_DELIVERY_FEE_MINOR = 300000;
 export const DEFAULT_POD_LIMIT_MINOR = 10000000;
+
+/**
+ * Pay on Delivery is paused platform-wide. The feature is intact — PodService,
+ * the admin POD queue and every commerce.pod.* permission still work so orders
+ * placed before the pause can be worked to completion — but no new order may
+ * select it. Flip to false to resume; the per-state and per-customer POD
+ * toggles then apply as before.
+ */
+export const POD_PAUSED = true;
 export const VENDOR_CONFIRMATION_HOURS = 2;
 export const GIFT_EXPIRY_DAYS = 7;

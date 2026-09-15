@@ -23,6 +23,8 @@ import {
   type SessionMetadata,
 } from './account-session.service';
 import { nextPublicId } from './public-id.service';
+import { ReferralService } from './referral.service';
+import { CreditService } from './credit.service';
 
 function hashToken(token: string) {
   return createHash('sha256').update(token).digest('hex');
@@ -30,6 +32,8 @@ function hashToken(token: string) {
 
 export class AuthService {
   private readonly notifications?: NotificationService;
+  private readonly referrals = new ReferralService();
+  private readonly credits = new CreditService();
 
   constructor(
     private readonly userRepo: Repository<User>,
@@ -140,7 +144,7 @@ export class AuthService {
     return response;
   }
 
-  async loginWithGoogle(input: { idToken: string }, metadata?: SessionMetadata) {
+  async loginWithGoogle(input: { idToken: string; referralCode?: string }, metadata?: SessionMetadata) {
     const payload = await verifyGoogleIdToken(input.idToken);
     const email = payload.email!.toLowerCase().trim();
     const firstName = payload.given_name || '';
@@ -198,6 +202,11 @@ export class AuthService {
       this.userRepo.update(authUser.id, { refreshToken: undefined, lastLoginAt: new Date() }),
     ]);
 
+    if (isNewUser) {
+      await this.credits.grantWelcomeBonus(authUser.id).catch(() => undefined);
+      if (input.referralCode) await this.referrals.applyCode(input.referralCode, authUser.id);
+    }
+
     const name = `${authUser.firstName || ''} ${authUser.lastName || ''}`.trim();
     await Promise.allSettled([
       isNewUser ? this.email.sendWelcome({ email: authUser.email, name }) : Promise.resolve(),
@@ -207,7 +216,7 @@ export class AuthService {
     return response;
   }
 
-  async loginWithApple(input: { identityToken: string; firstName?: string; lastName?: string }, metadata?: SessionMetadata) {
+  async loginWithApple(input: { identityToken: string; firstName?: string; lastName?: string; referralCode?: string }, metadata?: SessionMetadata) {
     const payload = await verifyAppleIdentityToken(input.identityToken);
     let user = await this.userRepo.findOne({ where: payload.email ? [{ appleId: payload.sub }, { email: payload.email }] : { appleId: payload.sub } });
     const isNewUser = !user;
@@ -249,6 +258,10 @@ export class AuthService {
     }
     if (!user) throw new HttpError(401, 'Apple sign-in could not be completed');
     const response = await this.buildAuthResponse(user, metadata);
+    if (isNewUser) {
+      await this.credits.grantWelcomeBonus(user.id).catch(() => undefined);
+      if (input.referralCode) await this.referrals.applyCode(input.referralCode, user.id);
+    }
     if (isNewUser) await this.email.sendWelcome({ email: user.email, name: `${user.firstName} ${user.lastName}`.trim() });
     return response;
   }
@@ -387,6 +400,12 @@ export class AuthService {
       this.userRepo.update(user.id, { refreshToken: undefined }),
       this.signupSessions!.delete({ id: session.id }),
     ]);
+    await this.credits.grantWelcomeBonus(user.id).catch(() => undefined);
+    // applyCode never throws — a mistyped or retired code must not fail an
+    // otherwise valid signup.
+    if ((body as { referralCode?: string }).referralCode) {
+      await this.referrals.applyCode(String((body as { referralCode?: string }).referralCode), user.id);
+    }
     const name = `${user.firstName || ''} ${user.lastName || ''}`.trim();
     await Promise.all([
       this.email.sendWelcome({ email: user.email, name }),
@@ -407,6 +426,10 @@ export class AuthService {
       this.markOtpUsed(otp.id),
       this.userRepo.save(user),
     ]);
+    // The legacy register() path only becomes a usable account here, so this
+    // is its activation point. Keyed on the user id, so an account that
+    // already received the bonus elsewhere is not credited twice.
+    await this.credits.grantWelcomeBonus(user.id).catch(() => undefined);
     await this.email.sendWelcome({
       email: user.email,
       name: `${user.firstName || ''} ${user.lastName || ''}`.trim(),

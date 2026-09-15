@@ -1,5 +1,7 @@
 import { Router } from "express";
 import { AdminCategoriesController } from "@controllers/admin/categories.controller";
+import { AdminCouponsController } from "@controllers/admin/coupons.controller";
+import { AdminLogisticsProvidersController } from "@controllers/admin/logistics-providers.controller";
 import { AdminDashboardController } from "@controllers/admin/dashboard.controller";
 import { AdminFinancialsController } from "@controllers/admin/financials.controller";
 import { AdminNegotiationsController } from "@controllers/admin/negotiations.controller";
@@ -20,7 +22,7 @@ import { createPlatformAdminRouter } from "./platform";
 import { requireAuth } from "@middleware/auth";
 import { platformContext } from "@middleware/platform-context";
 import { requireAdmin, requireSuperAdmin } from "@middleware/roles";
-import { requirePermission } from "@middleware/permissions";
+import { requireAnyPermission, requirePermission } from "@middleware/permissions";
 import { validateBody } from "@middleware/validate";
 import {
   adminUserSchema,
@@ -45,6 +47,12 @@ import {
   reviewStartSchema,
   submissionApproveAsProductSchema,
 } from "@validations/catalog.schemas";
+import {
+  couponCreateSchema,
+  couponUpdateSchema,
+  logisticsProviderCreateSchema,
+  logisticsProviderUpdateSchema,
+} from "@validations/promotions.schemas";
 import { asyncHandler } from "@utils/http";
 import {
   commerceSettingsSchema,
@@ -77,6 +85,8 @@ export function createAdminRouter() {
   const legalContent = new AdminLegalContentController();
   const search = new AdminSearchController();
   const categories = new AdminCategoriesController();
+  const coupons = new AdminCouponsController();
+  const logisticsProviders = new AdminLogisticsProvidersController();
   const operations = new AdminOperationsController();
   const commerce = new AdminCommerceController();
   const catalogReview = new AdminCatalogReviewController();
@@ -100,7 +110,19 @@ export function createAdminRouter() {
   router.post('/app-releases/:id/withdraw', requirePermission('app_releases.manage'), validateBody(z.object({}).strict()), asyncHandler(releases.withdraw));
   router.post(
     "/uploads/images",
-    requirePermission("markets.manage"),
+    // Shared utility: every area that attaches an image needs it, so it is
+    // gated on holding any one of their manage permissions rather than on
+    // markets.manage alone.
+    requireAnyPermission(
+      "markets.manage",
+      "products.edit",
+      "categories.manage",
+      "coupons.manage",
+      "logistics.manage",
+      "hubs.manage",
+      "partners.manage",
+      "catalog.media.upload",
+    ),
     upload.array("images", Number(process.env.UPLOAD_MAX_FILES || 8)),
     asyncHandler(uploads.images),
   );
@@ -214,6 +236,69 @@ export function createAdminRouter() {
     "/categories/:id",
     requirePermission("categories.manage"),
     asyncHandler(categories.remove),
+  );
+
+  // ── Logistics providers (the courier list customers pick at checkout) ──
+  router.get(
+    "/logistics-providers",
+    requirePermission("logistics.view"),
+    asyncHandler(logisticsProviders.list),
+  );
+  router.post(
+    "/logistics-providers",
+    requirePermission("logistics.manage"),
+    validateBody(logisticsProviderCreateSchema),
+    asyncHandler(logisticsProviders.create),
+  );
+  router.get(
+    "/logistics-providers/:id",
+    requirePermission("logistics.view"),
+    asyncHandler(logisticsProviders.detail),
+  );
+  router.patch(
+    "/logistics-providers/:id",
+    requirePermission("logistics.manage"),
+    validateBody(logisticsProviderUpdateSchema),
+    asyncHandler(logisticsProviders.update),
+  );
+  router.delete(
+    "/logistics-providers/:id",
+    requirePermission("logistics.manage"),
+    asyncHandler(logisticsProviders.remove),
+  );
+
+  // ── Coupons ────────────────────────────────────────────────────────────
+  router.get(
+    "/coupons",
+    requirePermission("coupons.view"),
+    asyncHandler(coupons.list),
+  );
+  router.post(
+    "/coupons",
+    requirePermission("coupons.manage"),
+    validateBody(couponCreateSchema),
+    asyncHandler(coupons.create),
+  );
+  router.get(
+    "/coupons/:id",
+    requirePermission("coupons.view"),
+    asyncHandler(coupons.detail),
+  );
+  router.get(
+    "/coupons/:id/redemptions",
+    requirePermission("coupons.view"),
+    asyncHandler(coupons.redemptions),
+  );
+  router.patch(
+    "/coupons/:id",
+    requirePermission("coupons.manage"),
+    validateBody(couponUpdateSchema),
+    asyncHandler(coupons.update),
+  );
+  router.delete(
+    "/coupons/:id",
+    requirePermission("coupons.manage"),
+    asyncHandler(coupons.remove),
   );
 
   // ── Products ───────────────────────────────────────────────────────────

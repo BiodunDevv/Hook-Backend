@@ -9,7 +9,7 @@ export interface Payment extends BaseEntity {
   resourceType: "order" | "gift";
   transactionRef: string;
   gatewayRef?: string;
-  gateway: "opay" | "paystack" | "nomba";
+  gateway: "paystack" | "nomba";
   paymentMethod: "card" | "bank_transfer" | "ussd" | "pos";
   amount: number;
   gatewayFee: number;
@@ -59,7 +59,7 @@ const PaymentSchema = createSchema<Payment>({
   gatewayRef: { type: String, index: true },
   gateway: {
     type: String,
-    enum: ["opay", "paystack", "nomba"],
+    enum: ["paystack", "nomba"],
     required: true,
   },
   paymentMethod: {

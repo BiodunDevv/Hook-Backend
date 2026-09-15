@@ -44,6 +44,8 @@ const domains: Record<string, string[]> = {
   'market.collections': ['view', 'manage'],
   'market.payments': ['view', 'reconcile'],
   'catalog.availability': ['view', 'manage', 'confirm'],
+  coupons: ['view', 'manage'],
+  credits: ['view', 'adjust'],
 };
 
 export const PLATFORM_PERMISSION_KEYS = Object.entries(domains)
@@ -120,6 +122,7 @@ const financePermissions = [
   'commerce.outbox.view',
   'fulfilment.view', 'logistics.view', 'logistics.manage', 'returns.view', 'returns.review',
   'finance.refunds.view', 'finance.refunds.process',
+  'coupons.view', 'coupons.manage', 'credits.view', 'credits.adjust',
 ];
 
 const roles = [
@@ -158,7 +161,7 @@ const roles = [
   },
   { key: 'DISPATCH_HUB_MANAGER', name: 'Dispatch Hub Manager', scope: ScopeType.HUB, permissions: ['hubs.view', 'markets.view', 'runners.view', 'runners.assign', ...orderOperations] },
   { key: 'DISPATCH_HUB_OFFICER', name: 'Dispatch Hub Officer', scope: ScopeType.HUB, permissions: ['hubs.view', 'markets.view', 'runners.view', 'orders.view', 'orders.edit'] },
-  { key: 'LOGISTICS_OFFICER', name: 'Logistics Officer', scope: ScopeType.MULTI_STATE, permissions: ['hubs.view', 'markets.view', 'runners.view', 'orders.view', 'orders.edit'] },
+  { key: 'LOGISTICS_OFFICER', name: 'Logistics Officer', scope: ScopeType.MULTI_STATE, permissions: ['hubs.view', 'markets.view', 'runners.view', 'orders.view', 'orders.edit', 'logistics.view', 'logistics.book', 'logistics.manage', 'logistics.track'] },
   { key: 'CUSTOMER_SUPPORT_OFFICER', name: 'Customer Support Officer', scope: ScopeType.MULTI_STATE, permissions: supportPermissions },
   { key: 'FINANCE_OFFICER', name: 'Finance Officer', scope: ScopeType.MULTI_STATE, permissions: [...financePermissions, 'market.payments.view', 'market.payments.reconcile'] },
   { key: 'MANAGEMENT_VIEWER', name: 'Management Viewer', scope: ScopeType.GLOBAL, permissions: [...readPermissions] },

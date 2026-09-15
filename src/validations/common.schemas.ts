@@ -110,7 +110,7 @@ export const negotiationSchema = z.object({
 
 export const paymentInitializeSchema = z.object({
   orderId: idSchema,
-  gateway: z.literal('opay').default('opay'),
+  gateway: z.literal('paystack').default('paystack'),
   paymentMethod: z.enum(['card', 'bank_transfer', 'ussd', 'pos']).default('card'),
   savePaymentMethod: z.boolean().default(false),
 });

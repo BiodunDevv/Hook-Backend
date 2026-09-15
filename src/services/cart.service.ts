@@ -142,17 +142,16 @@ export class CartService {
         "VALIDATION_ERROR",
       );
     }
-    const linkedMarket = await Market.findOne(identifierFilter(product.marketId)).select('_id name').lean();
+    // Market validation and option resolution are independent database reads.
+    const [linkedMarket, variant] = await Promise.all([
+      Market.findOne(identifierFilter(product.marketId)).select('_id name').lean(),
+      (async () => {
+        await ensureLegacyProductOptions(product, variantId);
+        return variantId ? ProductVariant.findOne({ ...identifierFilter(variantId), productId, active: true }).lean({ virtuals: true }) : null;
+      })(),
+    ]);
     if (!linkedMarket?.name) throw new HttpError(409, 'Product market is unavailable. Refresh this product.', undefined, 'PRODUCT_NOT_AVAILABLE');
     product.marketId = linkedMarket._id.toString();
-    await ensureLegacyProductOptions(product, variantId);
-    const variant = variantId
-      ? await ProductVariant.findOne({
-          ...identifierFilter(variantId),
-          productId,
-          active: true,
-        }).lean({ virtuals: true })
-      : null;
     if (variantId && !variant)
       throw new HttpError(
         409,

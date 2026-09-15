@@ -38,6 +38,8 @@ export interface User extends BaseEntity {
   podEligible?: boolean;
   podDisabledReason?: string;
   podEligibilityUpdatedAt?: Date;
+  /** Minted on first use by ReferralService.ensureCode(), not at signup. */
+  referralCode?: string;
 }
 
 const UserSchema = createSchema<User>({
@@ -77,6 +79,7 @@ const UserSchema = createSchema<User>({
   podEligible: { type: Boolean, default: true, index: true },
   podDisabledReason: { type: String, maxlength: 500 },
   podEligibilityUpdatedAt: { type: Date },
+  referralCode: { type: String, unique: true, sparse: true, index: true, uppercase: true, maxlength: 20 },
   deletedAt: { type: Date },
 });
 

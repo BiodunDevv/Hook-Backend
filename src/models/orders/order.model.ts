@@ -48,6 +48,12 @@ export interface Order extends BaseEntity {
   taxSnapshot?: Record<string, unknown>;
   deliveryFeeMinor?: number;
   deliveryPricing?: Record<string, unknown>;
+  logisticsProviderId?: string;
+  logisticsProviderSnapshot?: Record<string, unknown>;
+  couponId?: string;
+  couponCode?: string;
+  couponDiscountMinor?: number;
+  creditsAppliedMinor?: number;
   totalMinor?: number;
   currency?: string;
   customerSnapshot?: Record<string, unknown>;
@@ -178,6 +184,12 @@ const OrderSchema = createSchema<Order>({
   taxSnapshot: { type: Object },
   deliveryFeeMinor: { type: Number, min: 0 },
   deliveryPricing: { type: Object },
+  logisticsProviderId: { type: String, index: true },
+  logisticsProviderSnapshot: { type: Object },
+  couponId: { type: String, index: true },
+  couponCode: { type: String, uppercase: true, index: true },
+  couponDiscountMinor: { type: Number, default: 0, min: 0 },
+  creditsAppliedMinor: { type: Number, default: 0, min: 0 },
   totalMinor: { type: Number, min: 0 },
   currency: { type: String, default: "NGN" },
   customerSnapshot: { type: Object },

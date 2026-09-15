@@ -18,3 +18,12 @@ test('direct cart materializes only product-defined legacy options', async () =>
   await assert.rejects(ensureLegacyProductOptions(product, `legacy_opt_${'0'.repeat(32)}`), /options changed/);
   assert.equal(write.mock.callCount(), 1);
 });
+test('already materialized legacy options do not rewrite the option grid', async () => {
+  const product = { _id: 'product', colors: ['#FFFFFF'], sizes: ['45', '46'] };
+  const exists = mock.method(ProductVariant, 'exists', async () => ({ _id: 'existing' }));
+  const write = mock.method(ProductVariant, 'bulkWrite', async () => ({}));
+  await ensureLegacyProductOptions(product, legacyProductOptions(product)[0].publicId);
+  assert.equal(exists.mock.callCount(), 1);
+  assert.equal(write.mock.callCount(), 0);
+  await assert.rejects(ensureLegacyProductOptions(product, `legacy_opt_${'0'.repeat(32)}`), /options changed/);
+});

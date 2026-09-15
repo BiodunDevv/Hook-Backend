@@ -211,7 +211,6 @@ export class AdminCommerceController {
     const readiness = paymentProviderReadiness();
     const configured = settings?.paymentProviders || [
       { provider: 'paystack' as const, enabled: true, displayOrder: 1, isDefault: true },
-      { provider: 'opay' as const, enabled: false, displayOrder: 2, isDefault: false },
     ];
     sendSuccess(res, {
       providers: configured.map((entry) => ({ ...entry, ...readiness.find((item) => item.provider === entry.provider) })),
@@ -225,7 +224,7 @@ export class AdminCommerceController {
     const readiness = paymentProviderReadiness();
     for (const entry of req.body.providers) {
       if (entry.enabled && !readiness.find((item) => item.provider === entry.provider)?.configured) {
-        throw new HttpError(409, `${entry.provider === 'opay' ? 'OPay' : 'Paystack'} is missing required configuration`, undefined, 'PAYMENT_PROVIDER_UNAVAILABLE');
+        throw new HttpError(409, 'Paystack is missing required configuration', undefined, 'PAYMENT_PROVIDER_UNAVAILABLE');
       }
     }
     const updated = await CommerceSettings.findOneAndUpdate(

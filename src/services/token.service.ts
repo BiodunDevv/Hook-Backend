@@ -14,7 +14,10 @@ export interface AuthUserPayload {
 
 export function signAccessToken(payload: AuthUserPayload) {
   const options: SignOptions = {
-    expiresIn: (process.env.JWT_EXPIRY || '15m') as SignOptions['expiresIn'],
+    // Customer mobile sessions renew weekly; staff tokens retain their shorter policy.
+    expiresIn: payload.accountType === AccountType.CUSTOMER
+      ? '7d'
+      : (process.env.JWT_EXPIRY || '15m') as SignOptions['expiresIn'],
   };
 
   return jwt.sign(payload, jwtSecret(), options);

@@ -93,7 +93,6 @@ export class PaymentLinkService {
     const readiness = Object.fromEntries(paymentProviderReadiness().map((entry) => [entry.provider, entry]));
     const configured = settings?.paymentProviders?.length ? settings.paymentProviders : [
       { provider: "paystack" as const, enabled: true, displayOrder: 1, isDefault: true },
-      { provider: "opay" as const, enabled: false, displayOrder: 2, isDefault: false },
     ];
     const providers = configured
       .filter((entry) => entry.enabled && readiness[entry.provider]?.configured)

@@ -84,6 +84,9 @@ export const checkoutPreviewSchema = z
         RETURNS: z.string().min(1),
       })
       .strict(),
+    logisticsProviderId: publicId.optional(),
+    couponCode: z.string().trim().min(3).max(40).optional(),
+    useCredits: z.boolean().optional(),
   })
   .strict();
 
@@ -100,17 +103,17 @@ export const paymentLinkCreateSchema = z.object({
 }).strict();
 
 export const paymentLinkInitializeSchema = z.object({
-  provider: z.enum(["paystack", "opay"]),
+  provider: z.enum(["paystack"]),
   appReturn: z.boolean().optional().default(false),
 }).strict();
 
 export const paymentProviderSettingsSchema = z.object({
   providers: z.array(z.object({
-    provider: z.enum(["paystack", "opay"]),
+    provider: z.enum(["paystack"]),
     enabled: z.boolean(),
     displayOrder: z.number().int().min(1).max(10),
     isDefault: z.boolean(),
-  }).strict()).length(2),
+  }).strict()).min(1),
   reason: z.string().trim().min(5).max(500),
 }).strict();
 

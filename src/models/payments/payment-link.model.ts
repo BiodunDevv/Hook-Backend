@@ -1,6 +1,6 @@
 import { BaseEntity, createModel, createSchema } from "@models/base.model";
 
-export type PaymentProviderName = "paystack" | "opay";
+export type PaymentProviderName = "paystack";
 
 export interface PaymentLink extends BaseEntity {
   publicId: string;
@@ -65,7 +65,7 @@ const paymentAttemptSchema = createSchema<PaymentAttempt>({
   paymentLinkId: { type: String, required: true, index: true },
   paymentId: { type: String, required: true, index: true },
   orderId: { type: String, required: true, index: true },
-  provider: { type: String, enum: ["paystack", "opay"], required: true, index: true },
+  provider: { type: String, enum: ["paystack"], required: true, index: true },
   reference: { type: String, required: true, unique: true, index: true },
   idempotencyKey: { type: String, required: true },
   requestHash: { type: String, required: true },

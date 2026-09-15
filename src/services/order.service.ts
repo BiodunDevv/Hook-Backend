@@ -1,6 +1,6 @@
 import type { MongoRepository as Repository } from '@lib/mongo-repository';
 import { AppDataSource } from '@config/data-source';
-import { AccountStatus, AccountType, DEFAULT_DELIVERY_FEE, DELIVERY_SLA_HOURS, OrderStatus, OrderType, PaymentMode, PaymentStatus, ProductStatus, ScopeType } from '@lib/constants';
+import { AccountStatus, AccountType, DEFAULT_DELIVERY_FEE, DELIVERY_SLA_HOURS, OrderStatus, OrderType, PaymentMode, PaymentStatus, POD_PAUSED, ProductStatus, ScopeType } from '@lib/constants';
 import { EmailService } from '@emails/email.service';
 import { getEmailSettings } from '@services/email-settings.service';
 import { Cart } from '@models/cart/cart.model';
@@ -138,7 +138,7 @@ export class OrderService {
     if (cart) cart.items = cart.items || await this.cartItems.find({ where: { cartId: cart.id }, relations: { product: true } });
     const cartItems = cart?.items || [];
     if (!cart || !cartItems.length) throw new HttpError(400, 'Cart is empty');
-    if (body.paymentMode === PaymentMode.PAY_ON_DELIVERY && process.env.OPAY_POD_ENABLED !== 'true') {
+    if (body.paymentMode === PaymentMode.PAY_ON_DELIVERY && POD_PAUSED) {
       throw new HttpError(409, 'Pay on Delivery is not currently available');
     }
     if (body.orderType === OrderType.GIFT && (!body.giftRecipient || body.paymentMode !== PaymentMode.PAY_NOW)) {

@@ -5,7 +5,7 @@ import { requirePermission } from '@middleware/permissions';
 import { validateBody } from '@middleware/validate';
 import { asyncHandler } from '@utils/http';
 import { AdminMarketVendorController } from '@controllers/market-vendor.controller';
-import { marketVendorUpdateSchema, vendorReconcileSchema } from '@validations/vendor.schemas';
+import { marketVendorSchema, marketVendorUpdateSchema, vendorReconcileSchema } from '@validations/vendor.schemas';
 
 const idList = z.array(z.string().min(1)).default([]);
 const reason = z.string().trim().min(3).max(500).optional();
@@ -123,6 +123,28 @@ const assignmentSchema = z.object({
   assignmentReason: z.string().trim().min(3).max(500),
 });
 
+/**
+ * Builds the PATCH schema from the create schema.
+ *
+ * `.partial()` alone is not enough: fields declared with `.default([])` still
+ * inject that default when the client omits them, so a PATCH that never
+ * mentions `marketIds` arrived at the controller carrying `marketIds: []` and
+ * silently wiped the hub's market links. Defaults are right for POST (a new
+ * record with no links) and wrong for PATCH, so they are stripped here.
+ *
+ * An explicitly sent `[]` still comes through, so clearing links on purpose
+ * keeps working.
+ */
+function patchSchema(schema: z.ZodObject<any>) {
+  const shape = Object.fromEntries(
+    Object.entries(schema.shape).map(([key, value]) => {
+      const inner = (value as any)?._def?.innerType;
+      return [key, inner ? inner.optional() : value];
+    }),
+  );
+  return z.object(shape).partial();
+}
+
 function crud(
   router: Router,
   path: string,
@@ -134,7 +156,7 @@ function crud(
   router.get(path, asyncHandler(handlers.list));
   router.post(path, validateBody(schema), asyncHandler(handlers.create));
   router.get(`${path}/:id`, asyncHandler(handlers.detail));
-  router.patch(`${path}/:id`, validateBody(schema.partial()), asyncHandler(handlers.update));
+  router.patch(`${path}/:id`, validateBody(patchSchema(schema)), asyncHandler(handlers.update));
   if (handlers.status) {
     router.post(`${path}/:id/activate`, validateBody(lifecycleSchema), asyncHandler(handlers.status));
     router.post(`${path}/:id/deactivate`, validateBody(lifecycleSchema), asyncHandler(handlers.status));
@@ -189,6 +211,11 @@ export function createPlatformAdminRouter() {
     list: controller.listMarkets, create: controller.createMarket, detail: controller.marketDetail,
     update: controller.updateMarket, status: controller.marketStatus,
   }, marketSchema);
+  // Global vendor directory. The per-Market list below still works; this is
+  // the entry point for the admin Vendors page.
+  router.get('/market-vendors', requirePermission('market.vendors.view'), asyncHandler(marketVendors.directory));
+  router.post('/markets/:id/vendors', requirePermission('market.vendors.manage'), validateBody(marketVendorSchema), asyncHandler(marketVendors.create));
+  router.post('/market-vendors/:id/invite', requirePermission('market.vendors.invite'), asyncHandler(marketVendors.invite));
   router.get('/markets/:id/vendors', requirePermission('market.vendors.view'), asyncHandler(marketVendors.vendors));
   router.get('/market-vendors/:id', requirePermission('market.vendors.view'), asyncHandler(marketVendors.detail));
   router.get('/market-vendors/:id/payment-details', requirePermission('market.payments.view'), asyncHandler(marketVendors.paymentDetails));

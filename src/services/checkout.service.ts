@@ -45,6 +45,7 @@ import { CouponService } from "@services/coupon.service";
 import { CreditService } from "@services/credit.service";
 import { LogisticsProviderService } from "@services/logistics-provider.service";
 import { HttpError } from "@utils/http";
+import { timelineEntry } from "@lib/order-timeline";
 
 type PreviewInput = {
   addressId?: string;
@@ -756,14 +757,7 @@ export class CheckoutService {
           podReview: preview.podDecision,
           partialFulfilment: false,
           deliverySubsidy: 0,
-          timeline: [
-            {
-              status: commerceStatus,
-              at: new Date(),
-              actorType: preview.channel,
-              actorId: actor.actorId,
-            },
-          ],
+          timeline: [timelineEntry(commerceStatus, actor.actorId, { channel: preview.channel })],
         });
         await order.save({ session });
         orderId = order.id;

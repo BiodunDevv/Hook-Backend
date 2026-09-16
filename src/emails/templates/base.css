@@ -32,10 +32,15 @@ p { margin: 0; font-size: 14px; line-height: 1.7; color: #52525b; }
 .value { color: #18181b; font-weight: 700; text-align: right; }
 .row-total { border-bottom: 0; padding-top: 16px; }
 .row-total .label, .row-total .value { font-size: 16px; font-weight: 800; color: #18181b; }
-.line-item { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; border-bottom: 1px solid #f1f1f3; padding: 13px 0; font-size: 14px; }
-.line-title { font-weight: 700; color: #18181b; flex: 1; }
-.line-qty { color: #71717a; width: 92px; }
-.line-price { font-weight: 700; color: #18181b; text-align: right; white-space: nowrap; }
+.line-item { border-bottom: 1px solid #f1f1f3; font-size: 14px; }
+.line-thumb-cell { padding: 13px 12px 13px 0; vertical-align: middle; width: 48px; }
+.line-thumb { width: 48px; height: 48px; border-radius: 8px; object-fit: cover; display: block; border: 1px solid #f1f1f3; }
+.line-thumb-empty { display: block; width: 48px; height: 48px; border-radius: 8px; background: #f1f1f3; }
+.line-text-cell { padding: 13px 0; vertical-align: middle; }
+.line-price-cell { padding: 13px 0 13px 12px; vertical-align: middle; white-space: nowrap; }
+.line-title { font-weight: 700; color: #18181b; }
+.line-qty { color: #71717a; font-size: 13px; }
+.line-price { font-weight: 700; color: #18181b; }
 
 /* Dark information block, mirroring the banner's angle at the top. */
 .dark-block { margin-top: 34px; background: #18181b; padding: 52px 40px 40px; color: #ffffff; -webkit-clip-path: polygon(0 0, 50% 12%, 100% 0, 100% 100%, 0 100%); clip-path: polygon(0 0, 50% 12%, 100% 0, 100% 100%, 0 100%); }
@@ -58,9 +63,8 @@ p { margin: 0; font-size: 14px; line-height: 1.7; color: #52525b; }
   .dark-block { padding: 46px 22px 32px; }
   .banner h1, h1 { font-size: 22px; }
   .code { font-size: 36px; letter-spacing: 10px; padding: 18px; }
-  .row, .line-item { display: block; }
-  .value, .line-price { text-align: left; margin-top: 4px; }
-  .line-qty { width: auto; }
+  .row { display: block; }
+  .value { text-align: left; margin-top: 4px; }
   .dark-cols { display: block; }
   .dark-col + .dark-col { margin-top: 20px; }
 }

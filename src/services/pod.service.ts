@@ -16,6 +16,7 @@ import { HttpError } from "@utils/http";
 import { isValidObjectId } from "mongoose";
 import { createCommerceNotification } from "@services/commerce-notification.service";
 import { restoreOrderIncentives } from "@services/order-restoration.service";
+import { appendTimeline, notifyStatus } from "@lib/order-timeline";
 
 function orderIdentity(value: string) {
   return isValidObjectId(value)
@@ -134,16 +135,7 @@ export class PodService {
       order.commerceStatus = CommerceOrderStatus.APPROVED_FOR_FULFILMENT;
       order.commercePaymentStatus = CommercePaymentStatus.DUE_AT_HANDOVER;
       order.status = OrderStatus.APPROVED_FOR_FULFILMENT;
-      order.timeline = [
-        ...(order.timeline || []),
-        {
-          status: CommerceOrderStatus.APPROVED_FOR_FULFILMENT,
-          at: new Date(),
-          actorType: "POD_OPERATIONS",
-          actorId,
-          reason,
-        },
-      ];
+      order.timeline = appendTimeline(order, CommerceOrderStatus.APPROVED_FOR_FULFILMENT, "POD_OPERATIONS", { actorId, reason });
       await order.save();
       await this.payments.approvePodPayment(order.id);
       await this.payments.emitOrderApproved(order);
@@ -152,10 +144,7 @@ export class PodService {
       order.commercePaymentStatus = CommercePaymentStatus.PENDING;
       order.commerceStatus = CommerceOrderStatus.AWAITING_PAYMENT;
       order.status = OrderStatus.AWAITING_PAYMENT;
-      order.timeline = [
-        ...(order.timeline || []),
-        { status: "PREPAYMENT_REQUIRED", at: new Date(), actorId, reason },
-      ];
+      order.timeline = appendTimeline(order, "PREPAYMENT_REQUIRED", actorId, { reason });
       await Payment.updateOne(
         { orderId: order.id },
         {
@@ -172,18 +161,13 @@ export class PodService {
       order.status = OrderStatus.CANCELLED;
       order.cancelledAt = new Date();
       order.cancellationReason = reason;
-      order.timeline = [
-        ...(order.timeline || []),
-        {
-          status: CommerceOrderStatus.CANCELLED,
-          at: new Date(),
-          actorId,
-          reason,
-        },
-      ];
+      order.timeline = appendTimeline(order, CommerceOrderStatus.CANCELLED, actorId, { reason });
       await order.save();
       // Same restoration as a customer-initiated cancellation.
       await restoreOrderIncentives(String(order._id));
+      // A customer-initiated cancellation has its own dedicated email; an
+      // operations rejection had none until now.
+      await notifyStatus(String(order._id), CommerceOrderStatus.CANCELLED);
     }
     if (order.userId) {
       const copy =

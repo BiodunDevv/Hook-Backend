@@ -26,6 +26,7 @@ import {
   orderCancelledEmailTemplate,
   orderConfirmationEmailTemplate,
   orderStatusUpdateEmailTemplate,
+  orderAwaitingPaymentEmailTemplate,
   otpEmailTemplate,
   passwordResetEmailTemplate,
   paymentConfirmedEmailTemplate,
@@ -185,6 +186,11 @@ export class EmailService {
   async sendOrderStatusUpdate(payload: OrderEmailPayload) {
     await this.loadSettings();
     return this.send({ to: payload.to, ...orderStatusUpdateEmailTemplate(payload) });
+  }
+
+  async sendOrderAwaitingPayment(payload: OrderEmailPayload & { paymentUrl: string }) {
+    await this.loadSettings();
+    return this.send({ to: payload.to, ...orderAwaitingPaymentEmailTemplate(payload) });
   }
 
   async sendVendorApproved(payload: VendorDecisionEmailPayload) {

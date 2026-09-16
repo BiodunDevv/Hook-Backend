@@ -19,6 +19,12 @@ import { User } from "@models/users/user.model";
 import { adminOrderStatsCache } from "@lib/ttl-cache";
 import { OrderFulfilmentGroup } from "@models/orders/order-fulfilment-group.model";
 import { Payment } from "@models/payments/payment.model";
+import { PaymentLink } from "@models/payments/payment-link.model";
+import { CommerceOrderStatus } from "@lib/constants";
+import { appendTimeline, notifyStatus } from "@lib/order-timeline";
+import { restoreOrderIncentives } from "@services/order-restoration.service";
+import { splitOrderIntoGroups } from "@services/order-split.service";
+import { createCommerceNotification } from "@services/commerce-notification.service";
 
 export class AdminOrdersController {
   private readonly email = new EmailService();
@@ -46,16 +52,21 @@ export class AdminOrdersController {
         ? req.query.search.toLowerCase()
         : undefined;
     const where: Record<string, any> = {};
-    if (typeof req.query.status === "string") {
+    // "active" and "completed" are the two coarse views the Orders page
+    // offers; everything else is an exact status match. Completed is the
+    // inverse of active rather than DELIVERED alone, so cancelled and
+    // refunded orders remain reachable from one of the two tabs.
+    const TERMINAL_STATUSES = [
+      OrderStatus.DELIVERED,
+      OrderStatus.CANCELLED,
+      OrderStatus.RETURNED,
+      OrderStatus.REFUNDED,
+    ];
+    if (typeof req.query.status === "string" && req.query.status !== "all") {
       if (req.query.status === "active") {
-        where.status = {
-          $nin: [
-            OrderStatus.DELIVERED,
-            OrderStatus.CANCELLED,
-            OrderStatus.RETURNED,
-            OrderStatus.REFUNDED,
-          ],
-        };
+        where.status = { $nin: TERMINAL_STATUSES };
+      } else if (req.query.status === "completed") {
+        where.status = { $in: TERMINAL_STATUSES };
       } else {
         where.status = req.query.status;
       }
@@ -137,7 +148,12 @@ export class AdminOrdersController {
     sendSuccess(res, await this.statsData());
   };
 
-  detail = async (req: Request, res: Response) => {
+  /**
+   * Resolves an order by any of its identifiers, honouring the caller's state
+   * scope. A staff member outside the order's State gets a 404 rather than a
+   * 403, so the existence of orders elsewhere is not disclosed.
+   */
+  private orderQuery(req: Request) {
     const identifier = routeParam(req.params.id);
     const identity = isValidObjectId(identifier)
       ? {
@@ -155,11 +171,133 @@ export class AdminOrdersController {
             { sourceStateId: { $in: req.user?.assignedStateIds || [] } },
             { sourceStateIds: { $in: req.user?.assignedStateIds || [] } },
           ] };
-    const order = await Order.findOne({ ...identity, ...scope }).lean({
+    return { ...identity, ...scope };
+  }
+
+  detail = async (req: Request, res: Response) => {
+    const order = await Order.findOne(this.orderQuery(req)).lean({
       virtuals: true,
     });
     if (!order) throw new HttpError(404, "Order not found");
     sendSuccess(res, publicOrder(await this.enrichOrder(order)));
+  };
+
+  /**
+   * Corrects delivery details on a live order.
+   *
+   * addressSnapshot is documented as immutable fulfilment information, so a
+   * correction is appended to the timeline rather than silently overwriting
+   * history — staff downstream need to see that the destination changed and
+   * why, not just find different data than they read yesterday.
+   */
+  updateDelivery = async (req: Request, res: Response) => {
+    const order = await Order.findOne(this.orderQuery(req));
+    if (!order) throw new HttpError(404, "Order not found");
+    if (["CANCELLED", "DELIVERED", "COMPLETED", "REFUNDED"].includes(String(order.commerceStatus || "").toUpperCase())) {
+      throw new HttpError(409, "This order can no longer be edited", undefined, "INVALID_STATE_TRANSITION");
+    }
+
+    const { reason, deliveryNotes, scheduledDeliveryAt, recipientName, recipientPhone, formattedAddress } = req.body as Record<string, any>;
+    const before = {
+      deliveryNotes: order.deliveryNotes,
+      scheduledDeliveryAt: order.scheduledDeliveryAt,
+      addressSnapshot: order.addressSnapshot,
+    };
+
+    if (deliveryNotes !== undefined) order.deliveryNotes = deliveryNotes;
+    if (scheduledDeliveryAt !== undefined) order.scheduledDeliveryAt = scheduledDeliveryAt ? new Date(scheduledDeliveryAt) : undefined;
+
+    const addressChanges: Record<string, unknown> = {};
+    if (recipientName !== undefined) addressChanges.recipientName = recipientName;
+    if (recipientPhone !== undefined) addressChanges.phone = recipientPhone;
+    if (formattedAddress !== undefined) addressChanges.formattedAddress = formattedAddress;
+    if (Object.keys(addressChanges).length) {
+      order.addressSnapshot = { ...(order.addressSnapshot || {}), ...addressChanges };
+    }
+
+    order.timeline = appendTimeline(order, "DETAILS_CORRECTED", req.user!.sub, {
+      actorType: "ADMIN",
+      reason,
+      changed: Object.keys({ ...addressChanges, ...(deliveryNotes !== undefined ? { deliveryNotes } : {}), ...(scheduledDeliveryAt !== undefined ? { scheduledDeliveryAt } : {}) }),
+    });
+    await order.save();
+
+    await auditAdminAction(req, "admin.order.update", "order", String(order._id), {
+      before,
+      after: { deliveryNotes: order.deliveryNotes, scheduledDeliveryAt: order.scheduledDeliveryAt, addressSnapshot: order.addressSnapshot },
+      reason,
+    });
+
+    sendSuccess(res, publicOrder(await this.enrichOrder(order.toJSON())));
+  };
+
+  /**
+   * Splits an order into several deliveries. Staff choose which items travel
+   * together; the service re-prorates every money line across the new groups.
+   */
+  split = async (req: Request, res: Response) => {
+    const order = await Order.findOne(this.orderQuery(req)).select("publicId").lean();
+    if (!order) throw new HttpError(404, "Order not found");
+    const { groups, reason } = req.body as { groups: { orderItemIds: string[] }[]; reason: string };
+    const result = await splitOrderIntoGroups(String(order._id), groups, req.user!.sub, reason);
+    await auditAdminAction(req, "admin.order.split", "order", String(order._id), {
+      after: result,
+      reason,
+    });
+    const fresh = await Order.findById(order._id).lean({ virtuals: true });
+    sendSuccess(res, publicOrder(await this.enrichOrder(fresh)));
+  };
+
+  /**
+   * Cancels an order on the customer's behalf and gives back everything it
+   * consumed — Hook Coin spent, the coupon use, and any coin the order earned
+   * — via the same restoration path a customer cancellation uses.
+   */
+  cancel = async (req: Request, res: Response) => {
+    const order = await Order.findOne(this.orderQuery(req));
+    if (!order) throw new HttpError(404, "Order not found");
+    const current = String(order.commerceStatus || "").toUpperCase();
+    if (current === "CANCELLED") throw new HttpError(409, "This order is already cancelled", undefined, "INVALID_STATE_TRANSITION");
+    if (["DELIVERED", "COMPLETED"].includes(current)) {
+      throw new HttpError(409, "A delivered order cannot be cancelled", undefined, "INVALID_STATE_TRANSITION");
+    }
+
+    const { reason } = req.body as { reason: string };
+    order.commerceStatus = CommerceOrderStatus.CANCELLED;
+    order.status = OrderStatus.CANCELLED;
+    order.cancelledAt = new Date();
+    order.cancellationReason = reason;
+    order.timeline = appendTimeline(order, CommerceOrderStatus.CANCELLED, req.user!.sub, { actorType: "ADMIN", reason });
+    await order.save();
+
+    // Coin, coupon and earn all come back. Idempotent and never throws, so a
+    // restoration failure cannot leave the order stuck un-cancelled.
+    await restoreOrderIncentives(String(order._id));
+
+    // Retire any open payment link so the customer cannot pay a dead order.
+    await PaymentLink.updateMany(
+      { orderId: String(order._id), status: { $in: ["active", "processing"] } },
+      { $set: { status: "cancelled", cancelledAt: new Date() } },
+    );
+
+    await notifyStatus(String(order._id), CommerceOrderStatus.CANCELLED);
+    if (order.userId) {
+      await createCommerceNotification({
+        eventKey: `order:${order.publicId}:cancelled-by-admin`,
+        userId: String(order.userId),
+        title: "Your order was cancelled",
+        body: `${reason} Any Hook Coin and coupon you used have been returned.`,
+        type: "order_cancelled",
+        data: { orderId: order.publicId },
+      }).catch(() => undefined);
+    }
+
+    await auditAdminAction(req, "admin.order.cancel", "order", String(order._id), {
+      after: { commerceStatus: CommerceOrderStatus.CANCELLED },
+      reason,
+    });
+
+    sendSuccess(res, publicOrder(await this.enrichOrder(order.toJSON())));
   };
 
   status = async (req: Request, res: Response) => {

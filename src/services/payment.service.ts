@@ -23,10 +23,13 @@ import { nextPublicId } from "@services/public-id.service";
 import { createCommerceNotification } from "@services/commerce-notification.service";
 import { EmailService } from "@emails/email.service";
 import { ReferralService } from "@services/referral.service";
+import { CreditService } from "@services/credit.service";
+import { CreditLedger } from "@models/promotions/credit-ledger.model";
 import { HttpError } from "@utils/http";
 import { paymentProvider, type ProviderName } from "./payments/provider-registry";
 import { PaymentAttempt, PaymentLink } from "@models/payments/payment-link.model";
 import { publishRealtime } from "@services/realtime.service";
+import { appendTimeline } from "@lib/order-timeline";
 
 function identity(value: string) {
   return isValidObjectId(value)
@@ -38,6 +41,7 @@ export class PaymentService {
   private provider = paymentProvider("paystack");
   private email = new EmailService();
   private referrals = new ReferralService();
+  private credits = new CreditService();
   constructor(
     _payments?: Repository<Payment>,
     _orders?: Repository<Order>,
@@ -157,12 +161,27 @@ export class PaymentService {
       userId: customerId,
     }).lean({ virtuals: true });
     if (!order) throw new HttpError(404, "Payment not found");
+    // The success screen shows what was paid, what it earned, and when it
+    // should arrive, so return those here rather than making it fetch the
+    // whole order separately just to render a confirmation.
+    const earned = order.userId
+      ? await CreditLedger.findOne({
+          userId: String(order.userId),
+          orderId: String(order.publicId || order._id),
+          type: 'order_earn',
+          amountMinor: { $gt: 0 },
+        }).select('amountMinor').lean()
+      : null;
     return {
       payment: this.publicPayment(payment),
       order: {
         id: order.publicId,
         status: order.commerceStatus,
         paymentStatus: order.commercePaymentStatus,
+        totalMinor: Number(order.totalMinor ?? Math.round(Number(order.total || 0) * 100)),
+        currency: order.currency || 'NGN',
+        estimatedDeliveryAt: order.scheduledDeliveryAt,
+        creditsEarnedMinor: Number(earned?.amountMinor || 0),
       },
     };
   }
@@ -370,14 +389,7 @@ export class PaymentService {
       });
       order.commercePaymentStatus = outstanding ? CommercePaymentStatus.DUE_AT_HANDOVER : CommercePaymentStatus.CONFIRMED;
       order.paymentStatus = outstanding ? PaymentStatus.PENDING : PaymentStatus.SUCCESSFUL;
-      order.timeline = [
-        ...(order.timeline || []),
-        {
-          status: "HANDOVER_PAYMENT_CONFIRMED",
-          at: new Date(),
-          actorType: "PAYSTACK_WEBHOOK",
-        },
-      ];
+      order.timeline = appendTimeline(order, "HANDOVER_PAYMENT_CONFIRMED", "PAYSTACK_WEBHOOK");
       await order.save();
       this.publishOrderUpdate(order);
       await Shipment.findOneAndUpdate(
@@ -410,14 +422,7 @@ export class PaymentService {
     order.commerceStatus = CommerceOrderStatus.APPROVED_FOR_FULFILMENT;
     order.paymentStatus = PaymentStatus.SUCCESSFUL;
     order.status = OrderStatus.APPROVED_FOR_FULFILMENT;
-    order.timeline = [
-      ...(order.timeline || []),
-      {
-        status: CommerceOrderStatus.APPROVED_FOR_FULFILMENT,
-        at: new Date(),
-        actorType: "PAYSTACK_WEBHOOK",
-      },
-    ];
+    order.timeline = appendTimeline(order, CommerceOrderStatus.APPROVED_FOR_FULFILMENT, "PAYSTACK_WEBHOOK");
     await order.save();
     this.publishOrderUpdate(order);
     await this.emitOrderApproved(order);
@@ -428,6 +433,14 @@ export class PaymentService {
       if (await this.referrals.isFirstPaidOrder(order.userId, String(order.id))) {
         await this.referrals.qualify(order.userId, String(order.publicId || order.id));
       }
+      // Hook Coin earned back on the order. Credited here rather than at
+      // delivery so the success screen can show a figure that is already
+      // true; keyed on the order, so a replayed webhook cannot double-credit.
+      await this.credits.earnOnOrder({
+        userId: order.userId,
+        orderId: String(order.publicId || order.id),
+        subtotalMinor: Number(order.subtotalMinor ?? Math.round(Number(order.subtotal || 0) * 100)),
+      }).catch(() => undefined);
       await createCommerceNotification({
         eventKey: `order:${order.publicId}:payment-confirmed`,
         userId: order.userId,

@@ -20,6 +20,12 @@ export const marketAssociateSubmissionDraftSchema = z.object({
   basicTitle: z.string().trim().min(2).max(180),
   notes: z.string().trim().max(2000).optional(),
   mediaIds: z.array(publicOrInternalId).max(12).default([]),
+  mediaViews: z.object({
+    front: publicOrInternalId.optional(),
+    side: publicOrInternalId.optional(),
+    back: publicOrInternalId.optional(),
+  }).strict().default({}),
+  captureChecklistConfirmed: z.boolean().default(false),
   basePriceMinor: moneyMinor,
   currency: z.literal('NGN').default('NGN'),
   // No minimum here — this schema also covers draft save/update, and a
@@ -30,7 +36,17 @@ export const marketAssociateSubmissionDraftSchema = z.object({
   availabilityNote: z.string().trim().max(500).optional(),
   internalSellerReference: z.string().trim().max(300).optional(),
   version: z.coerce.number().int().positive().optional(),
-}).strict();
+}).strict().superRefine((value, context) => {
+  for (const [view, mediaId] of Object.entries(value.mediaViews)) {
+    if (mediaId && !value.mediaIds.includes(mediaId)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["mediaViews", view],
+        message: "The assigned view must reference one of this submission's images",
+      });
+    }
+  }
+});
 
 export const reviewReasonSchema = z.object({
   reason: z.string().trim().min(5).max(1000),

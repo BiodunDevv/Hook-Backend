@@ -114,6 +114,49 @@ export async function presentMarketRecords(input: PlatformRecord | PlatformRecor
 }
 
 /**
+ * Hub records with their State, City and linked Markets resolved to names.
+ *
+ * Hubs previously went through presentPlatformRecords, which only rewrites ids
+ * to public ids. The admin UI reads `stateName`, `city.name` and a `markets[]`
+ * array of objects, so every one of those fields was undefined and the page
+ * showed "Not recorded" for data that was present — and, worse, showed
+ * "3 Linked Markets" (from `marketIds.length`) directly above "No Markets are
+ * connected yet" (from the absent `markets`).
+ *
+ * Builds on presentMarketRecords for the shared State/City lookup, then adds
+ * the marketIds -> markets[] hydration hubs need.
+ */
+export async function presentHubRecords(input: PlatformRecord | PlatformRecord[]): Promise<any> {
+  const rawRecords = (Array.isArray(input) ? input : [input]).map((record) => ({ ...record }));
+  const presented = await presentMarketRecords(rawRecords);
+  const presentedList: any[] = Array.isArray(presented) ? presented : [presented];
+
+  // One batched lookup across every hub rather than a query per hub.
+  const marketIds = [
+    ...new Set(
+      rawRecords.flatMap((record) => ((record.marketIds as unknown[]) || []).map((id) => stringId(id)).filter(Boolean) as string[]),
+    ),
+  ];
+  const markets = marketIds.length
+    ? await Market.find(referenceFilter(marketIds)).select('_id publicId name address').lean()
+    : [];
+  const marketMap = relationMap(markets);
+
+  const output = presentedList.map((record, index) => {
+    const ids = ((rawRecords[index].marketIds as unknown[]) || []).map((id) => stringId(id)).filter(Boolean) as string[];
+    const linked = ids.map((id) => marketMap.get(id)).filter(Boolean) as any[];
+    return {
+      ...record,
+      // Public ids, so the UI links resolve.
+      marketIds: linked.length ? linked.map((market) => market.publicId) : record.marketIds,
+      markets: linked.map((market) => ({ publicId: market.publicId, id: market.publicId, name: market.name, address: market.address })),
+    };
+  });
+
+  return Array.isArray(input) ? output : output[0];
+}
+
+/**
  * Converts persistence references to stable public identifiers at the HTTP boundary.
  * Role IDs remain internal because roles intentionally do not have a Hook public ID.
  */

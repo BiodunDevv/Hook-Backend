@@ -132,6 +132,43 @@ export const inventorySettingsSchema = z.object({
   reason: z.string().trim().min(5).max(500),
 }).strict();
 
+/**
+ * Hook Coin economics. Every field optional so the admin screen can PATCH one
+ * value at a time; `.strict()` so a typo is rejected rather than silently
+ * ignored. orderEarnMaxMinor 0 means "no cap", not "earn nothing".
+ */
+export const hookCoinSettingsSchema = z.object({
+  orderEarnEnabled: z.boolean().optional(),
+  orderEarnPercent: z.coerce.number().min(0).max(100).optional(),
+  orderEarnMaxMinor: z.coerce.number().int().min(0).optional(),
+  creditSpendCapPercent: z.coerce.number().int().min(0).max(100).optional(),
+  welcomeBonusMinor: z.coerce.number().int().min(0).optional(),
+  reason: z.string().trim().min(5).max(500),
+}).strict();
+
+/** Delivery-detail corrections an admin may make to a live order. */
+export const adminOrderUpdateSchema = z.object({
+  deliveryNotes: z.string().trim().max(1000).optional(),
+  scheduledDeliveryAt: z.string().datetime().nullable().optional(),
+  recipientName: z.string().trim().min(2).max(120).optional(),
+  recipientPhone: z.string().trim().min(7).max(20).optional(),
+  formattedAddress: z.string().trim().min(5).max(500).optional(),
+  reason: z.string().trim().min(3).max(500),
+}).strict();
+
+/** Admin-chosen split: which items travel in which delivery. */
+export const adminOrderSplitSchema = z.object({
+  groups: z.array(z.object({
+    orderItemIds: z.array(z.string().trim().min(1)).min(1),
+  })).min(2).max(10),
+  reason: z.string().trim().min(3).max(500),
+}).strict();
+
+/** A cancellation always needs a reason — the customer is told what it says. */
+export const adminOrderCancelSchema = z.object({
+  reason: z.string().trim().min(3).max(500),
+}).strict();
+
 export const podCallSchema = z
   .object({
     outcome: z.enum(["CONFIRMED", "NO_ANSWER", "DECLINED", "INVALID_CONTACT"]),

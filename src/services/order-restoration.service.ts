@@ -7,8 +7,9 @@ const credits = new CreditService();
 
 /**
  * Gives back whatever a cancelled order consumed: Hook Coin returns to the
- * wallet, and the coupon redemption is released so the code can be used again
- * and stops counting against its total-usage limit.
+ * wallet, the coupon redemption is released so the code can be used again and
+ * stops counting against its total-usage limit, and any Hook Coin the order
+ * earned is clawed back — the reward was for an order that no longer stands.
  *
  * Called from every path that cancels an order. Both operations are
  * idempotent — the credit refund is keyed on the order id and the coupon
@@ -36,6 +37,15 @@ export async function restoreOrderIncentives(orderIdentifier: string) {
         amountMinor: creditsAppliedMinor,
         orderId,
       });
+    }
+
+    // Take back the coin the order earned. The earn is keyed on the order's
+    // publicId (what the payment path passes) while the spend uses _id, so
+    // try both rather than assume which identifier recorded it.
+    if (order.userId) {
+      for (const identifier of [...new Set([orderId, String(order.publicId || '')].filter(Boolean))]) {
+        await credits.reverseEarn({ userId: String(order.userId), orderId: identifier });
+      }
     }
 
     // Redemptions are stored against the order's _id at checkout time.

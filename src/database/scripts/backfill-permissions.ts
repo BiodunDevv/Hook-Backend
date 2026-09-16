@@ -11,9 +11,12 @@ const execute = process.argv.includes('--execute');
  */
 const GRANTS: Record<string, string[]> = {
   FINANCE_OFFICER: ['coupons.view', 'coupons.manage', 'credits.view', 'credits.adjust'],
-  OPERATIONS_LEAD: ['coupons.view', 'logistics.view', 'logistics.book', 'logistics.manage', 'logistics.track'],
+  // orders.cancel refunds Hook Coin and releases coupons, so it goes only to
+  // the roles that already own order outcomes — not to read-only or
+  // hub/logistics roles that merely hold orders.edit.
+  OPERATIONS_LEAD: ['coupons.view', 'logistics.view', 'logistics.book', 'logistics.manage', 'logistics.track', 'orders.cancel'],
   LOGISTICS_OFFICER: ['logistics.view', 'logistics.book', 'logistics.manage', 'logistics.track'],
-  CUSTOMER_SUPPORT_OFFICER: ['coupons.view', 'credits.view'],
+  CUSTOMER_SUPPORT_OFFICER: ['coupons.view', 'credits.view', 'orders.cancel'],
 };
 
 async function main() {

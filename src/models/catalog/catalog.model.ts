@@ -31,6 +31,8 @@ export interface ProductSubmission extends BaseEntity {
   basicTitle: string;
   notes?: string;
   mediaIds: string[];
+  mediaViews?: { front?: string; side?: string; back?: string };
+  captureChecklistConfirmed?: boolean;
   basePriceMinor: number;
   currency: string;
   variants: SubmissionVariant[];
@@ -108,6 +110,8 @@ const submissionSchema = createSchema<ProductSubmission>({
   basicTitle: { type: String, required: true, trim: true, maxlength: 180 },
   notes: { type: String, maxlength: 2000 },
   mediaIds: { type: [String], default: [] },
+  mediaViews: { type: Object, default: {} },
+  captureChecklistConfirmed: { type: Boolean, default: false },
   basePriceMinor: { type: Number, required: true, min: 1 },
   currency: { type: String, required: true, uppercase: true, default: 'NGN' },
   variants: { type: [Object], default: [] },

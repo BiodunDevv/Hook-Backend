@@ -14,8 +14,15 @@ export interface AccessContext {
 }
 
 export async function resolveAccessContext(accountId: string, knownUser?: any): Promise<AccessContext> {
+  // `knownUser` is req.user, which carries neither isActive nor accountStatus
+  // — the auth middleware has already verified both and does not pass them on.
+  // Trusting it for the liveness check below made isActiveAccount() read
+  // `undefined` and reject every live account, so re-read when those fields
+  // are absent rather than treating missing as inactive.
+  const canTrustKnownUser =
+    knownUser && (knownUser.isActive !== undefined || knownUser.accountStatus !== undefined);
   const [user, staff] = await Promise.all([
-    knownUser ? Promise.resolve(knownUser) : User.findById(accountId).lean(),
+    canTrustKnownUser ? Promise.resolve(knownUser) : User.findById(accountId).lean(),
     StaffProfile.findOne({ accountId }).lean(),
   ]);
   if (!user || !isActiveAccount(user)) {

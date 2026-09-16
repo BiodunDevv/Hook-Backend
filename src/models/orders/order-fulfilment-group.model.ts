@@ -40,7 +40,11 @@ const schema = createSchema<OrderFulfilmentGroup>({
   deletedAt: { type: Date },
 });
 
-schema.index({ orderId: 1, sourceStateId: 1 }, { unique: true });
+// Deliberately NOT unique. An order may have several groups in the same state
+// once an admin splits it into multiple deliveries; uniqueness on the group
+// itself is already enforced by publicId. This index exists only to make the
+// per-state lookups fast.
+schema.index({ orderId: 1, sourceStateId: 1 });
 
 export const OrderFulfilmentGroup = createModel<OrderFulfilmentGroup>(
   "OrderFulfilmentGroup",

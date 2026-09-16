@@ -82,8 +82,19 @@ function renderTemplate(fileName: string, values: Record<string, unknown>) {
  */
 function orderLinesHtml(lines?: OrderEmailLine[]) {
   if (!lines?.length) return '';
+  // Laid out as a table, not flex: Outlook and several webmail clients drop
+  // flex entirely, which would stack the thumbnail above the title.
   return lines
-    .map((line) => `<div class="line-item"><span class="line-title">${escapeHtml(line.title)}</span><span class="line-qty">Quantity ${escapeHtml(line.quantity)}</span><span class="line-price">${escapeHtml(money(line.amount))}</span></div>`)
+    .map((line) => {
+      const thumb = line.imageUrl
+        ? `<img class="line-thumb" src="${escapeHtml(line.imageUrl)}" alt="" width="48" height="48">`
+        : '<span class="line-thumb line-thumb-empty">&nbsp;</span>';
+      return `<table class="line-item" role="presentation" cellpadding="0" cellspacing="0" width="100%"><tr>`
+        + `<td class="line-thumb-cell" width="48">${thumb}</td>`
+        + `<td class="line-text-cell"><span class="line-title">${escapeHtml(line.title)}</span><br><span class="line-qty">Quantity ${escapeHtml(line.quantity)}</span></td>`
+        + `<td class="line-price-cell" align="right"><span class="line-price">${escapeHtml(money(line.amount))}</span></td>`
+        + `</tr></table>`;
+    })
     .join('');
 }
 
@@ -236,6 +247,24 @@ export function hookNewOrderEmailTemplate(payload: OrderEmailPayload) {
   };
 }
 
+/**
+ * Sent when a payment link is created, so a customer who abandons checkout has
+ * the link in their inbox rather than only in the app session that created it.
+ */
+export function orderAwaitingPaymentEmailTemplate(payload: OrderEmailPayload & { paymentUrl: string }) {
+  return {
+    subject: `Complete your payment for ${payload.orderCode}`,
+    html: renderTemplate('order-awaiting-payment.html', baseValues({
+      name: payload.name || 'there',
+      orderCode: payload.orderCode,
+      amount: money(payload.amount),
+      paymentUrl: payload.paymentUrl,
+      orderLines: orderLinesHtml(payload.lines),
+    })),
+    text: `Complete your payment for Hook order ${payload.orderCode} (${money(payload.amount)}): ${payload.paymentUrl}`,
+  };
+}
+
 export function orderStatusUpdateEmailTemplate(payload: OrderEmailPayload) {
   return {
     subject: `Hook order update: ${payload.orderCode}`,
@@ -244,8 +273,12 @@ export function orderStatusUpdateEmailTemplate(payload: OrderEmailPayload) {
       orderCode: payload.orderCode,
       status: payload.status || 'updated',
       amount: money(payload.amount),
+
+      detailHtml: payload.detail ? `<p class="lead">${escapeHtml(payload.detail)}</p>` : '',
+      orderLines: payload.lines?.length ? `<div class="panel">${orderLinesHtml(payload.lines)}</div>` : '',
     })),
-    text: `Your Hook order ${payload.orderCode} is now ${payload.status || 'updated'}.`,
+
+    text: `Update on your Hook order ${payload.orderCode}: ${payload.status || 'updated'}.${payload.detail ? ` ${payload.detail}` : ''}`,
   };
 }
 

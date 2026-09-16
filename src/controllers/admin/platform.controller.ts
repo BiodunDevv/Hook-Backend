@@ -20,7 +20,7 @@ import { revokeAccountSessions } from '@services/account-session.service';
 import { recordAudit } from '@services/platform-audit.service';
 import { nextPublicId, repairPublicIdCounter, PublicIdDomain } from '@services/public-id.service';
 import { issueAccountInvitation, revokeAccountInvitations } from '@services/account-invitation.service';
-import { presentMarketRecords, presentPlatformRecords } from '@services/platform-presentation.service';
+import { presentHubRecords, presentMarketRecords, presentPlatformRecords } from '@services/platform-presentation.service';
 import { publishRealtime } from '@services/realtime.service';
 import { MarketVendorService } from '@services/market-vendor.service';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
@@ -69,6 +69,9 @@ async function listScoped<T>(
   model: Model<T>,
   permission: string,
   extra: Record<string, unknown> = {},
+  // Entities whose UI needs resolved names (hubs) pass a richer presenter;
+  // everything else keeps the id-only default.
+  present: (records: any) => Promise<any> = presentPlatformRecords,
 ) {
   const context = await access(req, permission);
   const { stateId, hubId } = await stateAndHub(req);
@@ -78,7 +81,7 @@ async function listScoped<T>(
     model.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean({ virtuals: true }),
     model.countDocuments(filter),
   ]);
-  return paginated(await presentPlatformRecords(data), total, page, limit);
+  return paginated(await present(data), total, page, limit);
 }
 
 async function detailScoped<T>(
@@ -86,12 +89,13 @@ async function detailScoped<T>(
   model: Model<T>,
   permission: string,
   identifier = routeParam(req.params.id),
+  present: (records: any) => Promise<any> = presentPlatformRecords,
 ) {
   const context = await access(req, permission);
   const record = await byIdentifier(model, identifier);
   const scopedRecord = record as Record<string, any>;
   assertScope(context, scopedRecord.stateId, scopedRecord.hubId || scopedRecord.preferredHubId);
-  return presentPlatformRecords(record);
+  return present(record);
 }
 
 async function sendPlatformSuccess(res: Response, value: any) {
@@ -1026,8 +1030,8 @@ export class PlatformController {
     await sendPlatformSuccess(res, updated);
   };
 
-  listHubs = async (req: Request, res: Response) => sendSuccess(res, await listScoped(req, DispatchHub, 'hubs.view'));
-  hubDetail = async (req: Request, res: Response) => sendSuccess(res, await detailScoped(req, DispatchHub, 'hubs.view'));
+  listHubs = async (req: Request, res: Response) => sendSuccess(res, await listScoped(req, DispatchHub, 'hubs.view', {}, presentHubRecords));
+  hubDetail = async (req: Request, res: Response) => sendSuccess(res, await detailScoped(req, DispatchHub, 'hubs.view', undefined, presentHubRecords));
   createHub = async (req: Request, res: Response) => {
     const context = await access(req, 'hubs.manage');
     const location = await resolveLocation(req.body);
@@ -1058,21 +1062,25 @@ export class PlatformController {
       cityId: req.body.cityId || hub.cityId,
     });
     assertScope(context, location.ids.stateId, hub._id.toString());
-    const zoneIds = req.body.zoneIds
+    // `!== undefined`, not truthiness: [] is truthy in JS, so the old check
+    // meant an empty array took the "resolve" branch and silently wiped the
+    // hub's existing links. Omitting the field must preserve them; sending an
+    // explicit [] must clear them.
+    const zoneIds = req.body.zoneIds !== undefined
       ? await resolveIdentifiers(ServiceZone, req.body.zoneIds)
       : hub.zoneIds;
     const zones = await ServiceZone.find({ _id: { $in: zoneIds } }).lean();
     if (zones.some((zone) => zone.stateId !== location.ids.stateId || zone.cityId !== location.ids.cityId)) {
       throw new HttpError(409, 'Every Service Zone must belong to the Dispatch Hub City and State', undefined, 'CONFLICT');
     }
-    const marketIds = req.body.marketIds
+    const marketIds = req.body.marketIds !== undefined
       ? await resolveIdentifiers(Market, req.body.marketIds)
       : hub.marketIds;
     const markets = await Market.find({ _id: { $in: marketIds } }).lean();
     if (markets.some((market) => market.stateId !== location.ids.stateId)) {
       throw new HttpError(409, 'Every Market must belong to the Dispatch Hub state', undefined, 'CONFLICT');
     }
-    const staffIds = req.body.staffIds
+    const staffIds = req.body.staffIds !== undefined
       ? await resolveIdentifiers(StaffProfile, req.body.staffIds)
       : hub.staffIds;
     const updated = await DispatchHub.findByIdAndUpdate(

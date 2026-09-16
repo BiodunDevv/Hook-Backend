@@ -216,6 +216,9 @@ export class CustomerController {
       podEnabled: POD_PAUSED ? false : settings?.podEnabled || false,
       podPaused: POD_PAUSED,
       policyVersions: settings?.activePolicyVersions || {},
+      orderEarnEnabled: settings?.orderEarnEnabled ?? true,
+      orderEarnPercent: settings?.orderEarnPercent ?? 1,
+      orderEarnMaxMinor: settings?.orderEarnMaxMinor ?? 0,
     });
   };
 

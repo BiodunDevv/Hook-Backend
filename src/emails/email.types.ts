@@ -38,6 +38,8 @@ export interface OrderEmailLine {
   title: string;
   quantity: number;
   amount: number;
+  /** Absolute URL. Omitted lines fall back to a neutral placeholder cell. */
+  imageUrl?: string;
 }
 
 export interface OrderEmailPayload {
@@ -49,6 +51,8 @@ export interface OrderEmailPayload {
   customerName?: string;
   vendorName?: string;
   status?: string;
+  /** One line explaining what is happening, from customerStatusDetail(). */
+  detail?: string;
   dashboardUrl?: string;
   /** Optional itemised recap. Falls back to the summary rows when absent. */
   lines?: OrderEmailLine[];

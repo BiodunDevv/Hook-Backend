@@ -77,6 +77,11 @@ export interface CommerceSettings extends BaseEntity {
   creditSpendCapPercent: number;
   /** Credits granted to every new customer account. */
   welcomeBonusMinor: number;
+  /** Share of an order's subtotal returned as Hook Coin once it is paid. */
+  orderEarnPercent: number;
+  /** Optional ceiling on a single order's earn. 0 means no cap. */
+  orderEarnMaxMinor: number;
+  orderEarnEnabled: boolean;
   referralSignupBonusMinor: number;
   referralReferrerBonusMinor: number;
   negotiationEnabled: boolean;
@@ -265,6 +270,9 @@ const settingsSchema = createSchema<CommerceSettings>({
   catalogAvailabilityCheckDays: { type: Number, default: 4, min: 1, max: 30 },
   creditSpendCapPercent: { type: Number, default: 20, min: 0, max: 100 },
   welcomeBonusMinor: { type: Number, default: 30000, min: 0 },
+  orderEarnPercent: { type: Number, default: 1, min: 0, max: 100 },
+  orderEarnMaxMinor: { type: Number, default: 0, min: 0 },
+  orderEarnEnabled: { type: Boolean, default: true },
   referralSignupBonusMinor: { type: Number, default: 30000, min: 0 },
   referralReferrerBonusMinor: { type: Number, default: 100000, min: 0 },
   negotiationEnabled: { type: Boolean, default: true },

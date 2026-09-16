@@ -34,7 +34,6 @@ export const PUBLIC_ID_PREFIXES = {
   consolidation: 'CON',
   shipment: 'SHP',
   manifest: 'MAN',
-  exception: 'EXC',
   returnRequest: 'RET',
   refund: 'RFD',
   partnerCustody: 'PCU',

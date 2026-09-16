@@ -188,6 +188,22 @@ export class MarketVendorService {
 
   async createMarketAssociateVendor(accountId: string, marketIdentifier: string, input: any) {
     const { market, marketAssociate } = await marketAssociateContext(accountId, marketIdentifier);
+    return this.onboardVendor(market, input, { marketAssociateId: marketAssociate._id.toString() });
+  }
+
+  /**
+   * Creates a vendor and its first invitation in one transaction.
+   *
+   * Shared by the Market Associate app and admin onboarding. `inviter` records
+   * who did it: a Market Associate in the field, or a staff account. Both
+   * produce the same vendor and the same invitation email — only the
+   * attribution differs — so this must not be forked per caller.
+   */
+  private async onboardVendor(
+    market: any,
+    input: any,
+    inviter: { marketAssociateId?: string; accountId?: string },
+  ) {
     const normalizedPhone = normalizePhone(input.phone);
     if (normalizedPhone.length < 7) throw new HttpError(400, 'Enter a valid vendor phone number', undefined, 'VALIDATION_ERROR');
     const emailAddress = input.email?.trim().toLowerCase() || undefined;
@@ -218,14 +234,15 @@ export class MarketVendorService {
           preferredContactChannel: input.preferredContactChannel || 'phone',
           paymentProfile: paymentProfile(input.paymentProfile),
           status: 'pending',
-          invitedByMarketAssociateId: marketAssociate._id.toString(),
+          invitedByMarketAssociateId: inviter.marketAssociateId,
           notes: input.notes?.trim(),
         } as any], { session });
         invitation = await VendorInvitation.create([{
           publicId: await nextPublicId('vendorInvitation'),
           vendorId: vendor[0].id,
           marketId: market._id.toString(),
-          invitedByMarketAssociateId: marketAssociate._id.toString(),
+          invitedByMarketAssociateId: inviter.marketAssociateId,
+          invitedByAccountId: inviter.accountId,
           email: emailAddress,
           tokenHash: crypto.createHash('sha256').update(token).digest('hex'),
           status: 'pending',
@@ -338,6 +355,20 @@ export class MarketVendorService {
     const vendor = await MarketVendor.findOne({ ...idQuery(identifier), deletedAt: { $exists: false } }).lean({ virtuals: true });
     if (!vendor) throw new HttpError(404, 'Market vendor not found', undefined, 'NOT_FOUND');
     await marketAssociateContext(accountId, vendor.marketId);
+    return this.issueInvitation(vendor, undefined, { marketAssociateId: marketAssociate._id.toString() });
+  }
+
+  /**
+   * Cancels any outstanding invitation and issues a fresh one.
+   *
+   * Shared by the Market Associate resend and admin invite paths so a vendor
+   * never ends up with two live tokens, whichever side triggered it.
+   */
+  private async issueInvitation(
+    vendor: any,
+    _market: any,
+    inviter: { marketAssociateId?: string; accountId?: string },
+  ) {
     await VendorInvitation.updateMany({ vendorId: vendor._id.toString(), status: 'pending' }, { $set: { status: 'cancelled', cancelledAt: new Date() } });
     const token = crypto.randomBytes(32).toString('base64url');
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
@@ -345,7 +376,8 @@ export class MarketVendorService {
       publicId: await nextPublicId('vendorInvitation'),
       vendorId: vendor._id.toString(),
       marketId: vendor.marketId,
-      invitedByMarketAssociateId: marketAssociate._id.toString(),
+      invitedByMarketAssociateId: inviter.marketAssociateId,
+      invitedByAccountId: inviter.accountId,
       email: vendor.email,
       tokenHash: crypto.createHash('sha256').update(token).digest('hex'),
       status: 'pending',
@@ -485,6 +517,85 @@ export class MarketVendorService {
     if (!market) throw new HttpError(404, 'Market not found', undefined, 'NOT_FOUND');
     const vendors = await MarketVendor.find({ marketId: market._id.toString(), deletedAt: { $exists: false } }).sort({ businessName: 1 }).lean({ virtuals: true });
     return vendors.map(safeVendor);
+  }
+
+  /**
+   * The global vendor directory, paginated and filterable.
+   *
+   * Vendors were previously only reachable per-Market, as an embedded array on
+   * the Market payload, so there was no way for admin to see the whole supply
+   * base or find one vendor without knowing their Market first.
+   *
+   * The Figma shows vendor photos and performance bars; MarketVendor carries
+   * no image, rating or GMV fields, so this returns only what is real — market
+   * name, status, and the vendor's own record — rather than inventing metrics.
+   */
+  async adminVendorDirectory(query: {
+    page?: number;
+    limit?: number;
+    search?: string;
+    marketId?: string;
+    status?: string;
+    stateIds?: string[];
+  }) {
+    const page = Math.max(Number(query.page) || 1, 1);
+    const limit = Math.min(Math.max(Number(query.limit) || 20, 1), 100);
+    const where: Record<string, any> = { deletedAt: { $exists: false } };
+
+    if (query.status && query.status !== 'all') where.status = query.status;
+    // Staff scoped to particular States must not see the rest of the country.
+    if (query.stateIds?.length) where.stateId = { $in: query.stateIds };
+
+    if (query.marketId && query.marketId !== 'all') {
+      const market = await Market.findOne({ ...idQuery(query.marketId), deletedAt: { $exists: false } }).select('_id').lean();
+      where.marketId = market ? market._id.toString() : '__none__';
+    }
+
+    if (query.search?.trim()) {
+      // Escaped so a stray regex character cannot throw or scan wildly.
+      const safe = query.search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const term = new RegExp(safe, 'i');
+      where.$or = [{ businessName: term }, { contactName: term }, { phone: term }, { email: term }];
+    }
+
+    const [rows, total] = await Promise.all([
+      MarketVendor.find(where).sort({ businessName: 1 }).skip((page - 1) * limit).limit(limit).lean({ virtuals: true }),
+      MarketVendor.countDocuments(where),
+    ]);
+
+    // Market names resolved in one batched query rather than per row.
+    const marketIds = [...new Set(rows.map((row: any) => String(row.marketId)).filter(Boolean))];
+    const markets = await Market.find({ _id: { $in: marketIds } }).select('publicId name stateId').lean() as any[];
+    const marketById = new Map(markets.map((market) => [String(market._id), market]));
+
+    const data = rows.map((row: any) => {
+      const market = marketById.get(String(row.marketId));
+      return {
+        ...safeVendor(row),
+        market: market ? { id: market.publicId, name: market.name } : undefined,
+      };
+    });
+
+    return { data, total, page, limit, totalPages: Math.max(Math.ceil(total / limit), 1) };
+  }
+
+  /**
+   * Admin-side vendor onboarding. Reuses the same create-then-invite flow the
+   * Market Associate app uses, but attributes the invitation to the staff
+   * account rather than to a Market Associate who was not involved.
+   */
+  async adminCreateVendor(accountId: string, marketIdentifier: string, input: any) {
+    const market = await Market.findOne({ ...idQuery(marketIdentifier), deletedAt: { $exists: false } }).lean();
+    if (!market) throw new HttpError(404, 'Market not found', undefined, 'NOT_FOUND');
+    return this.onboardVendor(market, input, { accountId });
+  }
+
+  async adminInviteVendor(accountId: string, identifier: string) {
+    const vendor = await MarketVendor.findOne({ ...idQuery(identifier), deletedAt: { $exists: false } }).lean();
+    if (!vendor) throw new HttpError(404, 'Market vendor not found', undefined, 'NOT_FOUND');
+    const market = await Market.findById(vendor.marketId).lean();
+    if (!market) throw new HttpError(404, 'Market not found', undefined, 'NOT_FOUND');
+    return this.issueInvitation(vendor, market, { accountId });
   }
 
   async adminVendor(identifier: string) {

@@ -12,7 +12,7 @@ const domains: Record<string, string[]> = {
   categories: ['view', 'manage'],
   partners: ['view', 'manage'],
   runners: ['view', 'manage', 'assign'],
-  orders: ['view', 'create', 'edit'],
+  orders: ['view', 'create', 'edit', 'cancel'],
   products: ['view', 'create', 'review', 'edit'],
   'catalog.submission': ['view', 'review', 'request_changes', 'approve', 'reject'],
   'catalog.product': ['view', 'edit', 'publish', 'pause', 'unpublish'],
@@ -34,7 +34,7 @@ const domains: Record<string, string[]> = {
   'commerce.settings': ['view', 'manage'],
   'delivery.coverage': ['view', 'manage'],
   'delivery.pricing': ['view', 'manage', 'preview'],
-  fulfilment: ['view', 'manage', 'assign', 'resolve', 'consolidate'],
+  fulfilment: ['view', 'manage', 'assign', 'consolidate'],
   'fulfilment.hub': ['view', 'receive', 'qc'],
   logistics: ['view', 'book', 'manage', 'track'],
   returns: ['view', 'review', 'manage'],
@@ -65,10 +65,10 @@ const operationsPermissions = PLATFORM_PERMISSION_KEYS.filter((key) =>
   /^(states|cities|zones|markets|hubs|runners|partners|audit|delivery\.)/.test(key),
 );
 const orderRead = ['orders.view', 'customers.view', 'reports.view'];
-const orderOperations = [...orderRead, 'orders.create', 'orders.edit'];
+const orderOperations = [...orderRead, 'orders.create', 'orders.edit', 'orders.cancel'];
 const commerceOperations = [
   'commerce.pod.review', 'commerce.pod.eligibility', 'commerce.outbox.view',
-  'fulfilment.view', 'fulfilment.manage', 'fulfilment.assign', 'fulfilment.resolve',
+  'fulfilment.view', 'fulfilment.manage', 'fulfilment.assign',
   'fulfilment.hub.view', 'fulfilment.hub.receive', 'fulfilment.hub.qc', 'fulfilment.consolidate',
   'logistics.view', 'logistics.book', 'logistics.manage', 'logistics.track',
   'returns.view', 'returns.review', 'custody.view', 'custody.manage',

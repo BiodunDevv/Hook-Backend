@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { getEmailSettings } from "@services/email-settings.service";
 import { EmailSettings } from "@models/platform/email-settings.model";
 import { recordAudit } from "@services/platform-audit.service";
 import { clearEmailSettingsCache } from "@services/email-settings.service";
@@ -6,6 +7,16 @@ import { HttpError, sendSuccess } from "@utils/http";
 import { isActiveBrevoSender } from "@emails/email.service";
 
 export class AdminEmailSettingsController {
+  /**
+   * The support address alone, for any signed-in staff member.
+   * Uses getEmailSettings() so it follows the same DB -> env -> default chain
+   * the email templates do, rather than reading the raw document.
+   */
+  supportContact = async (_req: Request, res: Response) => {
+    const settings = await getEmailSettings();
+    sendSuccess(res, { supportEmail: settings.supportEmail });
+  };
+
   get = async (_req: Request, res: Response) => {
     const settings = await EmailSettings.findOne({ key: "email" }).lean();
     sendSuccess(res, {

@@ -39,7 +39,9 @@ export interface VendorInvitation extends BaseEntity {
   publicId: string;
   vendorId: string;
   marketId: string;
-  invitedByMarketAssociateId: string;
+  invitedByMarketAssociateId?: string;
+  /** Set instead when admin staff onboard the vendor directly. */
+  invitedByAccountId?: string;
   email?: string;
   tokenHash: string;
   status: VendorInvitationStatus;
@@ -123,7 +125,11 @@ const invitationSchema = createSchema<VendorInvitation>({
   publicId: { type: String, required: true, unique: true, index: true },
   vendorId: { type: String, required: true, index: true },
   marketId: { type: String, required: true, index: true },
-  invitedByMarketAssociateId: { type: String, required: true, index: true },
+  // Not required: admin staff can onboard a vendor directly, in which case
+  // there is no Market Associate to attribute the invitation to. `invitedBy`
+  // records who it actually was.
+  invitedByMarketAssociateId: { type: String, index: true },
+  invitedByAccountId: { type: String, index: true },
   email: { type: String, lowercase: true },
   tokenHash: { type: String, required: true, unique: true, select: false },
   status: { type: String, enum: ['pending', 'accepted', 'expired', 'cancelled'], default: 'pending', index: true },

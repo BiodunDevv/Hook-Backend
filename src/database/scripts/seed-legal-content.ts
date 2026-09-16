@@ -1,5 +1,5 @@
 /**
- * Seeds placeholder Terms of Service / Privacy Policy content so /terms and
+ * Seeds placeholder Terms of Service, Privacy Policy and Returns Policy content so
  * /policy are never empty. Upserts by `type`, so re-running this is safe and
  * will NOT overwrite content an admin has already edited via the Legal
  * Content settings page (only inserts when a document doesn't exist yet).
@@ -9,6 +9,7 @@
 import dotenv from 'dotenv';
 import { connectDatabase, disconnectDatabase } from '@config/data-source';
 import { LegalContent } from '@models/platform/legal-content.model';
+import { DEFAULT_RETURNS_POLICY_HTML } from '@lib/legal-defaults';
 
 dotenv.config({ quiet: true });
 
@@ -68,6 +69,11 @@ async function main() {
     LegalContent.findOneAndUpdate(
       { type: 'privacy' },
       { $setOnInsert: { type: 'privacy', title: 'Privacy Policy', bodyHtml: PRIVACY_BODY, version: 1, effectiveDate: new Date() } },
+      { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
+    ).lean(),
+    LegalContent.findOneAndUpdate(
+      { type: 'returns' },
+      { $setOnInsert: { type: 'returns', title: 'Returns Policy', bodyHtml: DEFAULT_RETURNS_POLICY_HTML, version: 1, effectiveDate: new Date() } },
       { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
     ).lean(),
   ]);

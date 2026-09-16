@@ -31,6 +31,8 @@ type SubmissionInput = {
   basicTitle: string;
   notes?: string;
   mediaIds: string[];
+  mediaViews: { front?: string; side?: string; back?: string };
+  captureChecklistConfirmed: boolean;
   basePriceMinor: number;
   currency: string;
   variants: SubmissionVariant[];
@@ -189,7 +191,10 @@ function validateSubmissionReady(submission: any, mediaCount: number) {
   if (!submission.categorySuggestionId) fields.push('categorySuggestionId');
   if (!Number.isSafeInteger(submission.basePriceMinor) || submission.basePriceMinor <= 0) fields.push('basePriceMinor');
   if (!submission.variants?.some((item: SubmissionVariant) => item.active)) fields.push('variants');
-  if (mediaCount < 1) fields.push('mediaIds');
+  const requiredViews = ['front', 'side', 'back'] as const;
+  const viewIds = requiredViews.map((view) => submission.mediaViews?.[view]).filter(Boolean);
+  if (mediaCount < 3 || viewIds.length !== 3 || new Set(viewIds).size !== 3) fields.push('frontSideBackPhotos');
+  if (!submission.captureChecklistConfirmed) fields.push('captureChecklistConfirmed');
   if (fields.length) {
     throw new HttpError(400, 'Complete the required submission fields before submitting', { fields }, 'SUBMISSION_VALIDATION_FAILED');
   }
@@ -258,11 +263,21 @@ export class MarketAssociateCatalogService {
     const products = productIds.length
       ? await Product.find({ _id: { $in: productIds } }).select('_id images').lean()
       : [];
+    const submissionMediaIds = [...new Set(page.flatMap((item) => item.mediaIds || []).map(String))];
+    const submissionMedia = submissionMediaIds.length
+      ? await CatalogMediaAsset.find({ publicId: { $in: submissionMediaIds }, status: 'ready' }).lean({ virtuals: true })
+      : [];
+    const mediaService = new CatalogMediaService();
+    const mediaUrlById = new Map(submissionMedia.map((asset) => [
+      asset.publicId,
+      asset.deliveryType === 'external' ? asset.secureUrl : mediaService.deliveryUrl(asset),
+    ]));
     const imageByProductId = new Map(products.map((product) => [String(product._id), product.images?.[0]]));
     return {
       data: page.map((item) => ({
         ...item,
-        imageUrl: item.productId ? imageByProductId.get(String(item.productId)) : undefined,
+        imageUrl: mediaUrlById.get(item.mediaViews?.front || item.mediaIds?.[0])
+          || (item.productId ? imageByProductId.get(String(item.productId)) : undefined),
       })),
       nextCursor: hasMore && page.length ? page[page.length - 1]._id.toString() : null,
       hasMore,
@@ -277,7 +292,21 @@ export class MarketAssociateCatalogService {
       deletedAt: { $exists: false },
     }).lean({ virtuals: true });
     if (!submission) throw new HttpError(404, 'Submission not found', undefined, 'NOT_FOUND');
-    return submission;
+    const media = await CatalogMediaAsset.find({
+      $or: [
+        { publicId: { $in: submission.mediaIds } },
+        { _id: { $in: submission.mediaIds.filter((id: string) => /^[a-f\d]{24}$/i.test(id)) } },
+      ],
+      status: 'ready',
+    }).lean({ virtuals: true });
+    const mediaService = new CatalogMediaService();
+    return {
+      ...submission,
+      media: media.map((asset) => ({
+        ...asset,
+        deliveryUrl: asset.deliveryType === 'external' ? asset.secureUrl : mediaService.deliveryUrl(asset),
+      })),
+    };
   }
 
   async create(accountId: string, input: SubmissionInput) {
@@ -297,6 +326,8 @@ export class MarketAssociateCatalogService {
       basicTitle: input.basicTitle,
       notes: input.notes,
       mediaIds: input.mediaIds,
+      mediaViews: input.mediaViews,
+      captureChecklistConfirmed: input.captureChecklistConfirmed,
       basePriceMinor: input.basePriceMinor,
       currency: input.currency,
       variants: input.variants,
@@ -332,6 +363,8 @@ export class MarketAssociateCatalogService {
           basicTitle: input.basicTitle,
           notes: input.notes,
           mediaIds: input.mediaIds,
+          mediaViews: input.mediaViews,
+          captureChecklistConfirmed: input.captureChecklistConfirmed,
           basePriceMinor: input.basePriceMinor,
           currency: input.currency,
           variants: input.variants,
@@ -474,7 +507,23 @@ export class CatalogReviewService {
     const data = await ProductSubmission.find(filter).sort({ _id: direction }).limit(limit + 1).lean({ virtuals: true });
     const hasMore = data.length > limit;
     const page = data.slice(0, limit);
-    return { data: page, nextCursor: hasMore && page.length ? page[page.length - 1]._id.toString() : null, hasMore };
+    const mediaIds = [...new Set(page.flatMap((item) => item.mediaIds || []).map(String))];
+    const media = mediaIds.length
+      ? await CatalogMediaAsset.find({ publicId: { $in: mediaIds }, status: 'ready' }).lean({ virtuals: true })
+      : [];
+    const mediaService = new CatalogMediaService();
+    const mediaUrlById = new Map(media.map((asset) => [
+      asset.publicId,
+      asset.deliveryType === 'external' ? asset.secureUrl : mediaService.deliveryUrl(asset),
+    ]));
+    return {
+      data: page.map((item) => ({
+        ...item,
+        imageUrl: mediaUrlById.get(item.mediaViews?.front || item.mediaIds?.[0]),
+      })),
+      nextCursor: hasMore && page.length ? page[page.length - 1]._id.toString() : null,
+      hasMore,
+    };
   }
 
   async detail(identifier: string, stateIds?: string[]) {

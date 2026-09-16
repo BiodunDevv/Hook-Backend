@@ -52,10 +52,6 @@ export interface FulfilmentTask extends BaseEntity {
   hubArrivedAt?: Date;
   hubReceivedAt?: Date;
   completedAt?: Date;
-  acceptanceDueAt: Date;
-  sourcingDueAt: Date;
-  hubHandoverDueAt: Date;
-  resolutionDueAt: Date;
   actualCostMinor?: number;
   evidence: FulfilmentEvidence[];
   itemVerifications: ItemVerification[];
@@ -127,6 +123,17 @@ export interface Shipment extends BaseEntity {
   hubId: string;
   consolidationId: string;
   provider: LogisticsProviderKey;
+  /**
+   * The courier the customer actually chose and paid for at checkout, e.g.
+   * 'GIG' / 'GUO' / 'DHL'. Kept separate from `provider` because that is the
+   * runtime booking adapter (manual/simulated/gig/fez/other) and its enum
+   * physically cannot hold an arbitrary courier code.
+   */
+  courierCode?: string;
+  courierName?: string;
+  /** Set only when staff booked someone other than the customer's choice. */
+  substitutedFrom?: string;
+  substitutionReason?: string;
   serviceName?: string;
   externalReference?: string;
   status: ShipmentStatus;
@@ -156,25 +163,6 @@ export interface PickupManifest extends BaseEntity {
   evidence: FulfilmentEvidence[];
   handedOverAt?: Date;
   handedOverBy?: string;
-}
-
-export interface FulfilmentException extends BaseEntity {
-  publicId: string;
-  orderId?: string;
-  taskId?: string;
-  hubId?: string;
-  shipmentId?: string;
-  sourceStateId?: string;
-  type: 'ASSIGNMENT_MISSING' | 'HUB_MISSING' | 'SLA_BREACH' | 'ITEM_UNAVAILABLE' | 'QC_FAILED' | 'DELIVERY_FAILED' | 'CUSTODY_OVERDUE' | 'INTEGRATION';
-  severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
-  status: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'DISMISSED';
-  summary: string;
-  details?: Record<string, unknown>;
-  dueAt?: Date;
-  openedBy?: string;
-  resolvedBy?: string;
-  resolutionNote?: string;
-  idempotencyKey?: string;
 }
 
 export interface PartnerCustody extends BaseEntity {
@@ -256,12 +244,10 @@ const taskSchema = createSchema<FulfilmentTask>({
   alertedAt: { type: Date }, acceptedAt: { type: Date }, sourcingStartedAt: { type: Date },
   productSecuredAt: { type: Date }, packingStartedAt: { type: Date }, packedAt: { type: Date },
   hubArrivedAt: { type: Date }, hubReceivedAt: { type: Date }, completedAt: { type: Date },
-  acceptanceDueAt: { type: Date, required: true, index: true },
-  sourcingDueAt: { type: Date, required: true }, hubHandoverDueAt: { type: Date, required: true }, resolutionDueAt: { type: Date, required: true },
   actualCostMinor: { type: Number, min: 0 }, evidence, itemVerifications: { type: [Object], default: [] }, issue: { type: Object }, assignmentHistory: { type: [Object], default: [] },
 });
 taskSchema.index({ orderId: 1, marketId: 1 }, { unique: true });
-taskSchema.index({ marketAssociateId: 1, status: 1, acceptanceDueAt: 1 });
+taskSchema.index({ marketAssociateId: 1, status: 1, createdAt: 1 });
 
 const runnerPackageSchema = createSchema<RunnerPackage>({
   publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, required: true, index: true },
@@ -279,20 +265,25 @@ const hubPackageSchema = createSchema<HubPackage>({
 const consolidationSchema = createSchema<Consolidation>({
   publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, required: true, index: true }, fulfilmentGroupId: { type: String, index: true, sparse: true }, sourceStateId: { type: String, required: true, index: true }, hubId: { type: String, required: true, index: true }, hubPackageIds: { type: [String], default: [] }, status: { type: String, enum: ['DRAFT', 'SEALED', 'HANDED_OVER', 'CANCELLED'], default: 'DRAFT', index: true }, weightGrams: { type: Number, min: 0 }, dimensions: { type: Object }, sealReference: { type: String }, evidence, sealedAt: { type: Date }, sealedBy: { type: String }, version: { type: Number, default: 1, min: 1 },
 });
-consolidationSchema.index({ orderId: 1, sourceStateId: 1 }, { unique: true });
+// Unique per fulfilment group, not per state: an order split into several
+// deliveries has multiple groups in the same state. Sparse so legacy rows
+// written before fulfilmentGroupId existed do not collide on null.
+consolidationSchema.index({ orderId: 1, fulfilmentGroupId: 1 }, { unique: true, sparse: true });
+consolidationSchema.index({ orderId: 1, sourceStateId: 1 });
 
 const shipmentSchema = createSchema<Shipment>({
-  publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, required: true, index: true }, fulfilmentGroupId: { type: String, index: true, sparse: true }, sourceStateId: { type: String, required: true, index: true }, hubId: { type: String, required: true, index: true }, consolidationId: { type: String, required: true, index: true }, provider: { type: String, enum: ['manual', 'simulated', 'gig', 'fez', 'other'], required: true, index: true }, serviceName: { type: String }, externalReference: { type: String, index: true, sparse: true }, status: { type: String, enum: Object.values(ShipmentStatus), default: ShipmentStatus.READY_FOR_BOOKING, index: true }, deliveryAddressSnapshot: { type: Object, required: true }, estimatedDeliveryAt: { type: Date }, bookedAt: { type: Date }, pickedUpAt: { type: Date }, deliveredAt: { type: Date }, failedAt: { type: Date }, providerCostMinor: { type: Number, min: 0 }, providerQuoteMinor: { type: Number, min: 0 }, trackingNumber: { type: String }, trackingEvents: { type: [Object], default: [] }, evidence, releaseStatus: { type: String, enum: ['NOT_REQUIRED', 'AWAITING_HANDOVER_PAYMENT', 'RELEASE_APPROVED'] }, bookingIdempotencyKey: { type: String, unique: true, sparse: true }, version: { type: Number, default: 1, min: 1 },
+  publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, required: true, index: true }, fulfilmentGroupId: { type: String, index: true, sparse: true }, sourceStateId: { type: String, required: true, index: true }, hubId: { type: String, required: true, index: true }, consolidationId: { type: String, required: true, index: true }, provider: { type: String, enum: ['manual', 'simulated', 'gig', 'fez', 'other'], required: true, index: true }, courierCode: { type: String, index: true }, courierName: { type: String }, substitutedFrom: { type: String }, substitutionReason: { type: String }, serviceName: { type: String }, externalReference: { type: String, index: true, sparse: true }, status: { type: String, enum: Object.values(ShipmentStatus), default: ShipmentStatus.READY_FOR_BOOKING, index: true }, deliveryAddressSnapshot: { type: Object, required: true }, estimatedDeliveryAt: { type: Date }, bookedAt: { type: Date }, pickedUpAt: { type: Date }, deliveredAt: { type: Date }, failedAt: { type: Date }, providerCostMinor: { type: Number, min: 0 }, providerQuoteMinor: { type: Number, min: 0 }, trackingNumber: { type: String }, trackingEvents: { type: [Object], default: [] }, evidence, releaseStatus: { type: String, enum: ['NOT_REQUIRED', 'AWAITING_HANDOVER_PAYMENT', 'RELEASE_APPROVED'] }, bookingIdempotencyKey: { type: String, unique: true, sparse: true }, version: { type: Number, default: 1, min: 1 },
 });
-shipmentSchema.index({ orderId: 1, sourceStateId: 1 }, { unique: true });
+// Unique per fulfilment group, not per state: an order split into several
+// deliveries has multiple groups in the same state. Sparse so legacy rows
+// written before fulfilmentGroupId existed do not collide on null.
+shipmentSchema.index({ orderId: 1, fulfilmentGroupId: 1 }, { unique: true, sparse: true });
+shipmentSchema.index({ orderId: 1, sourceStateId: 1 });
 
 const manifestSchema = createSchema<PickupManifest>({
   publicId: { type: String, required: true, unique: true, index: true }, hubId: { type: String, required: true, index: true }, provider: { type: String, enum: ['manual', 'simulated', 'gig', 'fez', 'other'], required: true }, shipmentIds: { type: [String], default: [] }, status: { type: String, enum: ['OPEN', 'HANDED_OVER', 'CLOSED', 'CANCELLED'], default: 'OPEN', index: true }, handoverReference: { type: String }, evidence, handedOverAt: { type: Date }, handedOverBy: { type: String },
 });
 
-const exceptionSchema = createSchema<FulfilmentException>({
-  publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, index: true }, taskId: { type: String, index: true }, hubId: { type: String, index: true }, shipmentId: { type: String, index: true }, sourceStateId: { type: String, index: true }, type: { type: String, enum: ['ASSIGNMENT_MISSING', 'HUB_MISSING', 'SLA_BREACH', 'ITEM_UNAVAILABLE', 'QC_FAILED', 'DELIVERY_FAILED', 'CUSTODY_OVERDUE', 'INTEGRATION'], required: true, index: true }, severity: { type: String, enum: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'], default: 'MEDIUM', index: true }, status: { type: String, enum: ['OPEN', 'IN_PROGRESS', 'RESOLVED', 'DISMISSED'], default: 'OPEN', index: true }, summary: { type: String, required: true }, details: { type: Object }, dueAt: { type: Date, index: true }, openedBy: { type: String }, resolvedBy: { type: String }, resolutionNote: { type: String }, idempotencyKey: { type: String, unique: true, sparse: true },
-});
 
 const custodySchema = createSchema<PartnerCustody>({
   publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, required: true, unique: true, index: true }, shipmentId: { type: String, required: true, index: true }, partnerId: { type: String, required: true, index: true }, status: { type: String, enum: ['AWAITING_RECEIPT', 'IN_CUSTODY', 'RELEASED', 'OVERDUE', 'RECOVERY'], default: 'AWAITING_RECEIPT', index: true }, collectionCodeHash: { type: String, select: false }, collectionCodeHint: { type: String }, codeAttempts: { type: Number, default: 0 }, codeSentAt: { type: Date }, receivedAt: { type: Date }, releasedAt: { type: Date }, expiresAt: { type: Date, required: true, index: true }, customerEmailSnapshot: { type: String, required: true }, idempotencyKey: { type: String, unique: true, sparse: true }, history: { type: [Object], default: [] },
@@ -317,7 +308,6 @@ export const HubPackage = createModel<HubPackage>('HubPackage', hubPackageSchema
 export const Consolidation = createModel<Consolidation>('Consolidation', consolidationSchema);
 export const Shipment = createModel<Shipment>('Shipment', shipmentSchema);
 export const PickupManifest = createModel<PickupManifest>('PickupManifest', manifestSchema);
-export const FulfilmentException = createModel<FulfilmentException>('FulfilmentException', exceptionSchema);
 export const PartnerCustody = createModel<PartnerCustody>('PartnerCustody', custodySchema);
 export const ReturnRequest = createModel<ReturnRequest>('ReturnRequest', returnSchema);
 export const FulfilmentRefund = createModel<FulfilmentRefund>('FulfilmentRefund', refundSchema);

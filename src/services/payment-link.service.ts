@@ -67,13 +67,49 @@ export class PaymentLinkService {
       expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
       createdBy: customerId,
     });
+    const url = `${paymentOrigin()}/payment/${token}`;
+    // Fire-and-forget: the customer must still get their link back even if
+    // the mail fails, and the raw token only exists here.
+    void this.emailAwaitingPayment(order, customerId, url, Number(payment.amountMinor || 0));
     return {
       id: link.publicId,
-      url: `${paymentOrigin()}/payment/${token}`,
+      url,
       token,
       expiresAt: link.expiresAt,
       status: link.status,
     };
+  }
+
+  /**
+   * Puts the payment link in the customer's inbox, so abandoning checkout does
+   * not strand the order behind a link that only existed in that app session.
+   */
+  private async emailAwaitingPayment(order: any, customerId: string, paymentUrl: string, amountMinor: number) {
+    try {
+      const { EmailService } = await import('@emails/email.service');
+      const { User } = await import('@models/users/user.model');
+      const customer = await User.findById(customerId).select('email firstName').lean() as any;
+      const to = customer?.email || order.guestEmail;
+      if (!to) return;
+      const items = await OrderItem.find({ orderId: String(order._id) })
+        .select('productTitle productImage quantity totalPriceMinor')
+        .lean() as any[];
+      await new EmailService().sendOrderAwaitingPayment({
+        to,
+        name: customer?.firstName || order.guestName,
+        orderCode: order.publicId || order.orderCode,
+        amount: amountMinor / 100,
+        paymentUrl,
+        lines: items.map((item) => ({
+          title: item.productTitle || 'Product',
+          quantity: Number(item.quantity || 0),
+          amount: Number(item.totalPriceMinor || 0) / 100,
+          imageUrl: item.productImage,
+        })),
+      });
+    } catch {
+      // Never let a mail failure break payment-link creation.
+    }
   }
 
   async detail(token: string) {

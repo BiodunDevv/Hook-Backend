@@ -22,12 +22,12 @@ export class FulfilmentController {
   verifyItem = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.verifyItem(req.user!.sub, routeParam(req.params.id), routeParam(req.params.orderItemId), req.body));
 
   controlTower = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.controlTower(actor(req), req.query as Record<string, unknown>));
+  fulfilmentOrders = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.fulfilmentOrders(actor(req), req.query as Record<string, unknown>));
   adminTaskDetail = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.adminTaskDetail(actor(req), routeParam(req.params.id)));
   assignmentMarketAssociates = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.assignmentMarketAssociates(actor(req), req.query as Record<string, unknown>));
   assignmentHubs = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.assignmentHubs(actor(req), req.query as Record<string, unknown>));
   reassignTask = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.reassignTask(actor(req), routeParam(req.params.id), req.body));
-  adminExceptions = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.exceptions(actor(req), req.query as Record<string, unknown>));
-  resolveException = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.resolveException(actor(req), routeParam(req.params.id), req.body));
+  unblockTask = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.unblockTask(actor(req), routeParam(req.params.id), req.body));
   hubDashboard = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.hubDashboard(actor(req), req.query as Record<string, unknown>));
   adminConsolidations = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.consolidations(actor(req), req.query as Record<string, unknown>));
   receivePackage = async (req: Request, res: Response) => sendCreated(res, await fulfilmentService.receivePackage(actor(req), routeParam(req.params.id), req.body));

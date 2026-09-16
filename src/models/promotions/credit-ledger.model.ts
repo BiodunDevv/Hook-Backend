@@ -6,6 +6,7 @@ export type CreditEntryType =
   | 'referral_bonus'
   | 'order_spend'
   | 'order_refund'
+  | 'order_earn'
   | 'admin_adjustment';
 
 /**
@@ -28,7 +29,7 @@ const schema = createSchema<CreditLedger>({
   userId: { type: String, required: true, index: true },
   type: {
     type: String,
-    enum: ['welcome_bonus', 'referral_signup', 'referral_bonus', 'order_spend', 'order_refund', 'admin_adjustment'],
+    enum: ['welcome_bonus', 'referral_signup', 'referral_bonus', 'order_spend', 'order_refund', 'order_earn', 'admin_adjustment'],
     required: true,
     index: true,
   },

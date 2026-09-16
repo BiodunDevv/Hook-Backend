@@ -20,6 +20,8 @@ import { randomInt } from 'crypto';
 import { nextPublicId } from './public-id.service';
 import { publishRealtime } from './realtime.service';
 import { createCommerceNotification } from './commerce-notification.service';
+import { customerStatusLabel } from '@lib/order-status-labels';
+import { appendTimeline } from '@lib/order-timeline';
 import { restoreOrderIncentives } from './order-restoration.service';
 
 type CheckoutBody = Pick<Order, 'deliveryAddress' | 'deliveryNotes' | 'scheduledDeliveryAt' | 'guestEmail' | 'guestName' | 'paymentMode' | 'orderType' | 'giftRecipient'>;
@@ -32,39 +34,21 @@ function displayNumber(order: any) {
   return sequence ? `Order #${sequence}` : 'Order';
 }
 
-function customerStatusLabel(status: unknown) {
-  const labels: Record<string, string> = {
-    AWAITING_PAYMENT: 'Awaiting payment',
-    VERIFICATION_PENDING: 'Payment review',
-    OPERATIONS_REVIEW: 'Order confirmed',
-    APPROVED_FOR_FULFILMENT: 'Preparing your order',
-    IN_FULFILMENT: 'Market Associate is sourcing your items',
-    PARTIALLY_RECEIVED: 'Some items reached Hook Hub',
-    READY_FOR_CONSOLIDATION: 'Checked at Hook Hub',
-    READY_FOR_DISPATCH: 'Packed for delivery',
-    BOOKED_WITH_PROVIDER: 'Delivery is being arranged',
-    AWAITING_PICKUP: 'Ready to leave Hook Hub',
-    PICKED_UP: 'Dispatched from Hook Hub',
-    OUT_FOR_DELIVERY: 'Out for delivery',
-    IN_TRANSIT: 'On the way',
-    PARTIALLY_IN_TRANSIT: 'Some deliveries are on the way',
-    PARTIALLY_DELIVERED: 'Partially delivered',
-    DELIVERED: 'Delivered',
-    COLLECTED: 'Collected',
-    COMPLETED: 'Completed',
-    ON_HOLD: 'We are resolving an issue',
-    RETURN_IN_PROGRESS: 'Return in progress',
-    REFUNDED: 'Refunded',
-    CANCELLED: 'Cancelled',
-  };
-  return labels[String(status || '').toUpperCase()] || 'Order received';
-}
 
 function timelineFor(order: any, shipment?: any) {
   const events = [...(order.timeline || [])]
     .map((event: any) => ({ status: String(event.status || ''), at: event.at || event.createdAt }))
     .filter((event: any) => event.status);
   const occurred = new Map(events.map((event: any) => [event.status, event.at]));
+  // A delivery's own shipment events override the order-level ones. Without
+  // this, every group read the same order.timeline and two deliveries at
+  // different stages rendered byte-identical ladders. The order-level entries
+  // are still the right source for the pre-dispatch stages (payment,
+  // sourcing), which genuinely happen once for the whole order.
+  for (const event of shipment?.trackingEvents || []) {
+    const status = String(event.status || '').toUpperCase();
+    if (status && event.at) occurred.set(status, event.at);
+  }
   const status = String(order.commerceStatus || order.status || 'AWAITING_PAYMENT').toUpperCase();
   const sequence = ['AWAITING_PAYMENT', 'OPERATIONS_REVIEW', 'IN_FULFILMENT', 'READY_FOR_CONSOLIDATION', 'READY_FOR_DISPATCH', 'IN_TRANSIT', 'DELIVERED'];
   const stageByStatus: Record<string, number> = {
@@ -310,6 +294,11 @@ export class OrderService {
         couponCode: order.couponCode,
         couponDiscountMinor: Number(order.couponDiscountMinor || 0),
         creditsAppliedMinor: Number(order.creditsAppliedMinor || 0),
+        // The courier the customer picked and paid for at checkout. Stored on
+        // the order since checkout but never exposed to them until now.
+        logisticsProvider: order.logisticsProviderSnapshot
+          ? { code: (order.logisticsProviderSnapshot as any).code, name: (order.logisticsProviderSnapshot as any).name }
+          : undefined,
         totalMinor: Number(order.totalMinor ?? Math.round(Number(order.total || 0) * 100)),
         currency: order.currency || 'NGN',
         payment: orderPayments[0] ? { status: orderPayments[0].commerceStatus || orderPayments[0].status } : undefined,
@@ -333,12 +322,23 @@ export class OrderService {
     const deliveryFeeMinor = Number(order.deliveryFeeMinor ?? Math.round(Number(order.deliveryFee || 0) * 100));
     const safeItems = items.map(safeItem);
     const deliveries = (fulfilmentGroups.length ? fulfilmentGroups : [{ publicId: 'legacy', sourceStateId: order.sourceStateId, status: order.commerceStatus || order.status }]).map((group: any, index: number) => {
+      // Match on the group first, then fall back to the State only while a
+      // single group exists there. There is deliberately no "if there is just
+      // one shipment, use it" fallback: with several groups that handed the
+      // same shipment — and so the same tracking reference — to every delivery.
       const shipment = shipments.find((entry: any) => entry.fulfilmentGroupId === group.publicId)
-        || shipments.find((entry: any) => String(entry.sourceStateId) === String(group.sourceStateId))
-        || (shipments.length === 1 ? shipments[0] : undefined);
+        || (fulfilmentGroups.length <= 1
+          ? shipments.find((entry: any) => String(entry.sourceStateId) === String(group.sourceStateId))
+          : undefined);
       const shipmentStatus = String(shipment?.status || '').toUpperCase();
       const trackingVisible = DISPATCHED_SHIPMENT_STATUSES.has(shipmentStatus);
-      const groupItems = items.filter((item: any) => !item.fulfilmentGroupId || item.fulfilmentGroupId === group.publicId).map(safeItem);
+      // Ungrouped items belong to no delivery in particular. Attributing them
+      // to every group (the old `!item.fulfilmentGroupId ||` clause) made each
+      // delivery appear to contain the whole order. They are only safe to show
+      // when there is a single delivery to show them in.
+      const groupItems = items
+        .filter((item: any) => (item.fulfilmentGroupId ? item.fulfilmentGroupId === group.publicId : fulfilmentGroups.length <= 1))
+        .map(safeItem);
       const payment = payments.find((entry: any) => entry.fulfilmentGroupId === group.publicId);
       return {
         id: group.publicId || `delivery-${index + 1}`,
@@ -348,9 +348,23 @@ export class OrderService {
         eta: shipment?.estimatedDeliveryAt,
         items: groupItems,
         payment: payment ? { status: payment.commerceStatus || payment.status, amountMinor: Number(payment.amountMinor || 0) } : undefined,
-        timeline: timelineFor({ ...order, commerceStatus: shipment?.status || group.status }, shipment),
+        // Pin `status` too, not just `commerceStatus` — timelineFor falls back
+        // to it, which would otherwise leak the order-wide status into a group
+        // that has not reached it yet.
+        timeline: timelineFor(
+          { ...order, commerceStatus: shipment?.status || group.status, status: shipment?.status || group.status },
+          shipment,
+        ),
         shipment: shipment ? {
           provider: trackingVisible ? shipment.provider : undefined,
+          // The courier the customer actually chose and paid for. `provider`
+          // above is the internal booking adapter, so it would read "manual"
+          // to someone who paid GIG's fee. Shown as soon as it is known, not
+          // gated on dispatch — knowing who will deliver is useful earlier.
+          courierName: shipment.courierName,
+          courierCode: shipment.courierCode,
+          substitutedFrom: shipment.substitutedFrom,
+          substitutionReason: shipment.substitutionReason,
           trackingReference: trackingVisible ? shipment.trackingNumber : undefined,
           status: shipment.status,
           dispatchedAt: trackingVisible ? shipment.pickedUpAt || shipment.bookedAt : undefined,
@@ -389,6 +403,11 @@ export class OrderService {
       couponCode: order.couponCode,
       couponDiscountMinor: Number(order.couponDiscountMinor || 0),
       creditsAppliedMinor: Number(order.creditsAppliedMinor || 0),
+        // The courier the customer picked and paid for at checkout. Stored on
+        // the order since checkout but never exposed to them until now.
+        logisticsProvider: order.logisticsProviderSnapshot
+          ? { code: (order.logisticsProviderSnapshot as any).code, name: (order.logisticsProviderSnapshot as any).name }
+          : undefined,
       totalMinor: Number(order.totalMinor ?? Math.round(Number(order.total || 0) * 100)),
       currency: order.currency || 'NGN',
       timeline: timelineFor(order, primaryShipment),
@@ -406,7 +425,7 @@ export class OrderService {
     stored.commerceStatus = 'CANCELLED';
     stored.cancelledAt = new Date();
     stored.cancellationReason = reason;
-    stored.timeline = [...(stored.timeline || []), { status: 'CANCELLED', at: new Date(), actorType: 'customer', actorId: owner.userId }];
+    stored.timeline = appendTimeline(stored, 'CANCELLED', owner.userId, { actorType: 'customer' });
     const saved = await stored.save();
     // Hook Coin goes back to the wallet and the coupon use is freed up.
     await restoreOrderIncentives(String(stored._id));

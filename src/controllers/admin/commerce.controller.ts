@@ -11,6 +11,9 @@ import {
 } from '@models/commerce/commerce.model';
 import { Order } from '@models/orders/order.model';
 import { Payment } from '@models/payments/payment.model';
+import { PaymentAttempt } from '@models/payments/payment-link.model';
+import { User } from '@models/users/user.model';
+import { isValidObjectId } from 'mongoose';
 import { PodService } from '@services/pod.service';
 import { recordAudit } from '@services/platform-audit.service';
 import { paymentProviderReadiness } from '@services/payments/provider-registry';
@@ -167,16 +170,112 @@ export class AdminCommerceController {
     });
     sendSuccess(res, result);
   };
+  /**
+   * Paginated payments with the order and customer resolved.
+   *
+   * The previous version returned a bare, unpaginated 100 rows carrying only
+   * the payment's own fields, so the admin table could not show who a payment
+   * was from or what it was for without an N+1 fetch per row.
+   */
   payments = async (req: Request, res: Response) => {
-    const query: any = {};
-    if (req.query.status) query.commerceStatus = req.query.status;
-    sendSuccess(
-      res,
-      await Payment.find(query)
-        .sort({ createdAt: -1 })
-        .limit(100)
-        .lean({ virtuals: true }),
-    );
+    const page = Math.max(Number(req.query.page) || 1, 1);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
+    const query: Record<string, any> = {};
+    if (req.query.status && req.query.status !== 'all') query.commerceStatus = req.query.status;
+    if (req.query.provider && req.query.provider !== 'all') query.gateway = req.query.provider;
+    if (typeof req.query.search === 'string' && req.query.search.trim()) {
+      // Anchored and escaped: an unanchored user-supplied pattern would scan
+      // the whole collection, and a stray "(" would throw.
+      const safe = req.query.search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      query.$or = [
+        { publicId: new RegExp(`^${safe}`, 'i') },
+        { reference: new RegExp(`^${safe}`, 'i') },
+      ];
+    }
+
+    const [rows, total] = await Promise.all([
+      Payment.find(query).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean({ virtuals: true }),
+      Payment.countDocuments(query),
+    ]);
+
+    // Resolved in two batched queries rather than per row.
+    const orderIds = [...new Set(rows.map((row: any) => String(row.orderId)).filter(Boolean))];
+    const orders = await Order.find({ _id: { $in: orderIds } })
+      .select('publicId orderCode userId commerceStatus')
+      .lean() as any[];
+    const orderById = new Map(orders.map((order) => [String(order._id), order]));
+    const userIds = [...new Set(orders.map((order) => String(order.userId)).filter(Boolean))];
+    const users = await User.find({ _id: { $in: userIds } })
+      .select('firstName lastName email')
+      .lean() as any[];
+    const userById = new Map(users.map((user) => [String(user._id), user]));
+
+    const data = rows.map((row: any) => {
+      const order = orderById.get(String(row.orderId));
+      const user = order ? userById.get(String(order.userId)) : undefined;
+      return {
+        ...row,
+        order: order
+          ? { id: order.publicId, reference: order.orderCode || order.publicId, status: order.commerceStatus }
+          : undefined,
+        customer: user
+          ? { name: `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email, email: user.email }
+          : undefined,
+      };
+    });
+
+    sendSuccess(res, { data, total, page, limit, totalPages: Math.max(Math.ceil(total / limit), 1) });
+  };
+
+  /**
+   * One payment with everything needed to answer "who is this from, by what
+   * method, and what happened" — the order, the customer, and every provider
+   * attempt in time order.
+   */
+  paymentDetail = async (req: Request, res: Response) => {
+    const identifier = routeParam(req.params.id);
+    const payment = await Payment.findOne(
+      isValidObjectId(identifier)
+        ? { $or: [{ _id: identifier }, { publicId: identifier }, { reference: identifier }] }
+        : { $or: [{ publicId: identifier }, { reference: identifier }] },
+    ).lean({ virtuals: true }) as any;
+    if (!payment) throw new HttpError(404, 'Payment not found', undefined, 'NOT_FOUND');
+
+    const order = payment.orderId
+      ? await Order.findById(payment.orderId)
+          .select('publicId orderCode userId commerceStatus totalMinor currency createdAt timeline')
+          .lean() as any
+      : null;
+    const customer = order?.userId
+      ? await User.findById(order.userId).select('firstName lastName email phone').lean() as any
+      : null;
+    const attempts = await PaymentAttempt.find({ paymentId: String(payment._id) })
+      .select('publicId provider status amountMinor reference failureReason createdAt')
+      .sort({ createdAt: 1 })
+      .lean({ virtuals: true });
+
+    sendSuccess(res, {
+      payment,
+      order: order
+        ? {
+            id: order.publicId,
+            reference: order.orderCode || order.publicId,
+            status: order.commerceStatus,
+            totalMinor: order.totalMinor,
+            currency: order.currency,
+            createdAt: order.createdAt,
+          }
+        : undefined,
+      customer: customer
+        ? {
+            name: `${customer.firstName || ''} ${customer.lastName || ''}`.trim() || customer.email,
+            email: customer.email,
+            phone: customer.phone,
+          }
+        : undefined,
+      attempts,
+      timeline: order?.timeline || [],
+    });
   };
   exceptions = async (_req: Request, res: Response) =>
     sendSuccess(
@@ -261,5 +360,44 @@ export class AdminCommerceController {
       reason: req.body.reason,
     });
     sendSuccess(res, { lowStockThreshold: updated?.lowStockThreshold });
+  };
+
+  hookCoinSettings = async (_req: Request, res: Response) => {
+    const settings = await CommerceSettings.findOne({ key: 'commerce' })
+      .select('orderEarnEnabled orderEarnPercent orderEarnMaxMinor creditSpendCapPercent welcomeBonusMinor updatedAt')
+      .lean();
+    sendSuccess(res, {
+      orderEarnEnabled: settings?.orderEarnEnabled ?? true,
+      orderEarnPercent: settings?.orderEarnPercent ?? 1,
+      orderEarnMaxMinor: settings?.orderEarnMaxMinor ?? 0,
+      creditSpendCapPercent: settings?.creditSpendCapPercent ?? 20,
+      welcomeBonusMinor: settings?.welcomeBonusMinor ?? 30000,
+      updatedAt: settings?.updatedAt,
+    });
+  };
+
+  updateHookCoinSettings = async (req: Request, res: Response) => {
+    // Only the keys actually sent are written, so a PATCH of one field cannot
+    // reset the others to their defaults.
+    const { reason, ...fields } = req.body as Record<string, unknown>;
+    const changes = Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined));
+    const updated = await CommerceSettings.findOneAndUpdate(
+      { key: 'commerce' },
+      { $set: { ...changes, updatedBy: req.user!.sub } },
+      { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
+    ).lean();
+    await recordAudit(req, {
+      action: 'commerce.hook_coin_settings.update',
+      entityType: 'commerce_settings',
+      after: changes,
+      reason: reason as string,
+    });
+    sendSuccess(res, {
+      orderEarnEnabled: updated?.orderEarnEnabled,
+      orderEarnPercent: updated?.orderEarnPercent,
+      orderEarnMaxMinor: updated?.orderEarnMaxMinor,
+      creditSpendCapPercent: updated?.creditSpendCapPercent,
+      welcomeBonusMinor: updated?.welcomeBonusMinor,
+    });
   };
 }

@@ -21,7 +21,13 @@
     "db:sync-market-associate-product-options": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/sync-market-associate-product-options.ts",
     "db:seed-legal-content": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/seed-legal-content.ts",
     "db:backfill-product-ids": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/backfill-product-ids.ts",
-    "db:backfill-product-catalog": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/backfill-product-catalog-links.ts"
+    "db:backfill-product-catalog": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/backfill-product-catalog-links.ts",
+    "db:migrate-fulfilment-indexes": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/migrate-fulfilment-indexes.ts",
+    "db:backfill-group-statuses": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/backfill-group-statuses.ts",
+    "db:seed-earn-settings": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/seed-earn-settings.ts",
+    "db:backfill-permissions": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/backfill-permissions.ts",
+    "db:purge-sla": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/purge-sla.ts",
+    "db:purge-exceptions": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/purge-exceptions.ts"
   },
   "dependencies": {
     "@types/cors": "^2.8.19",

@@ -2,7 +2,6 @@ import { Model } from 'mongoose';
 import { connectDatabase, disconnectDatabase } from '@config/data-source';
 import { CheckoutPreview } from '@models/commerce/commerce.model';
 import {
-  FulfilmentException,
   FulfilmentTask,
   HubPackage,
   ReturnRequest,
@@ -71,7 +70,7 @@ async function main() {
     { label: 'Fulfilment tasks (Market Associate)', model: FulfilmentTask, filter: { orderId: { $in: orderRefs } } },
     { label: 'Runner packages (Market Associate)', model: RunnerPackage, filter: { orderId: { $in: orderRefs } } },
     { label: 'Hub packages', model: HubPackage, filter: { orderId: { $in: orderRefs } } },
-    { label: 'Fulfilment exceptions', model: FulfilmentException, filter: { orderId: { $in: orderRefs } } },
+    { label: 'Fulfilment exceptions', model: filter: { orderId: { $in: orderRefs } } },
     { label: 'Return requests', model: ReturnRequest, filter: { orderId: { $in: orderRefs } } },
     { label: 'Shipments', model: Shipment, filter: { orderId: { $in: orderRefs } } },
     { label: 'Logistics records', model: Logistics, filter: { orderId: { $in: orderRefs } } },

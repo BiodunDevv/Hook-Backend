@@ -7,6 +7,7 @@ import { LegalContent } from '@models/platform/legal-content.model';
 import { Product } from '@models/products/product.model';
 import { sendSuccess } from '@utils/http';
 import { publicProduct } from '@lib/public-resource';
+import { DEFAULT_RETURNS_POLICY_HTML } from '@lib/legal-defaults';
 
 const routeParam = (value: string | string[] | undefined) =>
   Array.isArray(value) ? value[0] : value || '';
@@ -50,12 +51,13 @@ function searchExpression(value: string) {
 const LEGAL_DEFAULT_TITLES: Record<string, string> = {
   terms: 'Terms of Service',
   privacy: 'Privacy Policy',
+  returns: 'Returns Policy',
 };
 
 export class PublicController {
   getLegalContent = async (req: Request, res: Response) => {
     const type = routeParam(req.params.type);
-    if (type !== 'terms' && type !== 'privacy') {
+    if (type !== 'terms' && type !== 'privacy' && type !== 'returns') {
       res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Unknown legal document type' } });
       return;
     }
@@ -63,7 +65,7 @@ export class PublicController {
     sendSuccess(res, {
       type,
       title: doc?.title || LEGAL_DEFAULT_TITLES[type],
-      bodyHtml: doc?.bodyHtml || '',
+      bodyHtml: doc?.bodyHtml || (type === 'returns' ? DEFAULT_RETURNS_POLICY_HTML : ''),
       version: doc?.version || 0,
       effectiveDate: doc?.effectiveDate || null,
     });

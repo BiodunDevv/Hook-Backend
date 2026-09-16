@@ -1,4 +1,5 @@
 import { CommerceSettings } from '@models/commerce/commerce.model';
+import { calculateHookCoinEarnMinor } from '@lib/hook-coin';
 import { createCommerceNotification } from '@services/commerce-notification.service';
 import { CreditLedger, type CreditEntryType } from '@models/promotions/credit-ledger.model';
 import { HttpError } from '@utils/http';
@@ -84,6 +85,65 @@ export class CreditService {
       type: 'hook_coin',
       data: { section: 'credits' },
     }).catch(() => undefined);
+  }
+
+  /**
+   * Returns a share of the order back as Hook Coin once payment is confirmed.
+   *
+   * Credited at payment rather than delivery so the success screen can show a
+   * figure that is already true. Keyed on the order, so a replayed Paystack
+   * webhook — which does happen — cannot credit the same order twice.
+   */
+  async earnOnOrder(input: { userId: string; orderId: string; subtotalMinor: number }) {
+    if (!input.userId || input.subtotalMinor <= 0) return undefined;
+
+    const settings = await CommerceSettings.findOne({ key: 'commerce' })
+      .select('orderEarnEnabled orderEarnPercent orderEarnMaxMinor')
+      .lean();
+    const amountMinor = calculateHookCoinEarnMinor(input.subtotalMinor, {
+      enabled: settings?.orderEarnEnabled,
+      percent: settings?.orderEarnPercent,
+      maxMinor: settings?.orderEarnMaxMinor,
+    });
+    if (amountMinor <= 0) return undefined;
+
+    const entry = await this.record({
+      userId: input.userId,
+      type: 'order_earn',
+      amountMinor,
+      orderId: input.orderId,
+      idempotencyKey: `earn:${input.orderId}`,
+      note: 'Earned from an order',
+    });
+    await this.notify(input.userId, `credit:earn:${input.orderId}`, {
+      title: 'You earned Hook Coin',
+      body: `${formatNaira(amountMinor)} Hook Coin was added to your account for your order.`,
+    });
+    return entry;
+  }
+
+  /**
+   * Reverses an earn when the order it rewarded is cancelled. Posts a negative
+   * entry rather than deleting the original, so the ledger stays append-only
+   * and the history still shows what happened.
+   */
+  async reverseEarn(input: { userId: string; orderId: string }) {
+    const earned = await CreditLedger.findOne({
+      userId: input.userId,
+      orderId: input.orderId,
+      type: 'order_earn',
+      deletedAt: { $exists: false },
+    }).select('amountMinor').lean();
+    const amountMinor = Number(earned?.amountMinor || 0);
+    if (amountMinor <= 0) return undefined;
+    return this.record({
+      userId: input.userId,
+      type: 'order_earn',
+      amountMinor: -Math.abs(amountMinor),
+      orderId: input.orderId,
+      idempotencyKey: `earn-reversal:${input.orderId}`,
+      note: 'Reversed after the order was cancelled',
+    });
   }
 
   async spendCapPercent() {

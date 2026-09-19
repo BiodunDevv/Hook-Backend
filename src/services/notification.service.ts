@@ -3,6 +3,7 @@ import { DeviceToken } from '@models/notifications/device-token.model';
 import { Notification } from '@models/notifications/notification.model';
 import { publishRealtime } from '@services/realtime.service';
 import { HttpError } from '@utils/http';
+import { sendPushMessages } from '@services/push.service';
 
 type NotificationOwner = { userId: string };
 
@@ -158,25 +159,6 @@ export class NotificationService {
   }
 
   private async sendExpoPush(expoPushToken: string, title: string, body: string, data?: Record<string, unknown>) {
-    try {
-      const response = await fetch('https://exp.host/--/api/v2/push/send', {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          'Accept-Encoding': 'gzip, deflate',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          to: expoPushToken,
-          sound: 'default',
-          title,
-          body,
-          data,
-        }),
-      });
-      if (!response.ok) console.warn(`[push] Expo responded ${response.status}`);
-    } catch (error) {
-      console.warn('[push] Failed to send Expo notification', error);
-    }
+    await sendPushMessages([{ to: expoPushToken, title, body, data }]);
   }
 }

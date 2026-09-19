@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { itemVerifySchema } from '../src/validations/fulfilment.schemas';
 import { decryptPackageCredential, encryptPackageCredential } from '../src/lib/package-credential-crypto';
 import { RunnerPackage } from '../src/models/fulfilment/fulfilment.model';
+import { ItemResolution } from '../src/models/fulfilment/item-resolution.model';
 
 const completeItem = {
   photos: [
@@ -32,4 +33,12 @@ test('active Hub handover codes are unique within a Hub', () => {
   const index = RunnerPackage.schema.indexes().find(([fields, options]) => fields.hubId === 1 && fields.scanCredentialHash === 1 && options.unique);
   assert.ok(index);
   assert.deepEqual(index?.[1].partialFilterExpression, { status: 'READY_FOR_HUB' });
+});
+
+test('substitution top-up references are unique and never stored as a generic order payment', () => {
+  const path = ItemResolution.schema.path('adjustmentPaymentReference') as any;
+  assert.equal(path.options.unique, true);
+  assert.equal(path.options.sparse, true);
+  assert.equal(ItemResolution.schema.path('adjustmentAuthorizationUrl')?.instance, 'String');
+  assert.equal(ItemResolution.schema.path('adjustmentProviderReference')?.instance, 'String');
 });

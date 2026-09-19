@@ -26,7 +26,6 @@ export class FulfilmentController {
   fulfilmentOrders = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.fulfilmentOrders(actor(req), req.query as Record<string, unknown>));
   adminTaskDetail = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.adminTaskDetail(actor(req), routeParam(req.params.id)));
   proposeItemResolution = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.proposeItemResolution(actor(req), routeParam(req.params.id), req.body));
-  completeItemAdjustment = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.completeItemAdjustment(actor(req), routeParam(req.params.id), req.body));
   assignmentMarketAssociates = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.assignmentMarketAssociates(actor(req), req.query as Record<string, unknown>));
   assignmentHubs = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.assignmentHubs(actor(req), req.query as Record<string, unknown>));
   reassignTask = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.reassignTask(actor(req), routeParam(req.params.id), req.body));

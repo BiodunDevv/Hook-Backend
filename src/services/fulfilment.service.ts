@@ -5,6 +5,7 @@ import {
   CommercePaymentStatus,
   FulfilmentTaskStatus,
   HubPackageStatus,
+  PaymentStatus,
   RunnerPackageStatus,
   ShipmentStatus,
 } from '@lib/constants';
@@ -450,8 +451,17 @@ export class FulfilmentService {
     if (!issue) throw new HttpError(404, 'Replacement request not found', undefined, 'NOT_FOUND');
     if (issue.status !== 'CUSTOMER_APPROVAL_PENDING') {
       if (issue.customerDecision === (body.decision === 'ACCEPT' ? 'ACCEPTED' : 'DECLINED')) {
-        if (issue.status === 'PAYMENT_PENDING' && issue.adjustmentPaymentReference) {
-          await this.verifySubstitutionTopUp(String(issue.adjustmentPaymentReference)).catch(() => undefined);
+        if (issue.status === 'PAYMENT_PENDING') {
+          if (!issue.adjustmentPaymentReference || !issue.adjustmentAuthorizationUrl) {
+            await this.initializeSubstitutionTopUp(issue, order, customerId);
+          } else {
+            await this.verifySubstitutionTopUp(String(issue.adjustmentPaymentReference)).catch(() => undefined);
+          }
+          const refreshed = await ItemResolution.findById(issue._id);
+          return refreshed?.toObject() || issue.toObject();
+        }
+        if (issue.status === 'REFUND_PENDING') {
+          await this.processSubstitutionRefund(issue, order, customerId);
           const refreshed = await ItemResolution.findById(issue._id);
           return refreshed?.toObject() || issue.toObject();
         }
@@ -479,7 +489,7 @@ export class FulfilmentService {
       await this.processSubstitutionRefund(issue, order, customerId);
     } else await this.applyResolvedSubstitution(issue, customerId);
     await this.publishOrderUpdate(issue.orderId);
-    return issue.toObject();
+    return (await ItemResolution.findById(issue._id).lean({ virtuals: true })) || issue.toObject();
   }
 
   private async initializeSubstitutionTopUp(issue: any, order: any, customerId: string) {
@@ -516,20 +526,30 @@ export class FulfilmentService {
 
   private async processSubstitutionRefund(issue: any, order: any, customerId: string) {
     const amountMinor = Math.abs(Number(issue.adjustmentMinor));
-    const payment = await Payment.findOne({
+    const unknownEntry = [...issue.history].reverse().find((entry: any) => entry.action === 'REFUND_OUTCOME_UNKNOWN');
+    const payment = unknownEntry?.paymentId ? await Payment.findById(String(unknownEntry.paymentId)) : await Payment.findOne({
       orderId: String(order._id),
-      commerceStatus: 'CONFIRMED',
       gateway: 'paystack',
+      status: { $in: [PaymentStatus.SUCCESSFUL, PaymentStatus.PARTIALLY_REFUNDED] },
       $expr: { $gte: [{ $subtract: [{ $ifNull: ['$amountMinor', 0] }, { $ifNull: ['$refundedAmount', 0] }] }, amountMinor] },
     }).sort({ paidAt: 1 });
     if (!payment) throw new HttpError(409, 'No captured Paystack payment can fund this refund', undefined, 'PAYMENT_RECORD_MISSING');
     const idempotencyKey = `substitution-refund:${issue.publicId}`;
     let result: { providerReference?: string } | undefined;
+    const outcomeUnknown = Boolean(unknownEntry);
+    if (outcomeUnknown) {
+      result = await new PaymentService().reconcileRefund(String(payment.id), amountMinor, idempotencyKey);
+      if (!result) throw new HttpError(503, 'The refund is still being verified with Paystack. No duplicate refund will be sent.', { unknown: true }, 'PROVIDER_OUTCOME_UNKNOWN');
+    }
     try {
-      result = await new PaymentService().refund(String(payment._id), amountMinor, idempotencyKey);
+      if (!result) result = await new PaymentService().refund(String(payment.id), amountMinor, idempotencyKey);
     } catch (error: any) {
       if (error?.code === 'PROVIDER_OUTCOME_UNKNOWN') {
-        result = await new PaymentService().reconcileRefund(String(payment._id), amountMinor, idempotencyKey);
+        result = await new PaymentService().reconcileRefund(String(payment.id), amountMinor, idempotencyKey);
+        if (!result) {
+          issue.history.push({ action: 'REFUND_OUTCOME_UNKNOWN', actorId: customerId, paymentId: String(payment.id), at: new Date() });
+          await issue.save();
+        }
       }
       if (!result) throw error;
     }
@@ -560,20 +580,6 @@ export class FulfilmentService {
     return { matched: true, processed: true };
   }
 
-  async completeItemAdjustment(actor: Actor, issueIdentifier: string, body: Record<string, any>) {
-    const issue = await ItemResolution.findOne(identifier(issueIdentifier));
-    if (!issue) throw new HttpError(404, 'Replacement request not found', undefined, 'NOT_FOUND');
-    const task = await taskByIdentifier(issue.taskId);
-    await assertStaffScope(actor, task.sourceStateId, task.hubId);
-    if (!['PAYMENT_PENDING', 'REFUND_PENDING'].includes(issue.status)) throw new HttpError(409, 'No price adjustment is pending', undefined, 'INVALID_STATE_TRANSITION');
-    if (!body.providerReference) throw new HttpError(400, 'A verified payment or refund reference is required', undefined, 'VALIDATION_ERROR');
-    issue.adjustmentStatus = 'CONFIRMED';
-    issue.history.push({ action: 'ADJUSTMENT_CONFIRMED', actorId: actor.accountId, providerReference: body.providerReference, at: new Date() });
-    await this.applyResolvedSubstitution(issue, actor.accountId);
-    await this.publishOrderUpdate(issue.orderId, task.sourceStateId, task.hubId);
-    return issue.toObject();
-  }
-
   private async applyResolvedSubstitution(issue: any, actorId: string) {
     const proposal = issue.proposal as any;
     await this.atomically(async (session) => {
@@ -582,7 +588,11 @@ export class FulfilmentService {
         { $set: { productId: proposal.productId, productTitle: proposal.productTitle, productImage: proposal.productImage, selectedVariants: proposal.selectedVariants, quantity: proposal.quantity, unitPriceMinor: proposal.unitPriceMinor, totalPriceMinor: proposal.totalPriceMinor, unitPrice: proposal.unitPriceMinor / 100, totalPrice: proposal.totalPriceMinor / 100, replacementSnapshot: { ...proposal, original: issue.originalSnapshot, approvedByCustomerAt: issue.customerDecidedAt }, resolutionState: 'RESOLVED', fulfilmentStatus: 'SOURCING' } },
         { returnDocument: 'after', session },
       ).lean() as any;
-      if (!item) throw new HttpError(409, 'Order item is no longer awaiting replacement', undefined, 'INVALID_STATE_TRANSITION');
+      if (!item) {
+        const latest = await ItemResolution.findById(issue._id).session(session).lean() as any;
+        if (latest?.status === 'RESOLVED' && latest?.adjustmentStatus === 'CONFIRMED') return;
+        throw new HttpError(409, 'Order item is no longer awaiting replacement', undefined, 'INVALID_STATE_TRANSITION');
+      }
       const order = await Order.findById(issue.orderId).session(session).lean() as any;
       if (!order) throw new HttpError(404, 'Order not found', undefined, 'NOT_FOUND');
       const subtotalMinor = Math.max(0, Number(order.subtotalMinor || 0) + Number(issue.adjustmentMinor || 0));

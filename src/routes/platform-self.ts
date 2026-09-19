@@ -193,6 +193,8 @@ export function createMarketAssociateRouter() {
     validateBody(itemIssueSchema),
     asyncHandler(fulfilment.marketAssociateItemIssue),
   );
+  // Declared before /:action, which would otherwise treat "handover-code" as an action name.
+  router.post("/fulfilments/:id/handover-code", asyncHandler(fulfilment.regenerateHandoverCode));
   router.post(
     "/fulfilments/:id/:action",
     validateBody(z.object({ version: z.coerce.number().int().positive(), actualCostMinor: z.coerce.number().int().nonnegative().optional(), evidence: z.array(z.object({ type: z.string().min(1), url: z.string().url().optional(), assetId: z.string().optional(), note: z.string().max(500).optional() })).optional(), arrivedAt: z.string().datetime().optional() }).passthrough()),

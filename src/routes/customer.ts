@@ -168,6 +168,12 @@ export function createCustomerRouter() {
   router.get("/orders", asyncHandler(controller.listOrders));
   router.get("/orders/:id", asyncHandler(controller.getOrder));
   router.get(
+    "/orders/:id/receipt",
+    requireAuth,
+    requireAccountType(AccountType.CUSTOMER),
+    asyncHandler(fulfilment.customerReceipt),
+  );
+  router.get(
     "/orders/:id/fulfilment",
     requireAuth,
     requireAccountType(AccountType.CUSTOMER),

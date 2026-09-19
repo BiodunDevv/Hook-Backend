@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { FulfilmentController } from '@controllers/fulfilment.controller';
 import { PublicController } from '@controllers/public.controller';
 import { asyncHandler } from '@utils/http';
 import { validateBody } from '@middleware/validate';
@@ -33,6 +34,7 @@ export function createPublicRouter() {
   router.get('/public/app-release', asyncHandler(new AppReleasesController().publicPolicy));
 
   router.get('/public/legal/:type', asyncHandler(controller.getLegalContent));
+  router.get('/public/parcels/:receipt', rateLimit('parcel-tracking', { windowMs: 60_000, max: 30, message: 'Too many lookups. Please wait a moment.' }), asyncHandler(new FulfilmentController().publicParcelTracking));
 
   const accountDeletion = new AccountDeletionController();
   router.post('/public/account-deletion/code', deletionByIp, validateBody(publicDeletionCodeSchema), deletionCodeByEmail, asyncHandler(accountDeletion.sendCode));

@@ -54,6 +54,10 @@ export function assertSafeEnvironment() {
       requireEnv('CLOUDINARY_API_KEY');
       requireEnv('CLOUDINARY_API_SECRET');
     }
+    const packageKey = requireEnv('PACKAGE_CREDENTIAL_ENCRYPTION_KEY');
+    if (packageKey.length < 32 || packageKey.startsWith('replace-with-')) {
+      throw new Error('PACKAGE_CREDENTIAL_ENCRYPTION_KEY must be an independent production secret with at least 32 characters');
+    }
     for (const name of ['BOOTH_ACCESS_SECRET', 'BOOTH_SESSION_SECRET']) {
       const value = requireEnv(name);
       if (value.length < 32 || value.startsWith('replace-with-')) {

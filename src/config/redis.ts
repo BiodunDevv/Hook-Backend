@@ -72,12 +72,13 @@ function ensureClient(): Redis | undefined {
     commandTimeout: Number(process.env.REDIS_COMMAND_TIMEOUT_MS || 500),
     maxRetriesPerRequest: 1,
     enableOfflineQueue: false,
-    retryStrategy: (attempt) => Math.min(attempt * 200, 5_000),
+    // Back off to 30s so an unreachable Redis is retried quietly, not hammered.
+    retryStrategy: (attempt) => Math.min(attempt * 500, 30_000),
   });
   cacheClient.on('error', (error) => {
     if (warnedUnreachable) return;
     warnedUnreachable = true;
-    console.warn(`[redis] ${redactRedisUrl()} unavailable (${error.message}); falling back to MongoDB/in-memory`);
+    console.warn(`[redis] ${redactRedisUrl()} unavailable (${error.message}); using MongoDB/in-memory and retrying in the background`);
   });
   cacheClient.on('ready', () => {
     warnedUnreachable = false;

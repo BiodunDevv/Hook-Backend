@@ -18,6 +18,7 @@ export class FulfilmentController {
   marketAssociateTasks = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.marketAssociateTasks(req.user!.sub, req.query as Record<string, unknown>));
   marketAssociateTask = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.marketAssociateTask(req.user!.sub, routeParam(req.params.id)));
   marketAssociateAction = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.marketAssociateTransition(req.user!.sub, routeParam(req.params.id), routeParam(req.params.action), Number(req.body.version), req.body));
+  regenerateHandoverCode = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.regenerateHandoverCode(req.user!.sub, routeParam(req.params.id)));
   marketAssociateIssue = async (req: Request, res: Response) => sendCreated(res, await fulfilmentService.marketAssociateIssue(req.user!.sub, routeParam(req.params.id), req.body));
   verifyItem = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.verifyItem(req.user!.sub, routeParam(req.params.id), routeParam(req.params.orderItemId), req.body));
   marketAssociateItemIssue = async (req: Request, res: Response) => sendCreated(res, await fulfilmentService.marketAssociateItemIssue(req.user!.sub, routeParam(req.params.id), routeParam(req.params.orderItemId), req.body));
@@ -33,8 +34,14 @@ export class FulfilmentController {
   hubDashboard = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.hubDashboard(actor(req), req.query as Record<string, unknown>));
   adminConsolidations = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.consolidations(actor(req), req.query as Record<string, unknown>));
   receivePackage = async (req: Request, res: Response) => sendCreated(res, await fulfilmentService.receivePackage(actor(req), routeParam(req.params.id), req.body));
+  reopenQualityCheck = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.reopenQualityCheck(actor(req), routeParam(req.params.id), req.body));
+  resourceFailedPackage = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.resourceFailedPackage(actor(req), routeParam(req.params.id), req.body));
+  publicParcelTracking = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.publicParcelTracking(routeParam(req.params.receipt), String(req.query.s || '')));
   qualityCheck = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.qualityCheck(actor(req), routeParam(req.params.id), req.body));
   consolidate = async (req: Request, res: Response) => sendCreated(res, await fulfilmentService.consolidate(actor(req), routeParam(req.params.id), req.body));
+  orderReceipt = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.orderReceipt(actor(req), routeParam(req.params.id), req.query as Record<string, unknown>));
+  recordReceiptPrint = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.recordReceiptPrint(actor(req), routeParam(req.params.id), req.body));
+  customerReceipt = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.customerReceipt(req.user!.sub, routeParam(req.params.id)));
   sealConsolidation = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.sealConsolidation(actor(req), routeParam(req.params.id), req.body));
   createShipment = async (req: Request, res: Response) => sendCreated(res, await fulfilmentService.createManualShipment(actor(req), routeParam(req.params.id), req.body));
   updateShipment = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.updateShipment(actor(req), routeParam(req.params.id), req.body));
@@ -55,6 +62,8 @@ export class FulfilmentController {
   adminRefundProcess = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.processRefund(actor(req), routeParam(req.params.id), req.body));
   adminReturns = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.returns(actor(req), req.query as Record<string, unknown>));
   adminRefunds = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.refunds(actor(req), req.query as Record<string, unknown>));
+  reassignShipmentCourier = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.reassignShipmentCourier(actor(req), routeParam(req.params.id), req.body));
+  fulfilmentOverview = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.overview(actor(req), req.query as Record<string, unknown>));
   adminShipments = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.shipments(actor(req), req.query as Record<string, unknown>));
   logisticsReadiness = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.logisticsReadiness(actor(req)));
   logisticsWebhook = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.logisticsWebhook(routeParam(req.params.provider), String(req.header('x-provider-event-id') || ''), req.body, String(req.header('x-provider-signature') || '')));

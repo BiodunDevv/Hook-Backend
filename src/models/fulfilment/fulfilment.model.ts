@@ -58,6 +58,8 @@ export interface FulfilmentTask extends BaseEntity {
   packedAt?: Date;
   hubArrivedAt?: Date;
   hubReceivedAt?: Date;
+  /** Items sent back to the Market Associate after a failed Hub check. */
+  resourceItemIds?: string[];
   completedAt?: Date;
   actualCostMinor?: number;
   evidence: FulfilmentEvidence[];
@@ -119,6 +121,7 @@ export interface Consolidation extends BaseEntity {
   weightGrams?: number;
   dimensions?: { lengthCm: number; widthCm: number; heightCm: number };
   sealReference?: string;
+  receiptPrints?: Array<{ by: string; at: Date; size?: string }>;
   evidence: FulfilmentEvidence[];
   sealedAt?: Date;
   sealedBy?: string;
@@ -257,7 +260,7 @@ const taskSchema = createSchema<FulfilmentTask>({
   idempotencyKey: { type: String, required: true, unique: true, index: true },
   alertedAt: { type: Date }, acceptedAt: { type: Date }, sourcingStartedAt: { type: Date },
   productSecuredAt: { type: Date }, packingStartedAt: { type: Date }, packedAt: { type: Date },
-  hubArrivedAt: { type: Date }, hubReceivedAt: { type: Date }, completedAt: { type: Date },
+  hubArrivedAt: { type: Date }, hubReceivedAt: { type: Date }, resourceItemIds: { type: [String], default: undefined }, completedAt: { type: Date },
   actualCostMinor: { type: Number, min: 0 }, evidence, itemVerifications: { type: [Object], default: [] }, issue: { type: Object }, assignmentHistory: { type: [Object], default: [] },
 });
 taskSchema.index({ orderId: 1, marketId: 1 }, { unique: true });
@@ -281,7 +284,7 @@ const hubPackageSchema = createSchema<HubPackage>({
 });
 
 const consolidationSchema = createSchema<Consolidation>({
-  publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, required: true, index: true }, fulfilmentGroupId: { type: String, index: true, sparse: true }, sourceStateId: { type: String, required: true, index: true }, hubId: { type: String, required: true, index: true }, hubPackageIds: { type: [String], default: [] }, status: { type: String, enum: ['DRAFT', 'SEALED', 'HANDED_OVER', 'CANCELLED'], default: 'DRAFT', index: true }, weightGrams: { type: Number, min: 0 }, dimensions: { type: Object }, sealReference: { type: String }, evidence, sealedAt: { type: Date }, sealedBy: { type: String }, version: { type: Number, default: 1, min: 1 },
+  publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, required: true, index: true }, fulfilmentGroupId: { type: String, index: true, sparse: true }, sourceStateId: { type: String, required: true, index: true }, hubId: { type: String, required: true, index: true }, hubPackageIds: { type: [String], default: [] }, status: { type: String, enum: ['DRAFT', 'SEALED', 'HANDED_OVER', 'CANCELLED'], default: 'DRAFT', index: true }, weightGrams: { type: Number, min: 0 }, dimensions: { type: Object }, receiptPrints: { type: [Object], default: [] }, sealReference: { type: String }, evidence, sealedAt: { type: Date }, sealedBy: { type: String }, version: { type: Number, default: 1, min: 1 },
 });
 // Unique per fulfilment group, not per state: an order split into several
 // deliveries has multiple groups in the same state. Sparse so legacy rows

@@ -34,7 +34,7 @@ import { publishRealtime } from '@services/realtime.service';
 import { EmailService } from '@emails/email.service';
 import { HttpError } from '@utils/http';
 import { timelineEntry, notifyStatus } from '@lib/order-timeline';
-import { decryptPackageCredential, encryptPackageCredential } from '@lib/package-credential-crypto';
+import { encryptPackageCredential, tryDecryptPackageCredential } from '@lib/package-credential-crypto';
 
 type Actor = { accountId: string; publicId?: string; stateIds?: string[]; hubIds?: string[]; accountType?: string };
 type EvidenceInput = Array<{ type: string; url?: string; assetId?: string; note?: string }>;
@@ -45,6 +45,7 @@ const TASK_TRANSITIONS: Record<string, FulfilmentTaskStatus[]> = {
   secure: [FulfilmentTaskStatus.SOURCING],
   begin_packing: [FulfilmentTaskStatus.PRODUCT_SECURED],
   pack: [FulfilmentTaskStatus.PACKING],
+  submit: [FulfilmentTaskStatus.ACCEPTED, FulfilmentTaskStatus.SOURCING, FulfilmentTaskStatus.PRODUCT_SECURED, FulfilmentTaskStatus.PACKING],
 };
 
 function identifier(identifier: string) {
@@ -139,6 +140,8 @@ const STAGE_STATUSES: Record<string, CommerceOrderStatus[]> = {
   hub: [CommerceOrderStatus.PARTIALLY_RECEIVED, CommerceOrderStatus.READY_FOR_CONSOLIDATION],
   dispatch: [CommerceOrderStatus.READY_FOR_DISPATCH],
 };
+
+const QC_FAILURE_LABELS: Record<string, string> = { WRONG_PRODUCT: 'Wrong product', WRONG_SIZE: 'Wrong size', WRONG_COLOR: 'Wrong colour', DAMAGED: 'Damaged or defective', MISSING: 'Missing item', OTHER: 'Other' };
 
 async function resolveFulfilmentNames(records: Array<{ marketId?: string; hubId?: string; marketAssociateId?: string; orderId?: string }>) {
   const marketIds = [...new Set(records.map((record) => record.marketId).filter(Boolean))] as string[];
@@ -360,6 +363,8 @@ export class FulfilmentService {
       { $group: { _id: '$taskId', count: { $sum: 1 } } },
     ]);
     const issuesByTask = new Map(issueCounts.map((entry: any) => [String(entry._id), Number(entry.count)]));
+    const orderRows = await Order.find({ _id: { $in: [...new Set(tasks.map((task: any) => String(task.orderId)).filter(Boolean))] } }).select('publicId').lean() as any[];
+    const orderRef = new Map(orderRows.map((order) => [String(order._id), order.publicId]));
     const data = tasks.map((task) => {
       const taskItems = (task.orderItemIds || [])
         .map((itemId: string) => itemById.get(String(itemId)))
@@ -368,6 +373,7 @@ export class FulfilmentService {
       const snapshot = preview?.productSnapshot as { title?: string; images?: string[] } | undefined;
       return {
         ...task,
+        orderPublicId: orderRef.get(String(task.orderId)),
         previewImage: preview?.productImage || snapshot?.images?.[0],
         previewTitle: preview?.productTitle || snapshot?.title,
         previewQuantity: preview?.quantity,
@@ -746,19 +752,41 @@ export class FulfilmentService {
     const marketAssociate = await marketAssociateContext(accountId);
     const task = await taskByIdentifier(taskIdentifier);
     if (task.marketAssociateId !== (marketAssociate as any)._id.toString()) throw new HttpError(404, 'Fulfilment task not found', undefined, 'NOT_FOUND');
-    const [items, market, hub, pack] = await Promise.all([
+    const [items, market, hub, pack, orderDoc] = await Promise.all([
       OrderItem.find({ _id: { $in: task.orderItemIds } }).lean({ virtuals: true }),
       Market.findOne(identifier(task.marketId)).lean({ virtuals: true }),
       task.hubId ? DispatchHub.findOne(identifier(task.hubId)).lean({ virtuals: true }) : null,
       RunnerPackage.findOne({ taskId: task._id }).select('+scanCredentialCiphertext -scanCredentialHash').lean({ virtuals: true }),
+      Order.findById(task.orderId).select('publicId').lean() as Promise<any>,
     ]);
     const itemIds = items.map((item: any) => String(item._id));
     const issues = itemIds.length ? await ItemResolution.find({ taskId: String(task._id), orderItemId: { $in: itemIds }, status: { $nin: ['RESOLVED', 'CANCELLED'] } }).lean({ virtuals: true }) : [];
-    const visibleCredential = pack?.status === RunnerPackageStatus.READY_FOR_HUB && (pack as any).scanCredentialCiphertext
-      ? decryptPackageCredential(String((pack as any).scanCredentialCiphertext))
-      : undefined;
+    // The code is shown to the associate for as long as the package waits for
+    // the Hub. If it cannot be decrypted (old package without one, or a changed
+    // key) the task still loads; the app offers a fresh code via
+    // regenerateHandoverCode instead of the whole page failing.
+    let visibleCredential: string | undefined;
+    let credentialUnavailable = false;
+    if (pack?.status === RunnerPackageStatus.READY_FOR_HUB) {
+      visibleCredential = tryDecryptPackageCredential((pack as any).scanCredentialCiphertext);
+      credentialUnavailable = !visibleCredential;
+      if (credentialUnavailable) console.warn(`[handover] code for package ${(pack as any).publicId} is unreadable`);
+    }
+    // Older Hub receipts could complete the package while leaving the task at
+    // READY_FOR_HUB. Heal that mismatch on read so the associate never sees a
+    // misleading "waiting" state or expects a credential that was correctly
+    // destroyed when custody changed.
+    if (pack?.status === RunnerPackageStatus.HUB_RECEIVED && task.status === FulfilmentTaskStatus.READY_FOR_HUB) {
+      await FulfilmentTask.updateOne(
+        { _id: task._id, status: FulfilmentTaskStatus.READY_FOR_HUB },
+        { $set: { status: FulfilmentTaskStatus.HUB_RECEIVED, hubReceivedAt: (pack as any).credentialVerifiedAt || (pack as any).handedOverAt || new Date() }, $inc: { version: 1 } },
+      );
+      task.status = FulfilmentTaskStatus.HUB_RECEIVED;
+      task.version = Number(task.version || 0) + 1;
+      task.hubReceivedAt = (pack as any).credentialVerifiedAt || (pack as any).handedOverAt;
+    }
     if (pack) delete (pack as any).scanCredentialCiphertext;
-    return { ...task, items, market, hub, issues, package: pack ? { ...pack, ...(visibleCredential ? { scanCredential: visibleCredential } : {}) } : null };
+    return { ...task, orderPublicId: orderDoc?.publicId, items, market, hub, issues, package: pack ? { ...pack, ...(visibleCredential ? { scanCredential: visibleCredential } : {}), ...(credentialUnavailable ? { credentialUnavailable: true } : {}) } : null };
   }
 
   async verifyItem(accountId: string, taskIdentifier: string, orderItemId: string, body: Record<string, any>) {
@@ -766,8 +794,8 @@ export class FulfilmentService {
     const task = await taskByIdentifier(taskIdentifier);
     if (task.marketAssociateId !== (marketAssociate as any)._id.toString()) throw new HttpError(404, 'Fulfilment task not found', undefined, 'NOT_FOUND');
     if (!task.orderItemIds.map(String).includes(String(orderItemId))) throw new HttpError(404, 'Order item not found on this task', undefined, 'NOT_FOUND');
-    if (![FulfilmentTaskStatus.SOURCING, FulfilmentTaskStatus.PRODUCT_SECURED, FulfilmentTaskStatus.PACKING].includes(task.status)) {
-      throw new HttpError(409, 'Items can only be verified while sourcing or packing', { current: task.status }, 'INVALID_STATE_TRANSITION');
+    if (![FulfilmentTaskStatus.ACCEPTED, FulfilmentTaskStatus.SOURCING, FulfilmentTaskStatus.PRODUCT_SECURED, FulfilmentTaskStatus.PACKING].includes(task.status)) {
+      throw new HttpError(409, 'Accept this task before completing its products', { current: task.status }, 'INVALID_STATE_TRANSITION');
     }
     const photos = Array.isArray(body.photos) ? body.photos : [];
     if (photos.length !== 3 || new Set(photos.map((photo: any) => photo.view)).size !== 3) throw new HttpError(400, 'Front, side and back photos are required', undefined, 'VALIDATION_ERROR');
@@ -819,15 +847,26 @@ export class FulfilmentService {
     const marketAssociate = await marketAssociateContext(accountId);
     const task = await taskByIdentifier(taskIdentifier);
     if (task.marketAssociateId !== (marketAssociate as any)._id.toString()) throw new HttpError(404, 'Fulfilment task not found', undefined, 'NOT_FOUND');
-    if (action === 'pack' && task.status === FulfilmentTaskStatus.READY_FOR_HUB) {
-      const existingPackage = await RunnerPackage.findOne({ taskId: task._id }).select('-scanCredentialHash').lean({ virtuals: true });
-      if (existingPackage) return { ...task, package: existingPackage };
+    if ((action === 'pack' || action === 'submit') && task.status === FulfilmentTaskStatus.READY_FOR_HUB) {
+      const existingPackage = await RunnerPackage.findOne({ taskId: task._id }).select('+scanCredentialCiphertext -scanCredentialHash').lean({ virtuals: true });
+      if (existingPackage) {
+        const scanCredential = tryDecryptPackageCredential((existingPackage as any).scanCredentialCiphertext);
+        delete (existingPackage as any).scanCredentialCiphertext;
+        return { ...task, package: { ...existingPackage, ...(scanCredential ? { scanCredential } : {}) } };
+      }
     }
     const allowed = TASK_TRANSITIONS[action] || [];
     if (!allowed.includes(task.status)) throw new HttpError(409, `Cannot ${action.replaceAll('_', ' ')} from the current task state`, { current: task.status }, 'INVALID_STATE_TRANSITION');
     const now = new Date();
     const set: Record<string, unknown> = { version: task.version + 1 };
-    if (action === 'accept') { set.status = FulfilmentTaskStatus.ACCEPTED; set.acceptedAt = now; }
+    if (action === 'accept') {
+      // Acceptance opens the item workspace immediately. ACCEPTED remains
+      // readable for legacy tasks, but new tasks no longer require a second
+      // "start sourcing" click.
+      set.status = FulfilmentTaskStatus.SOURCING;
+      set.acceptedAt = now;
+      set.sourcingStartedAt = now;
+    }
     if (action === 'start_sourcing') { set.status = FulfilmentTaskStatus.SOURCING; set.sourcingStartedAt = now; }
     if (action === 'secure') {
       const matched = (task.itemVerifications || []).filter((entry: any) => entry.matched);
@@ -840,15 +879,20 @@ export class FulfilmentService {
       set.evidence = evidence(body.evidence);
     }
     if (action === 'begin_packing') { set.status = FulfilmentTaskStatus.PACKING; set.packingStartedAt = now; }
-    if (action === 'pack') {
+    if (action === 'pack' || action === 'submit') {
       const unresolvedIssues = await ItemResolution.countDocuments({ taskId: String(task._id), status: { $nin: ['RESOLVED', 'CANCELLED'] } });
-      if (unresolvedIssues) throw new HttpError(409, `${unresolvedIssues} item issue(s) must be resolved before packing`, { unresolvedIssues }, 'INVALID_STATE_TRANSITION');
+      if (unresolvedIssues) throw new HttpError(409, `${unresolvedIssues} product issue(s) must be resolved before this fulfilment can be submitted`, { unresolvedIssues }, 'INVALID_STATE_TRANSITION');
       const verifiedIds = new Set((task.itemVerifications || []).filter((v: any) => v.matched).map((v: any) => String(v.orderItemId)));
       const missingItemIds = task.orderItemIds.filter((id: string) => !verifiedIds.has(String(id)));
-      if (missingItemIds.length) throw new HttpError(409, `${missingItemIds.length} item(s) still need photo verification before packing`, { missingItemIds }, 'ITEMS_NOT_VERIFIED');
+      if (missingItemIds.length) throw new HttpError(409, `${missingItemIds.length} product(s) still need a completed sourcing form`, { missingItemIds }, 'ITEMS_NOT_VERIFIED');
       set.status = FulfilmentTaskStatus.READY_FOR_HUB; set.packedAt = now; set.hubArrivedAt = body.arrivedAt ? new Date(body.arrivedAt) : undefined;
-      const existingPackage = await RunnerPackage.findOne({ taskId: task._id }).select('-scanCredentialHash').lean({ virtuals: true });
-      const packageResult = existingPackage ? { package: existingPackage, credential: undefined } : await this.createRunnerPackage(task, now, body.evidence);
+      // A package can already exist if an earlier submit created it and then failed
+      // before the task moved on. Reuse it, and hand back its code so the
+      // associate still sees it (only the hash was kept for this before).
+      const existingPackage = await RunnerPackage.findOne({ taskId: task._id }).select('+scanCredentialCiphertext -scanCredentialHash').lean({ virtuals: true }) as any;
+      const existingCredential = existingPackage ? tryDecryptPackageCredential(existingPackage.scanCredentialCiphertext) : undefined;
+      if (existingPackage) delete existingPackage.scanCredentialCiphertext;
+      const packageResult = existingPackage ? { package: existingPackage, credential: existingCredential } : await this.createRunnerPackage(task, now, body.evidence);
       const created = packageResult.package;
       const rawCredential = packageResult.credential;
       const packSet = { ...set };
@@ -867,6 +911,58 @@ export class FulfilmentService {
     return updated;
   }
 
+  /**
+   * Issues a new handover code for a package whose code can no longer be shown
+   * (an older package created before codes were stored, or an encryption key
+   * that changed). It never rotates a code that is still readable, and it
+   * refuses a package the Hub locked after too many wrong attempts: that needs
+   * an administrator. The conditional update means two taps produce one code.
+   */
+  async regenerateHandoverCode(accountId: string, taskIdentifier: string) {
+    const marketAssociate = await marketAssociateContext(accountId);
+    const task = await taskByIdentifier(taskIdentifier);
+    if (task.marketAssociateId !== (marketAssociate as any)._id.toString()) throw new HttpError(404, 'Fulfilment task not found', undefined, 'NOT_FOUND');
+    if (task.status !== FulfilmentTaskStatus.READY_FOR_HUB) throw new HttpError(409, 'A handover code is only needed while the package is waiting for the Hub', { current: task.status }, 'INVALID_STATE_TRANSITION');
+    const pack = await RunnerPackage.findOne({ taskId: task._id, status: RunnerPackageStatus.READY_FOR_HUB }).select('+scanCredentialCiphertext -scanCredentialHash').lean({ virtuals: true }) as any;
+    if (!pack) throw new HttpError(409, 'This package is no longer waiting for the Hub', undefined, 'INVALID_STATE_TRANSITION');
+    if (pack.credentialLockedAt) throw new HttpError(423, 'Verification of this package is locked. Ask an administrator to review it.', undefined, 'ACCESS_DENIED');
+    const readable = tryDecryptPackageCredential(pack.scanCredentialCiphertext);
+    const respond = (code: string, source: any) => {
+      const safe = { ...source }; delete safe.scanCredentialCiphertext;
+      return { ...task, package: { ...safe, scanCredential: code } };
+    };
+    if (readable) return respond(readable, pack);
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const replacement = String(randomInt(1000, 10000));
+      try {
+        const updated = await RunnerPackage.findOneAndUpdate(
+          {
+            _id: pack._id,
+            status: RunnerPackageStatus.READY_FOR_HUB,
+            credentialLockedAt: { $exists: false },
+            // Only replace the exact unreadable value we saw.
+            scanCredentialCiphertext: pack.scanCredentialCiphertext ?? { $exists: false },
+          } as any,
+          { $set: { scanCredentialHash: digest(replacement), scanCredentialHint: hint(replacement), scanCredentialCiphertext: encryptPackageCredential(replacement), credentialGeneratedAt: new Date(), credentialFailedAttempts: 0 } },
+          { returnDocument: 'after' },
+        ).select('+scanCredentialCiphertext -scanCredentialHash').lean({ virtuals: true }) as any;
+        if (updated) {
+          await audit('fulfilment.package.handover_code_regenerated', 'runner_package', String(pack.publicId || pack._id), accountId, { taskId: String(task.publicId || task._id) }, undefined, task.sourceStateId, task.hubId);
+          return respond(replacement, updated);
+        }
+        // Someone else replaced it first: return theirs.
+        const current = await RunnerPackage.findById(pack._id).select('+scanCredentialCiphertext -scanCredentialHash').lean({ virtuals: true }) as any;
+        const theirs = tryDecryptPackageCredential(current?.scanCredentialCiphertext);
+        if (current && theirs) return respond(theirs, current);
+        throw new HttpError(409, 'The package changed while a new code was being issued. Refresh and try again.', undefined, 'STALE_VERSION');
+      } catch (error) {
+        // Another package at this Hub already holds that code: draw again.
+        if (!isDuplicateKey(error) || attempt === 11) throw error;
+      }
+    }
+    throw new HttpError(503, 'Unable to reserve a Hub handover code. Please try again.', undefined, 'PROVIDER_NOT_READY');
+  }
+
   private async createRunnerPackage(task: any, now: Date, evidenceInput?: EvidenceInput) {
     for (let attempt = 0; attempt < 12; attempt += 1) {
       const credential = String(randomInt(1000, 10000));
@@ -874,10 +970,14 @@ export class FulfilmentService {
         const created = await RunnerPackage.create({
           publicId: await nextPublicId('runnerPackage'), orderId: task.orderId, taskId: task._id.toString(), marketAssociateId: task.marketAssociateId, hubId: task.hubId,
           status: RunnerPackageStatus.READY_FOR_HUB, scanCredentialHash: digest(credential), scanCredentialHint: hint(credential), scanCredentialCiphertext: encryptPackageCredential(credential),
-          credentialGeneratedAt: now, credentialFailedAttempts: 0, itemIds: task.orderItemIds,
+          credentialGeneratedAt: now, credentialFailedAttempts: 0, itemIds: task.resourceItemIds?.length ? task.resourceItemIds : task.orderItemIds,
           labelReference: `${String(task.orderId).slice(-10).toUpperCase()}-${String(task.publicId).slice(-6).toUpperCase()}`, packedAt: now, evidence: evidence(evidenceInput), version: 1,
         });
-        const safe = created.toObject() as any; delete safe.scanCredentialHash; delete safe.scanCredentialCiphertext;
+        // toObject() drops _id in favour of id (see the schema transform), but the
+        // caller needs _id to link the order items. It used to read it as undefined and
+        // throw AFTER the package was saved, so the associate's submit failed and the
+        // retry created no new code to show.
+        const safe = { ...(created.toObject() as any), _id: created._id }; delete safe.scanCredentialHash; delete safe.scanCredentialCiphertext;
         return { package: safe, credential };
       } catch (error) {
         if (!isDuplicateKey(error)) throw error;
@@ -971,7 +1071,7 @@ export class FulfilmentService {
 
   async hubDashboard(actor: Actor, query: Record<string, unknown>) {
     await assertStaffScope(actor, query.stateId as string | undefined, query.hubId as string | undefined);
-    const filter: Record<string, unknown> = { status: { $in: [HubPackageStatus.RECEIVED, HubPackageStatus.QC_PENDING, HubPackageStatus.QC_PASSED] } };
+    const filter: Record<string, unknown> = { status: { $in: [HubPackageStatus.RECEIVED, HubPackageStatus.QC_PENDING, HubPackageStatus.QC_PASSED, HubPackageStatus.QC_FAILED] } };
     // Intersect rather than overwrite: an explicit hubId from a multi-hub user
     // must narrow the view, not be silently ignored. Scope is still enforced by
     // assertStaffScope above, which rejects a hub the actor cannot see.
@@ -1003,7 +1103,7 @@ export class FulfilmentService {
     const verificationsByTask = new Map(tasksWithVerifications.map((t: any) => [String(t._id), t.itemVerifications || []]));
     const allItemIds = [...new Set(packages.flatMap((pack: any) => pack.itemIds.map(String)))];
     const items = allItemIds.length
-      ? await OrderItem.find({ _id: { $in: allItemIds } }).select('productTitle productImage productSnapshot').lean()
+      ? await OrderItem.find({ _id: { $in: allItemIds } }).select('publicId productTitle productImage productSnapshot variantSnapshot quantity').lean()
       : [];
     const itemById = new Map(items.map((item: any) => [String(item._id), item]));
     const packagesWithItems = packages.map((pack: any) => ({
@@ -1018,11 +1118,23 @@ export class FulfilmentService {
           pickedUpPhotoUrl: verification?.photoUrl,
           checks: verification?.checks,
           matched: verification?.matched ?? false,
+          itemReference: item?.publicId,
+          orderedColor: (item?.variantSnapshot as any)?.color,
+          orderedSize: (item?.variantSnapshot as any)?.size,
+          orderedQuantity: item?.quantity,
+          photos: verification?.photos,
+          actualColor: verification?.actualColor,
+          actualSize: verification?.actualSize,
+          actualQuantity: verification?.actualQuantity,
+          unitCostMinor: verification?.unitCostMinor,
+          supplierReference: verification?.supplierReference,
+          conditionNote: verification?.conditionNote,
+          verifiedAt: verification?.verifiedAt,
         };
       }),
     }));
     const names = await resolveFulfilmentNames([...inbound, ...packagesWithItems, ...consolidations] as any[]);
-    const withNames = (record: any) => ({ ...record, hub: names.hub(record.hubId), order: names.order(record.orderId) });
+    const withNames = (record: any) => ({ ...record, hub: names.hub(record.hubId), order: names.order(record.orderId), marketAssociate: record.marketAssociateId ? names.marketAssociate(record.marketAssociateId) : undefined });
     return {
       inbound: inbound.map(withNames),
       packages: packagesWithItems.map(withNames),
@@ -1047,12 +1159,17 @@ export class FulfilmentService {
       ? await Order.find({ _id: { $in: orderIds } }).select('logisticsProviderSnapshot').lean() as any[]
       : [];
     const courierByOrder = new Map(orders.map((order) => [String(order._id), order.logisticsProviderSnapshot]));
-    return records.map((record: any) => ({
-      ...record,
-      hub: names.hub(record.hubId),
-      order: names.order(record.orderId),
-      chosenCourier: courierByOrder.get(String(record.orderId)) || undefined,
-    }));
+    const availability = await this.courierAvailability();
+    return records.map((record: any) => {
+      const chosen = courierByOrder.get(String(record.orderId)) as any;
+      return {
+        ...record,
+        hub: names.hub(record.hubId),
+        order: names.order(record.orderId),
+        chosenCourier: chosen ? { ...chosen, ...availability.describe(chosen.code) } : undefined,
+        alternatives: availability.alternatives,
+      };
+    });
   }
 
   async receivePackage(actor: Actor, packageIdentifier: string, body: Record<string, any>) {
@@ -1115,22 +1232,200 @@ export class FulfilmentService {
     await assertStaffScope(actor, task.sourceStateId, pack.hubId);
     if (![HubPackageStatus.QC_PENDING, HubPackageStatus.RECEIVED].includes(pack.status)) throw new HttpError(409, 'This package is no longer awaiting quality check', undefined, 'INVALID_STATE_TRANSITION');
     const passed = body.passed === true;
-    const checks: Array<Record<string, unknown>> = body.checks || [];
+    let checks: Array<Record<string, unknown>> = body.checks || [];
     if (passed) {
       const confirmedIds = new Set(checks.filter((c: any) => c.confirmed === true).map((c: any) => String(c.orderItemId)));
       const missingItemIds = pack.itemIds.filter((id: string) => !confirmedIds.has(String(id)));
       if (missingItemIds.length) throw new HttpError(409, `${missingItemIds.length} item(s) still need Hub confirmation before QC can pass`, { missingItemIds }, 'ITEMS_NOT_CONFIRMED');
     }
+    // A failed check must say which item failed and why. Each failure opens an
+    // item issue for the admin, so the order cannot be sealed around it.
+    const failures: Array<{ orderItemId: string; reason: string; note: string }> = (body.failures || []).map((f: any) => ({ orderItemId: String(f.orderItemId), reason: String(f.reason), note: String(f.note || '').trim() }));
+    const resolutionIds = new Map<string, string>();
+    let verifications: any[] = [];
+    if (!passed) {
+      if (!failures.length) throw new HttpError(400, 'Choose the item that failed and give a reason', undefined, 'VALIDATION_ERROR');
+      const packageItemIds = new Set(pack.itemIds.map(String));
+      if (failures.some((f) => !packageItemIds.has(f.orderItemId))) throw new HttpError(400, 'A failed item does not belong to this package', undefined, 'VALIDATION_ERROR');
+      const parent = await FulfilmentTask.findById(pack.taskId).select('itemVerifications').lean() as any;
+      verifications = parent?.itemVerifications || [];
+      for (const failure of failures) {
+        const active = await ItemResolution.findOne({ taskId: String(pack.taskId), orderItemId: failure.orderItemId, status: { $in: ['OPEN', 'ADMIN_REVIEW', 'CUSTOMER_APPROVAL_PENDING', 'PAYMENT_PENDING', 'REFUND_PENDING', 'APPROVED'] } }).select('publicId').lean() as any;
+        resolutionIds.set(failure.orderItemId, active?.publicId || await nextPublicId('itemResolution'));
+      }
+      checks = failures.map((failure) => ({ orderItemId: failure.orderItemId, result: 'failed', reason: failure.reason, note: failure.note, resolutionId: resolutionIds.get(failure.orderItemId), at: new Date().toISOString(), by: actor.accountId }));
+    }
     const updated = await this.atomically(async (session) => {
       const changed = await HubPackage.findOneAndUpdate({ _id: pack._id, version: body.version ?? pack.version, status: { $in: [HubPackageStatus.QC_PENDING, HubPackageStatus.RECEIVED] } }, { $set: { status: passed ? HubPackageStatus.QC_PASSED : HubPackageStatus.QC_FAILED, qualityChecks: checks, qcPassedAt: passed ? new Date() : undefined, qcPassedBy: passed ? actor.accountId : undefined }, $push: { custodyHistory: { action: passed ? 'QC_PASSED' : 'QC_FAILED', actorId: actor.accountId, at: new Date(), checks } }, $inc: { version: 1 } }, { returnDocument: 'after', session }).lean({ virtuals: true });
       if (!changed) return null;
-      await OrderItem.updateMany({ _id: { $in: pack.itemIds } }, { $set: { fulfilmentStatus: passed ? 'QC_PASSED' : 'EXCEPTION' } }, { session });
-      if (passed) await FulfilmentTask.updateOne({ _id: pack.taskId }, { $set: { status: FulfilmentTaskStatus.QC_PASSED }, $inc: { version: 1 } }, { session });
+      if (passed) {
+        await OrderItem.updateMany({ _id: { $in: pack.itemIds } }, { $set: { fulfilmentStatus: 'QC_PASSED' } }, { session });
+        await FulfilmentTask.updateOne({ _id: pack.taskId }, { $set: { status: FulfilmentTaskStatus.QC_PASSED }, $inc: { version: 1 } }, { session });
+        return changed;
+      }
+      const order = await Order.findById(pack.orderId).select('userId').session(session).lean() as any;
+      const marketId = (await FulfilmentTask.findById(pack.taskId).select('marketId').session(session).lean() as any)?.marketId;
+      for (const failure of failures) {
+        const publicId = resolutionIds.get(failure.orderItemId)!;
+        const exists = await ItemResolution.exists({ publicId }).session(session);
+        if (!exists) {
+          const item = await OrderItem.findById(failure.orderItemId).session(session).lean() as any;
+          const verification = verifications.find((v: any) => String(v.orderItemId) === failure.orderItemId);
+          await ItemResolution.create([{
+            publicId, orderId: pack.orderId, taskId: String(pack.taskId), orderItemId: failure.orderItemId, marketId,
+            type: 'QC_FAILED', summary: `${QC_FAILURE_LABELS[failure.reason] || failure.reason}: ${failure.note}`,
+            evidence: (verification?.photos || []).map((photo: any) => ({ type: `photo_${photo.view}`, url: photo.url })),
+            originalSnapshot: { productId: item?.productId, title: item?.productTitle, image: item?.productImage, quantity: item?.quantity, selectedVariants: item?.selectedVariants, unitPriceMinor: item?.unitPriceMinor },
+            status: 'ADMIN_REVIEW', reportedBy: actor.accountId, customerId: order?.userId, adjustmentMinor: 0, idempotencyKey: `qc-fail:${pack.publicId}:${failure.orderItemId}`, version: 1,
+            history: [{ action: 'QC_FAILED', actorId: actor.accountId, at: new Date(), reason: failure.reason, note: failure.note, hubPackageId: pack.publicId }],
+          }], { session });
+        }
+        await OrderItem.updateOne({ _id: failure.orderItemId }, { $set: { fulfilmentStatus: 'EXCEPTION', resolutionState: 'REPLACEMENT_PENDING' } }, { session });
+      }
+      await Order.updateOne({ _id: pack.orderId }, { $push: { timeline: timelineEntry('QC_FAILED', actor.accountId) } }, { session });
       return changed;
     });
     if (!updated) throw new HttpError(409, 'This package changed. Refresh and try again.', undefined, 'STALE_VERSION');
     await this.publishOrderUpdate(pack.orderId, task.sourceStateId, pack.hubId);
     if (passed) await this.notifyHubQcPassed(pack);
+    else await this.notifyHubQcFailed(pack, failures);
+    return updated;
+  }
+
+  private async notifyHubQcFailed(pack: any, failures: Array<{ orderItemId: string; reason: string }>) {
+    const order = await Order.findById(pack.orderId).select('publicId userId').lean() as any;
+    if (!order) return;
+    if (order.userId) {
+      await createCommerceNotification({
+        eventKey: `order:${order.publicId}:qc-failed:${pack.publicId}`,
+        userId: order.userId,
+        title: 'One item needs attention',
+        body: "An item didn't pass our quality check. We're sorting it out and will update you shortly.",
+        type: 'hub_qc_failed',
+        data: { orderId: order.publicId, hubPackageId: pack.publicId },
+      }).catch(() => undefined);
+    }
+    if (pack.marketAssociateId) {
+      const profile = await MarketAssociateProfile.findById(pack.marketAssociateId).select('accountId').lean() as any;
+      if (profile?.accountId) {
+        const reasons = [...new Set(failures.map((f) => QC_FAILURE_LABELS[f.reason] || f.reason))].join(', ');
+        await createCommerceNotification({
+          eventKey: `runner-package:${pack.publicId}:qc-failed`,
+          userId: profile.accountId,
+          title: 'Package failed Hub QC',
+          body: `${failures.length} item${failures.length === 1 ? '' : 's'} did not pass: ${reasons}. Hook will contact you about next steps.`,
+          type: 'hub_qc_failed',
+          data: { orderId: order.publicId, hubPackageId: pack.publicId },
+        }).catch(() => undefined);
+      }
+    }
+  }
+
+  /**
+   * Send the failed items back to the Market Associate to source again.
+   * The old package stays on record as history; the task is reopened for just
+   * those items and a fresh package (and handover code) is created on submit.
+   */
+  async resourceFailedPackage(actor: Actor, packageIdentifier: string, body: Record<string, any>) {
+    const pack = await HubPackage.findOne(identifier(packageIdentifier)).lean({ virtuals: true }) as any;
+    if (!pack) throw new HttpError(404, 'Hub package not found', undefined, 'NOT_FOUND');
+    const task = await FulfilmentTask.findById(pack.taskId).lean() as any;
+    if (!task) throw new HttpError(404, 'Hub package not found', undefined, 'NOT_FOUND');
+    await assertStaffScope(actor, task.sourceStateId, pack.hubId);
+    if (pack.status !== HubPackageStatus.QC_FAILED) throw new HttpError(409, 'Only a failed package can be sent back', undefined, 'INVALID_STATE_TRANSITION');
+    const checks: any[] = pack.qualityChecks || [];
+    if (checks.length && checks.every((c) => c.resourced)) throw new HttpError(409, 'This package was already sent back', undefined, 'INVALID_STATE_TRANSITION');
+    const recorded = checks.filter((c) => c.result === 'failed' && c.orderItemId && !c.resourced).map((c) => String(c.orderItemId));
+    const failedIds: string[] = recorded.length ? recorded : pack.itemIds.map(String);
+    const reason = String(body.note || '').trim();
+    const updated = await this.atomically(async (session) => {
+      const closed = await HubPackage.findOneAndUpdate(
+        { _id: pack._id, version: body.version ?? pack.version, status: HubPackageStatus.QC_FAILED },
+        { $set: { qualityChecks: checks.map((c) => (c.result === 'failed' ? { ...c, resourced: true } : c)) }, $push: { custodyHistory: { action: 'RESOURCED', actorId: actor.accountId, at: new Date(), itemIds: failedIds, note: reason || undefined } }, $inc: { version: 1 } },
+        { returnDocument: 'after', session },
+      ).lean({ virtuals: true });
+      if (!closed) return null;
+      await ItemResolution.updateMany(
+        { taskId: String(task._id), orderItemId: { $in: failedIds }, status: { $in: ['OPEN', 'ADMIN_REVIEW', 'CUSTOMER_APPROVAL_PENDING', 'PAYMENT_PENDING', 'REFUND_PENDING', 'APPROVED'] } },
+        { $set: { status: 'RESOLVED' }, $push: { history: { action: 'RESOURCED', actorId: actor.accountId, at: new Date() } }, $inc: { version: 1 } },
+        { session },
+      );
+      // Free the task's one-package slot so a fresh package can be created.
+      await RunnerPackage.updateOne({ _id: pack.runnerPackageId }, { $set: { taskId: `${task._id}:superseded:${pack.publicId}` } }, { session });
+      await FulfilmentTask.updateOne(
+        { _id: task._id },
+        { $set: { status: FulfilmentTaskStatus.SOURCING, resourceItemIds: failedIds }, $unset: { hubReceivedAt: 1 }, $pull: { itemVerifications: { orderItemId: { $in: failedIds } } }, $inc: { version: 1 } },
+        { session },
+      );
+      await OrderItem.updateMany({ _id: { $in: failedIds } }, { $set: { fulfilmentStatus: 'SOURCING', resolutionState: 'OPEN' } }, { session });
+      await Order.updateOne({ _id: pack.orderId }, { $push: { timeline: timelineEntry('ITEM_RESOURCED', actor.accountId) } }, { session });
+      return closed;
+    });
+    if (!updated) throw new HttpError(409, 'This package changed. Refresh and try again.', undefined, 'STALE_VERSION');
+    if (pack.marketAssociateId) {
+      const profile = await MarketAssociateProfile.findById(pack.marketAssociateId).select('accountId').lean() as any;
+      if (profile?.accountId) {
+        await createCommerceNotification({
+          eventKey: `runner-package:${pack.publicId}:resourced`,
+          userId: profile.accountId,
+          title: 'Please source an item again',
+          body: `${failedIds.length} item${failedIds.length === 1 ? '' : 's'} did not pass the Hub check. Open the task to source ${failedIds.length === 1 ? 'it' : 'them'} again.${reason ? ` Note: ${reason}` : ''}`,
+          type: 'task_resourced',
+          data: { hubPackageId: pack.publicId },
+        }).catch(() => undefined);
+      }
+    }
+    await audit('fulfilment.hub.package_resourced', 'hub_package', String(pack._id), actor.accountId, { publicId: pack.publicId, itemIds: failedIds }, undefined, task.sourceStateId, pack.hubId);
+    await this.publishOrderUpdate(pack.orderId, task.sourceStateId, pack.hubId);
+    return updated;
+  }
+
+  /** Signed so a parcel's public tracking link cannot be guessed from its number. */
+  trackingSignature(receiptNumber: string) {
+    return createHmac('sha256', process.env.JWT_SECRET || '').update(`parcel-tracking:${receiptNumber}`).digest('hex').slice(0, 24);
+  }
+
+  async publicParcelTracking(receiptNumber: string, signature: string) {
+    const expected = Buffer.from(this.trackingSignature(receiptNumber));
+    const given = Buffer.from(String(signature || ''));
+    if (expected.length !== given.length || !timingSafeEqual(expected, given)) throw new HttpError(404, 'Parcel not found', undefined, 'NOT_FOUND');
+    const order = await Order.findOne({ publicId: `ORD-${receiptNumber.replace(/^RCT-/, '')}` }).select('publicId addressSnapshot logisticsProviderSnapshot').lean() as any;
+    if (!order) throw new HttpError(404, 'Parcel not found', undefined, 'NOT_FOUND');
+    const shipment = await Shipment.findOne({ orderId: String(order._id) }).select('status courierName trackingNumber trackingEvents').lean() as any;
+    const parcel = await Consolidation.findOne({ orderId: String(order._id), status: { $in: ['SEALED', 'HANDED_OVER'] } }).select('sealedAt').lean() as any;
+    return {
+      receiptNumber,
+      orderReference: order.publicId,
+      status: shipment?.status || (parcel ? 'PACKED' : 'PREPARING'),
+      packedAt: parcel?.sealedAt,
+      courier: shipment?.courierName || order.logisticsProviderSnapshot?.name,
+      trackingNumber: shipment?.trackingNumber,
+      destination: [order.addressSnapshot?.cityName, order.addressSnapshot?.stateName].filter(Boolean).join(', '),
+      events: (shipment?.trackingEvents || []).map((event: any) => ({ status: event.status, at: event.at })),
+    };
+  }
+
+  /** Put a failed package back into the check once its item issues are closed. */
+  async reopenQualityCheck(actor: Actor, packageIdentifier: string, body: Record<string, any>) {
+    const pack = await HubPackage.findOne(identifier(packageIdentifier)).lean({ virtuals: true }) as any;
+    if (!pack) throw new HttpError(404, 'Hub package not found', undefined, 'NOT_FOUND');
+    const task = await FulfilmentTask.findById(pack.taskId).select('sourceStateId').lean() as any;
+    if (!task) throw new HttpError(404, 'Hub package not found', undefined, 'NOT_FOUND');
+    await assertStaffScope(actor, task.sourceStateId, pack.hubId);
+    if (pack.status !== HubPackageStatus.QC_FAILED) throw new HttpError(409, 'Only a failed package can be re-checked', undefined, 'INVALID_STATE_TRANSITION');
+    const open = await ItemResolution.countDocuments({ taskId: String(pack.taskId), orderItemId: { $in: pack.itemIds }, status: { $in: ['OPEN', 'ADMIN_REVIEW', 'CUSTOMER_APPROVAL_PENDING', 'PAYMENT_PENDING', 'REFUND_PENDING', 'APPROVED'] } });
+    if (open) throw new HttpError(409, `${open} item issue${open === 1 ? ' is' : 's are'} still open. Resolve them before re-checking.`, { open }, 'INVALID_STATE_TRANSITION');
+    // Packages failed before reasons were recorded carry no per-item entries,
+    // so fall back to every item on the package.
+    const recorded = (pack.qualityChecks || []).filter((c: any) => c.result === 'failed' && c.orderItemId).map((c: any) => String(c.orderItemId));
+    const failedIds: string[] = recorded.length ? recorded : pack.itemIds.map(String);
+    const updated = await this.atomically(async (session) => {
+      const moved = await HubPackage.findOneAndUpdate({ _id: pack._id, version: body.version ?? pack.version, status: HubPackageStatus.QC_FAILED }, { $set: { status: HubPackageStatus.QC_PENDING }, $push: { custodyHistory: { action: 'QC_REOPENED', actorId: actor.accountId, at: new Date() } }, $inc: { version: 1 } }, { returnDocument: 'after', session }).lean({ virtuals: true });
+      if (moved && failedIds.length) await OrderItem.updateMany({ _id: { $in: failedIds } }, { $set: { fulfilmentStatus: 'PACKED' } }, { session });
+      return moved;
+    });
+    if (!updated) throw new HttpError(409, 'This package changed. Refresh and try again.', undefined, 'STALE_VERSION');
+    await this.publishOrderUpdate(pack.orderId, task.sourceStateId, pack.hubId);
     return updated;
   }
 
@@ -1231,6 +1526,105 @@ export class FulfilmentService {
     return consolidation.toJSON();
   }
 
+  /**
+   * The Hook receipt / parcel slip for an order. Built on demand from the
+   * order and its sealed consolidation, so it never drifts from the data and
+   * every order can produce one. Carries no prices except the amount to collect
+   * on delivery, and the QR code holds references only, no personal data.
+   */
+  async orderReceipt(actor: Actor, orderIdentifier: string, query: Record<string, unknown>) {
+    const order = await orderByIdentifier(orderIdentifier);
+    await assertStaffScope(actor, order.sourceStateId);
+    const consolidations = await Consolidation.find({ orderId: order._id.toString(), status: { $in: ['SEALED', 'HANDED_OVER'] } }).sort({ sealedAt: -1 }).lean({ virtuals: true }) as any[];
+    const parcel = (query.consolidationId ? consolidations.find((c) => c.publicId === String(query.consolidationId)) : undefined) || consolidations[0];
+    if (parcel) await assertStaffScope(actor, order.sourceStateId, parcel.hubId);
+    const [items, hub, shipment] = await Promise.all([
+      OrderItem.find({ orderId: order._id.toString(), ...(parcel?.fulfilmentGroupId ? { fulfilmentGroupId: parcel.fulfilmentGroupId } : {}) }).select('publicId productTitle quantity selectedVariants variantSnapshot').lean({ virtuals: true }),
+      parcel?.hubId ? DispatchHub.findOne(identifier(parcel.hubId)).select('publicId name address').lean() : null,
+      Shipment.findOne({ orderId: order._id.toString() }).select('publicId status version courierCode courierName trackingNumber trackingEvents').lean(),
+    ]) as any[];
+    const address = (order.addressSnapshot || {}) as Record<string, any>;
+    const legacy = (order.deliveryAddress || {}) as Record<string, any>;
+    const chosen = (order.logisticsProviderSnapshot || {}) as { code?: string; name?: string };
+    const receiptNumber = `RCT-${String(order.publicId).replace(/^ORD-/, '')}`;
+    const collectMinor = order.commercePaymentMethod === 'PAY_AT_HANDOVER' ? Number(order.totalMinor || 0) : 0;
+    return {
+      receiptNumber,
+      generatedAt: new Date().toISOString(),
+      status: parcel ? 'SEALED' : 'PENDING_SEAL',
+      order: { publicId: order.publicId, placedAt: order.createdAt },
+      recipient: {
+        name: address.recipientName || legacy.name,
+        phone: address.phone || legacy.phone,
+        line1: address.line1 || legacy.street,
+        line2: address.line2,
+        landmark: address.landmark || legacy.landmark,
+        city: address.cityName || legacy.city,
+        state: address.stateName || legacy.state,
+        postalCode: address.postalCode,
+      },
+      hub: hub ? { name: hub.name, address: hub.address } : undefined,
+      parcel: parcel ? {
+        reference: parcel.publicId,
+        sealReference: parcel.sealReference,
+        weightGrams: parcel.weightGrams,
+        dimensions: parcel.dimensions,
+        sealedAt: parcel.sealedAt,
+        parcels: consolidations.length,
+      } : undefined,
+      items: (items || []).map((item: any) => ({
+        reference: item.publicId,
+        title: item.productTitle,
+        quantity: item.quantity,
+        color: item.selectedVariants?.color || item.variantSnapshot?.color,
+        size: item.selectedVariants?.size || item.variantSnapshot?.size,
+      })),
+      courier: { code: shipment?.courierCode || chosen.code, name: shipment?.courierName || chosen.name, trackingNumber: shipment?.trackingNumber },
+      payment: { method: order.commercePaymentMethod, collectMinor },
+      shipment: shipment ? { publicId: shipment.publicId, status: shipment.status, version: shipment.version, events: (shipment.trackingEvents || []).map((event: any) => ({ status: event.status, at: event.at, note: event.note })) } : undefined,
+      trackingSig: this.trackingSignature(receiptNumber),
+      parcelOptions: consolidations.map((c) => ({ reference: c.publicId, sealedAt: c.sealedAt })),
+      printCount: (parcel?.receiptPrints || []).length,
+      lastPrintedAt: (parcel?.receiptPrints || []).slice(-1)[0]?.at,
+      qr: ['HOOK', receiptNumber, order.publicId, parcel?.publicId].filter(Boolean).join('|'),
+    };
+  }
+
+  /** Log a print of the parcel label. Only a sealed parcel can be labelled. */
+  async recordReceiptPrint(actor: Actor, orderIdentifier: string, body: Record<string, any>) {
+    const order = await orderByIdentifier(orderIdentifier);
+    await assertStaffScope(actor, order.sourceStateId);
+    const parcel = await Consolidation.findOne({ orderId: order._id.toString(), status: { $in: ['SEALED', 'HANDED_OVER'] }, ...(body.consolidationId ? { publicId: String(body.consolidationId) } : {}) }).sort({ sealedAt: -1 }).lean() as any;
+    if (!parcel) throw new HttpError(409, 'Seal the parcel before printing its receipt', undefined, 'INVALID_STATE_TRANSITION');
+    await assertStaffScope(actor, order.sourceStateId, parcel.hubId);
+    const updated = await Consolidation.findOneAndUpdate({ _id: parcel._id }, { $push: { receiptPrints: { by: actor.accountId, at: new Date(), size: body.size } } }, { returnDocument: 'after' }).lean() as any;
+    const printCount = (updated?.receiptPrints || []).length;
+    await audit('fulfilment.receipt.printed', 'consolidation', String(parcel._id), actor.accountId, { orderId: order.publicId, printCount, size: body.size }, undefined, order.sourceStateId, parcel.hubId);
+    return { printCount, isReprint: printCount > 1 };
+  }
+
+  /** The customer's own copy: sealed orders only, no hub or internal references. */
+  async customerReceipt(userId: string, orderIdentifier: string) {
+    const order = await Order.findOne({ ...identifier(orderIdentifier), userId }).lean({ virtuals: true }) as any;
+    if (!order) throw new HttpError(404, 'Order not found', undefined, 'NOT_FOUND');
+    const parcel = await Consolidation.findOne({ orderId: order._id.toString(), status: { $in: ['SEALED', 'HANDED_OVER'] } }).sort({ sealedAt: -1 }).lean({ virtuals: true }) as any;
+    if (!parcel) throw new HttpError(409, 'Your receipt is available once your order is packed', undefined, 'INVALID_STATE_TRANSITION');
+    const [items, shipment] = await Promise.all([
+      OrderItem.find({ orderId: order._id.toString() }).select('productTitle quantity selectedVariants variantSnapshot').lean(),
+      Shipment.findOne({ orderId: order._id.toString() }).select('courierName trackingNumber').lean(),
+    ]) as any[];
+    const address = (order.addressSnapshot || {}) as Record<string, any>;
+    return {
+      receiptNumber: `RCT-${String(order.publicId).replace(/^ORD-/, '')}`,
+      order: { publicId: order.publicId, placedAt: order.createdAt },
+      packedAt: parcel.sealedAt,
+      recipient: { name: address.recipientName, city: address.cityName, state: address.stateName },
+      items: items.map((item: any) => ({ title: item.productTitle, quantity: item.quantity, color: item.selectedVariants?.color || item.variantSnapshot?.color, size: item.selectedVariants?.size || item.variantSnapshot?.size })),
+      courier: { name: shipment?.courierName || order.logisticsProviderSnapshot?.name, trackingNumber: shipment?.trackingNumber },
+      payment: { method: order.commercePaymentMethod, collectMinor: order.commercePaymentMethod === 'PAY_AT_HANDOVER' ? Number(order.totalMinor || 0) : 0 },
+    };
+  }
+
   async sealConsolidation(actor: Actor, identifierValue: string, body: Record<string, any>) {
     const consolidation = await Consolidation.findOne(identifier(identifierValue)).lean({ virtuals: true }) as any;
     if (!consolidation) throw new HttpError(404, 'Consolidation not found', undefined, 'NOT_FOUND');
@@ -1264,12 +1658,18 @@ export class FulfilmentService {
     if (substituting && !String(body.substitutionReason || '').trim()) {
       throw new HttpError(400, 'A reason is required when booking a different courier to the one the customer chose', undefined, 'VALIDATION_ERROR');
     }
-    // Resolve through the provider service so an inactive or unknown courier is
-    // rejected rather than written as free text.
-    const courier = requestedCode || chosen.code
-      ? await this.logisticsProviders.getSelectable(requestedCode || String(chosen.code)).catch(() => undefined)
-      : undefined;
-    const courierCode = courier?.code || requestedCode || chosen.code;
+    // Resolve through the provider service. An unavailable courier is never
+    // silently accepted: staff must pick an active substitute and say why.
+    const wantedCode = requestedCode || (chosen.code ? String(chosen.code).toUpperCase() : undefined);
+    let courier: any;
+    if (wantedCode) {
+      courier = await this.logisticsProviders.getSelectable(wantedCode).catch(() => undefined);
+      if (!courier) {
+        const alternatives = await this.logisticsProviders.listActive();
+        throw new HttpError(409, `${chosen.name || wantedCode} is unavailable. Choose another courier and give the customer a reason.`, { alternatives: alternatives.map((item: any) => ({ code: item.code, name: item.name, feeMinor: item.feeMinor })) }, 'LOGISTICS_PROVIDER_UNAVAILABLE');
+      }
+    }
+    const courierCode = courier?.code || wantedCode;
     const courierName = courier?.name || chosen.name;
 
     const consolidation = await Consolidation.findOne({ orderId: order._id.toString(), hubId: body.hubId, status: 'SEALED' }).lean({ virtuals: true }) as any;
@@ -1823,7 +2223,76 @@ export class FulfilmentService {
     if (actor.hubIds?.length) filter.hubId = { $in: actor.hubIds };
     const records = await Shipment.find(filter).sort({ createdAt: -1 }).limit(Math.min(Number(query.limit || 100), 200)).lean({ virtuals: true });
     const names = await resolveFulfilmentNames(records as any[]);
-    return records.map((record: any) => ({ ...record, hub: names.hub(record.hubId), order: names.order(record.orderId) }));
+    const availability = await this.courierAvailability();
+    return records.map((record: any) => ({ ...record, hub: names.hub(record.hubId), order: names.order(record.orderId), courier: record.courierCode ? availability.describe(record.courierCode) : undefined, alternatives: availability.alternatives }));
+  }
+
+  /** Active couriers plus a per-code availability lookup for list payloads. */
+  private async courierAvailability() {
+    const all: any = await this.logisticsProviders.list().catch(() => []);
+    const rows: any[] = Array.isArray(all) ? all : all?.items || [];
+    const byCode = new Map(rows.map((row) => [String(row.code).toUpperCase(), row]));
+    const alternatives = rows.filter((row) => row.status === 'active').map((row) => ({ code: row.code, name: row.name, feeMinor: row.feeMinor }));
+    return {
+      alternatives,
+      describe: (code?: string) => {
+        const row = code ? byCode.get(String(code).toUpperCase()) : undefined;
+        const available = row?.status === 'active';
+        return { available, unavailableReason: available ? undefined : row ? 'Courier is currently inactive' : 'Courier no longer exists', currentFeeMinor: row?.feeMinor };
+      },
+    };
+  }
+
+  /** Switch the courier on a booked shipment until it has been picked up. */
+  async reassignShipmentCourier(actor: Actor, identifierValue: string, body: Record<string, any>) {
+    const shipment = await Shipment.findOne(identifier(identifierValue)).lean({ virtuals: true }) as any;
+    if (!shipment) throw new HttpError(404, 'Shipment not found', undefined, 'NOT_FOUND');
+    await assertStaffScope(actor, shipment.sourceStateId, shipment.hubId);
+    const editable = [ShipmentStatus.BOOKED_WITH_PROVIDER, ShipmentStatus.AWAITING_PICKUP];
+    if (!editable.includes(shipment.status)) throw new HttpError(409, 'The courier can only be changed before pickup', { current: shipment.status }, 'INVALID_STATE_TRANSITION');
+    const code = String(body.courierCode || '').toUpperCase();
+    if (code === String(shipment.courierCode || '').toUpperCase()) return shipment;
+    const courier = await this.logisticsProviders.getSelectable(code);
+    const reason = String(body.reason).trim();
+    const updated = await this.atomically(async (session) => {
+      const moved = await Shipment.findOneAndUpdate(
+        { _id: shipment._id, version: body.version ?? shipment.version, status: { $in: editable } },
+        { $set: { courierCode: courier.code, courierName: courier.name, substitutedFrom: shipment.substitutedFrom || shipment.courierCode, substitutionReason: reason }, $push: { trackingEvents: { status: shipment.status, at: new Date(), actorId: actor.accountId, note: `Courier switched from ${shipment.courierName || shipment.courierCode} to ${courier.name}: ${reason}` } }, $inc: { version: 1 } },
+        { returnDocument: 'after', session },
+      ).lean({ virtuals: true });
+      if (moved) await Order.updateOne({ _id: shipment.orderId }, { $push: { timeline: timelineEntry('COURIER_SWITCHED', actor.accountId) } }, { session });
+      return moved;
+    });
+    if (!updated) throw new HttpError(409, 'Shipment changed. Refresh and try again.', undefined, 'STALE_VERSION');
+    await this.publishOrderUpdate(shipment.orderId, shipment.sourceStateId, shipment.hubId);
+    return updated;
+  }
+
+  /** Real stage counts for the control tower cards, scoped like the lists. */
+  async overview(actor: Actor, query: Record<string, unknown>) {
+    await assertStaffScope(actor, query.stateId as string | undefined, query.hubId as string | undefined);
+    const scope: Record<string, any> = {};
+    if (query.hubId) scope.hubId = query.hubId;
+    if (actor.stateIds?.length) scope.sourceStateId = { $in: actor.stateIds };
+    if (actor.hubIds?.length) scope.hubId = { $in: actor.hubIds };
+    const hubOnly = scope.hubId ? { hubId: scope.hubId } : {};
+    const active = { $nin: [FulfilmentTaskStatus.COMPLETED, FulfilmentTaskStatus.CANCELLED] };
+    const [sourcing, blocked, inbound, awaitingQc, readyToConsolidate, consolidating, sealed, booked, inTransit, exceptions, bookedOrders, failed] = await Promise.all([
+      FulfilmentTask.countDocuments({ ...scope, status: active }),
+      FulfilmentTask.countDocuments({ ...scope, status: FulfilmentTaskStatus.BLOCKED }),
+      RunnerPackage.countDocuments({ ...hubOnly, status: RunnerPackageStatus.READY_FOR_HUB }),
+      HubPackage.countDocuments({ ...hubOnly, status: { $in: [HubPackageStatus.RECEIVED, HubPackageStatus.QC_PENDING] } }),
+      HubPackage.countDocuments({ ...hubOnly, status: HubPackageStatus.QC_PASSED }),
+      Consolidation.countDocuments({ ...scope, status: 'DRAFT' }),
+      Consolidation.countDocuments({ ...scope, status: 'SEALED' }),
+      Shipment.countDocuments({ ...scope, status: { $in: [ShipmentStatus.BOOKED_WITH_PROVIDER, ShipmentStatus.AWAITING_PICKUP] } }),
+      Shipment.countDocuments({ ...scope, status: { $in: [ShipmentStatus.PICKED_UP, ShipmentStatus.IN_TRANSIT, ShipmentStatus.OUT_FOR_DELIVERY] } }),
+      Shipment.countDocuments({ ...scope, status: { $in: [ShipmentStatus.DELIVERY_FAILED, ShipmentStatus.RETURN_IN_TRANSIT] } }),
+      Shipment.distinct('orderId', scope),
+      HubPackage.countDocuments({ ...hubOnly, status: HubPackageStatus.QC_FAILED, 'qualityChecks.resourced': { $ne: true } }),
+    ]);
+    const readyToBook = await Consolidation.countDocuments({ ...scope, status: 'SEALED', orderId: { $nin: bookedOrders } });
+    return { sourcing, blocked, inbound, awaitingQc, readyToConsolidate, consolidating, sealed, readyToBook, booked, inTransit, exceptions, failed };
   }
 
   async logisticsReadiness(actor: Actor) {

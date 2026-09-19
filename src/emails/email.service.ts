@@ -1,5 +1,6 @@
 import {
   AccountActivatedEmailPayload,
+  AccountDeletionEmailPayload,
   AccountInvitationEmailPayload,
   AvailabilityDigestEmailPayload,
   CustomerAccountSetupEmailPayload,
@@ -17,6 +18,7 @@ import {
 } from './email.types';
 import {
   accountActivatedEmailTemplate,
+  accountDeletionEmailTemplate,
   accountInvitationEmailTemplate,
   availabilityDigestEmailTemplate,
   customerAccountSetupEmailTemplate,
@@ -241,6 +243,11 @@ export class EmailService {
   async sendAccountActivated(payload: AccountActivatedEmailPayload) {
     await this.loadSettings();
     return this.send({ to: payload.email, ...accountActivatedEmailTemplate(payload) });
+  }
+
+  async sendAccountDeletion(payload: AccountDeletionEmailPayload) {
+    await this.loadSettings();
+    return this.send({ to: payload.email, ...accountDeletionEmailTemplate(payload) });
   }
 
   async sendAvailabilityDigest(payload: AvailabilityDigestEmailPayload) {

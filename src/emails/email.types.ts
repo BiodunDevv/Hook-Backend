@@ -128,3 +128,17 @@ export interface AvailabilityDigestEmailPayload {
   name?: string;
   products: Array<{ title: string; marketName: string }>;
 }
+
+export type AccountDeletionEmailKind = 'code' | 'scheduled' | 'reminder' | 'deleted' | 'restored';
+
+export interface AccountDeletionEmailPayload {
+  email: string;
+  kind: AccountDeletionEmailKind;
+  name?: string;
+  /** Human-readable date erasure is scheduled for. */
+  scheduledFor?: string;
+  /** One-click link that cancels the deletion. */
+  cancelUrl?: string;
+  code?: string;
+  expiresInMinutes?: number;
+}

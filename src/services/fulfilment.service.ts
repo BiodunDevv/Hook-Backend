@@ -8,13 +8,17 @@ import {
   RunnerPackageStatus,
   ShipmentStatus,
 } from '@lib/constants';
+import mongoose from 'mongoose';
 import { CommerceOutboxEvent } from '@models/commerce/commerce.model';
+import { emitOutbox, processOutbox } from '@services/outbox.service';
+import { wakeOutbox } from '../jobs/wake';
 import { FulfilmentTask, RunnerPackage, HubPackage, Consolidation, Shipment, PartnerCustody, ReturnRequest, FulfilmentRefund, LogisticsWebhookEvent, type LogisticsProviderKey } from '@models/fulfilment/fulfilment.model';
 import { Order } from '@models/orders/order.model';
 import { LogisticsProviderService } from '@services/logistics-provider.service';
 import { getPagination } from '@lib/api-utils';
 import { OrderItem } from '@models/orders/order-item.model';
 import { OrderFulfilmentGroup } from '@models/orders/order-fulfilment-group.model';
+import { ItemResolution } from '@models/fulfilment/item-resolution.model';
 import { Payment } from '@models/payments/payment.model';
 import { Market, DispatchHub } from '@models/platform/network.model';
 import { HookPartner, MarketAssociateMarketAssignment, MarketAssociateProfile } from '@models/platform/operations-accounts.model';
@@ -22,12 +26,14 @@ import { User } from '@models/users/user.model';
 import { PlatformAuditLog } from '@models/platform/audit-log.model';
 import { nextPublicId } from '@services/public-id.service';
 import { PaymentService } from '@services/payment.service';
+import { paymentProvider } from '@services/payments/provider-registry';
 import { createCommerceNotification } from '@services/commerce-notification.service';
 import { isLogisticsSimulationEnabled, logisticsProvider, logisticsReadiness } from '@services/logistics/logistics-provider';
 import { publishRealtime } from '@services/realtime.service';
 import { EmailService } from '@emails/email.service';
 import { HttpError } from '@utils/http';
 import { timelineEntry, notifyStatus } from '@lib/order-timeline';
+import { decryptPackageCredential, encryptPackageCredential } from '@lib/package-credential-crypto';
 
 type Actor = { accountId: string; publicId?: string; stateIds?: string[]; hubIds?: string[]; accountType?: string };
 type EvidenceInput = Array<{ type: string; url?: string; assetId?: string; note?: string }>;
@@ -218,6 +224,22 @@ export class FulfilmentService {
     }
   }
 
+  /**
+   * Runs DB-only work in one transaction. The callback may be re-run on a
+   * transient conflict, so it must not send email, publish events or call a
+   * provider; do those after this returns.
+   */
+  private async atomically<T>(work: (session: mongoose.ClientSession) => Promise<T>): Promise<T> {
+    const session = await mongoose.startSession();
+    try {
+      let result!: T;
+      await session.withTransaction(async () => { result = await work(session); });
+      return result;
+    } finally {
+      await session.endSession();
+    }
+  }
+
   async consumeApprovedOrder(event: any) {
     const order = await orderByIdentifier(event.aggregateId);
     if (order.commerceStatus !== CommerceOrderStatus.APPROVED_FOR_FULFILMENT && order.commerceStatus !== 'IN_FULFILMENT') return { skipped: true, reason: 'order_not_approved' };
@@ -248,10 +270,11 @@ export class FulfilmentService {
           $setOnInsert: {
             publicId: await nextPublicId('fulfilment'), orderId: order._id.toString(), sourceStateId: stateId,
             marketId: marketId || 'UNASSIGNED', hubId: hub ? (hub as any).publicId || hub._id.toString() : undefined,
-            marketAssociateId: assignment?.marketAssociateId, orderItemIds: group.map((item) => item._id.toString()),
+            marketAssociateId: assignment?.marketAssociateId,
             status: groupBlocked ? FulfilmentTaskStatus.BLOCKED : FulfilmentTaskStatus.ALERTED, version: 1, idempotencyKey,
             alertedAt: groupBlocked ? undefined : new Date(), evidence: [], assignmentHistory: [],
           },
+          $set: { orderItemIds: group.map((item) => item._id.toString()) },
         },
         { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
       ).lean({ virtuals: true });
@@ -269,8 +292,13 @@ export class FulfilmentService {
           }).catch(() => undefined);
       }
     }
-    await Order.updateOne({ _id: order._id }, { $set: { commerceStatus: CommerceOrderStatus.IN_FULFILMENT, status: 'confirmed', fulfilmentSummary: { taskCount: groups.size, blocked }, customerProgress: [{ key: 'fulfilment', label: blocked ? 'Operations review required' : 'Hook is sourcing your items', at: new Date() }] }, $push: { timeline: timelineEntry('IN_FULFILMENT', 'SYSTEM', { blocked }) } });
-    await notifyStatus(order._id, 'IN_FULFILMENT');
+    // Only the delivery that actually moves the order forward writes the
+    // timeline entry, emails the customer and audits. Outbox delivery is
+    // at-least-once, so a replay must not repeat any of those.
+    const advanced = await Order.updateOne(
+      { _id: order._id, commerceStatus: CommerceOrderStatus.APPROVED_FOR_FULFILMENT },
+      { $set: { commerceStatus: CommerceOrderStatus.IN_FULFILMENT, status: 'confirmed', fulfilmentSummary: { taskCount: groups.size, blocked }, customerProgress: [{ key: 'fulfilment', label: blocked ? 'Operations review required' : 'Hook is sourcing your items', at: new Date() }] }, $push: { timeline: timelineEntry('IN_FULFILMENT', 'SYSTEM', { blocked }) } },
+    );
     // Advance the groups alongside the order. Until now a group's status was
     // only ever written once a shipment existed, so it sat at PENDING through
     // the whole sourcing phase and every delivery reported "Order received"
@@ -279,30 +307,23 @@ export class FulfilmentService {
       { orderId: order._id.toString(), status: 'PENDING' },
       { $set: { status: 'IN_FULFILMENT' } },
     );
+    if (advanced.modifiedCount) {
+      await notifyStatus(order._id, 'IN_FULFILMENT');
+      await audit('fulfilment.tasks.created', 'order', order._id.toString(), 'SYSTEM', { taskCount: groups.size, blocked }, undefined, order.sourceStateId);
+    }
     await this.publishOrderUpdate(order._id.toString(), order.sourceStateId);
-    await audit('fulfilment.tasks.created', 'order', order._id.toString(), 'SYSTEM', { taskCount: groups.size, blocked }, undefined, order.sourceStateId);
     return { taskCount: groups.size, blocked };
   }
 
+  /**
+   * Drains due outbox events of every type (fulfilment, payment effects,
+   * order-created and refund effects). Claiming, jittered backoff and
+   * dead-lettering live in outbox.service; the handlers are wired in
+   * outbox-handlers so this file does not import every consumer.
+   */
   async processOutboxBatch(limit = 5) {
-    const results: unknown[] = [];
-    for (let index = 0; index < limit; index += 1) {
-      const lockToken = randomUUID();
-      const event = await CommerceOutboxEvent.findOneAndUpdate(
-        { eventType: 'ORDER_APPROVED_FOR_FULFILMENT', $or: [{ status: 'pending', availableAt: { $lte: new Date() } }, { status: 'processing', lockedUntil: { $lt: new Date() } }] },
-        { $set: { status: 'processing', lockToken, lockedUntil: new Date(Date.now() + 60_000) }, $inc: { attempts: 1 } },
-        { sort: { availableAt: 1, createdAt: 1 }, returnDocument: 'after' },
-      ).lean({ virtuals: true });
-      if (!event) break;
-      try {
-        results.push(await this.consumeApprovedOrder(event));
-        await CommerceOutboxEvent.updateOne({ _id: (event as any)._id, lockToken }, { $set: { status: 'published', processedAt: new Date(), lockedUntil: undefined, lockToken: undefined }, $unset: { lastError: 1 } });
-      } catch (error) {
-        const attempts = Number((event as any).attempts || 1);
-        await CommerceOutboxEvent.updateOne({ _id: (event as any)._id, lockToken }, { $set: { status: attempts >= 5 ? 'dead_letter' : 'pending', availableAt: new Date(Date.now() + Math.min(30 * 60_000, 1000 * 2 ** attempts)), lastError: error instanceof Error ? error.message.slice(0, 900) : 'Outbox processing failed' }, $unset: { lockedUntil: 1, lockToken: 1 } });
-      }
-    }
-    return results;
+    const { buildOutboxHandlers } = await import('@services/outbox-handlers');
+    return processOutbox(buildOutboxHandlers(), limit);
   }
 
   async marketAssociateTasks(accountId: string, query: Record<string, unknown>) {
@@ -333,6 +354,11 @@ export class FulfilmentService {
         .lean({ virtuals: true }) as any[]
       : [];
     const itemById = new Map(items.map((item) => [String(item._id), item]));
+    const issueCounts = await ItemResolution.aggregate([
+      { $match: { taskId: { $in: tasks.map((task: any) => String(task._id)) }, status: { $nin: ['RESOLVED', 'CANCELLED'] } } },
+      { $group: { _id: '$taskId', count: { $sum: 1 } } },
+    ]);
+    const issuesByTask = new Map(issueCounts.map((entry: any) => [String(entry._id), Number(entry.count)]));
     const data = tasks.map((task) => {
       const taskItems = (task.orderItemIds || [])
         .map((itemId: string) => itemById.get(String(itemId)))
@@ -345,6 +371,8 @@ export class FulfilmentService {
         previewTitle: preview?.productTitle || snapshot?.title,
         previewQuantity: preview?.quantity,
         itemCount: taskItems.length,
+        verifiedCount: (task.itemVerifications || []).filter((entry: any) => entry.matched).length,
+        exceptionCount: issuesByTask.get(String(task._id)) || 0,
       };
     });
     return { data, total: data.length };
@@ -353,7 +381,7 @@ export class FulfilmentService {
   async adminTaskDetail(actor: Actor, taskIdentifier: string) {
     const task = await taskByIdentifier(taskIdentifier);
     await assertStaffScope(actor, task.sourceStateId, task.hubId);
-    const [order, items, names] = await Promise.all([
+    const [order, items, names, issues] = await Promise.all([
       Order.findById(task.orderId)
         .select('publicId commerceStatus status sourceStateId customerProgress')
         .lean({ virtuals: true }),
@@ -361,6 +389,7 @@ export class FulfilmentService {
         .select('publicId productTitle productImage productSnapshot quantity variantSnapshot fulfilmentStatus')
         .lean({ virtuals: true }),
       resolveFulfilmentNames([task]),
+      ItemResolution.find({ taskId: String(task._id) }).sort({ createdAt: -1 }).lean({ virtuals: true }),
     ]);
     return {
       task: {
@@ -371,7 +400,200 @@ export class FulfilmentService {
       },
       order,
       items,
+      issues,
     };
+  }
+
+  async proposeItemResolution(actor: Actor, issueIdentifier: string, body: Record<string, any>) {
+    const issue = await ItemResolution.findOne(identifier(issueIdentifier));
+    if (!issue) throw new HttpError(404, 'Item issue not found', undefined, 'NOT_FOUND');
+    const task = await taskByIdentifier(issue.taskId);
+    await assertStaffScope(actor, task.sourceStateId, task.hubId);
+    if (!['OPEN', 'ADMIN_REVIEW', 'DECLINED'].includes(issue.status)) throw new HttpError(409, 'This item issue cannot receive a proposal in its current state', undefined, 'INVALID_STATE_TRANSITION');
+    if (Number(body.version) !== issue.version) throw new HttpError(409, 'This item issue changed. Refresh and try again.', undefined, 'STALE_VERSION');
+    const item = await OrderItem.findById(issue.orderItemId).lean() as any;
+    if (!item) throw new HttpError(404, 'Order item not found', undefined, 'NOT_FOUND');
+    const quantity = Number(body.quantity || item.quantity);
+    const unitPriceMinor = Number(body.unitPriceMinor);
+    const originalTotal = Number(item.totalPriceMinor ?? Math.round(Number(item.totalPrice || 0) * 100));
+    const proposedTotal = unitPriceMinor * quantity;
+    issue.proposal = {
+      productId: body.productId || item.productId,
+      productTitle: body.productTitle || item.productTitle,
+      productImage: body.productImage || item.productImage,
+      selectedVariants: { color: body.color, size: body.size }, quantity, unitPriceMinor, totalPriceMinor: proposedTotal,
+      reason: body.reason, proposedBy: actor.accountId, proposedAt: new Date(),
+    };
+    issue.adjustmentMinor = proposedTotal - originalTotal;
+    issue.adjustmentStatus = issue.adjustmentMinor === 0 ? 'NOT_REQUIRED' : 'PENDING';
+    issue.status = 'CUSTOMER_APPROVAL_PENDING';
+    issue.version += 1;
+    issue.history.push({ action: 'PROPOSED', actorId: actor.accountId, at: new Date(), adjustmentMinor: issue.adjustmentMinor });
+    await issue.save();
+    if (issue.customerId) await createCommerceNotification({
+      eventKey: `item-resolution:${issue.publicId}:proposal:${issue.version}`,
+      userId: issue.customerId,
+      title: 'Approve a replacement item',
+      body: `${String((issue.proposal as any).productTitle)} is available as a replacement. Review the size, colour and price difference.`,
+      type: 'order_updated',
+      data: { orderId: issue.orderId, itemResolutionId: issue.publicId },
+    });
+    await audit('fulfilment.item.substitution_proposed', 'item_resolution', issue.id, actor.accountId, { adjustmentMinor: issue.adjustmentMinor }, String(body.reason || ''), task.sourceStateId, task.hubId);
+    await this.publishOrderUpdate(task.orderId, task.sourceStateId, task.hubId);
+    return issue.toObject();
+  }
+
+  async customerItemResolution(customerId: string, orderIdentifier: string, issueIdentifier: string, body: Record<string, any>) {
+    const order = await Order.findOne({ ...identifier(orderIdentifier), userId: customerId }).lean() as any;
+    if (!order) throw new HttpError(404, 'Order not found', undefined, 'NOT_FOUND');
+    const issue = await ItemResolution.findOne({ ...identifier(issueIdentifier), orderId: String(order._id), customerId });
+    if (!issue) throw new HttpError(404, 'Replacement request not found', undefined, 'NOT_FOUND');
+    if (issue.status !== 'CUSTOMER_APPROVAL_PENDING') {
+      if (issue.customerDecision === (body.decision === 'ACCEPT' ? 'ACCEPTED' : 'DECLINED')) {
+        if (issue.status === 'PAYMENT_PENDING' && issue.adjustmentPaymentReference) {
+          await this.verifySubstitutionTopUp(String(issue.adjustmentPaymentReference)).catch(() => undefined);
+          const refreshed = await ItemResolution.findById(issue._id);
+          return refreshed?.toObject() || issue.toObject();
+        }
+        return issue.toObject();
+      }
+      throw new HttpError(409, 'This replacement request has already been decided', undefined, 'INVALID_STATE_TRANSITION');
+    }
+    if (Number(body.version) !== issue.version) throw new HttpError(409, 'This replacement request changed. Refresh and try again.', undefined, 'STALE_VERSION');
+    if (body.decision === 'DECLINE') {
+      issue.status = 'DECLINED'; issue.customerDecision = 'DECLINED'; issue.customerDecidedAt = new Date(); issue.version += 1;
+      issue.history.push({ action: 'CUSTOMER_DECLINED', actorId: customerId, at: new Date() });
+      await issue.save();
+      await this.publishOrderUpdate(issue.orderId);
+      return issue.toObject();
+    }
+    issue.customerDecision = 'ACCEPTED'; issue.customerDecidedAt = new Date(); issue.version += 1;
+    issue.history.push({ action: 'CUSTOMER_ACCEPTED', actorId: customerId, at: new Date() });
+    if (issue.adjustmentMinor > 0) {
+      issue.status = 'PAYMENT_PENDING';
+      await issue.save();
+      await this.initializeSubstitutionTopUp(issue, order, customerId);
+    } else if (issue.adjustmentMinor < 0) {
+      issue.status = 'REFUND_PENDING';
+      await issue.save();
+      await this.processSubstitutionRefund(issue, order, customerId);
+    } else await this.applyResolvedSubstitution(issue, customerId);
+    await this.publishOrderUpdate(issue.orderId);
+    return issue.toObject();
+  }
+
+  private async initializeSubstitutionTopUp(issue: any, order: any, customerId: string) {
+    if (issue.adjustmentAuthorizationUrl && issue.adjustmentPaymentReference) return issue;
+    const customer = await User.findById(customerId).select('email publicId').lean() as any;
+    if (!customer?.email) throw new HttpError(409, 'Customer email is required for the top-up payment', undefined, 'PAYMENT_INITIALIZATION_NOT_ALLOWED');
+    const reference = issue.adjustmentPaymentReference || `SUB-${issue.publicId}-${issue.version}`;
+    const initialized = await paymentProvider('paystack').initialize({
+      reference,
+      amountMinor: Number(issue.adjustmentMinor),
+      currency: String(order.currency || 'NGN'),
+      email: customer.email,
+      callbackUrl: process.env.PAYSTACK_CALLBACK_URL || `${String(process.env.APP_URL || 'http://localhost:4000').replace(/\/$/, '')}/api/v1/payments/paystack/callback`,
+      metadata: {
+        purpose: 'order_substitution_top_up',
+        itemResolutionId: issue.publicId,
+        orderId: order.publicId || String(order._id),
+        customerId: customer.publicId || customerId,
+      },
+    });
+    const updated = await ItemResolution.findOneAndUpdate(
+      { _id: issue._id, status: 'PAYMENT_PENDING', adjustmentPaymentReference: { $exists: false } },
+      { $set: { adjustmentPaymentReference: reference, adjustmentAuthorizationUrl: initialized.authorizationUrl } },
+      { returnDocument: 'after' },
+    );
+    if (!updated) {
+      const existing = await ItemResolution.findById(issue._id);
+      if (existing?.adjustmentPaymentReference !== reference) throw new HttpError(409, 'A top-up payment is already active', undefined, 'INVALID_STATE_TRANSITION');
+      return existing;
+    }
+    Object.assign(issue, updated.toObject());
+    return issue;
+  }
+
+  private async processSubstitutionRefund(issue: any, order: any, customerId: string) {
+    const amountMinor = Math.abs(Number(issue.adjustmentMinor));
+    const payment = await Payment.findOne({
+      orderId: String(order._id),
+      commerceStatus: 'CONFIRMED',
+      gateway: 'paystack',
+      $expr: { $gte: [{ $subtract: [{ $ifNull: ['$amountMinor', 0] }, { $ifNull: ['$refundedAmount', 0] }] }, amountMinor] },
+    }).sort({ paidAt: 1 });
+    if (!payment) throw new HttpError(409, 'No captured Paystack payment can fund this refund', undefined, 'PAYMENT_RECORD_MISSING');
+    const idempotencyKey = `substitution-refund:${issue.publicId}`;
+    let result: { providerReference?: string } | undefined;
+    try {
+      result = await new PaymentService().refund(String(payment._id), amountMinor, idempotencyKey);
+    } catch (error: any) {
+      if (error?.code === 'PROVIDER_OUTCOME_UNKNOWN') {
+        result = await new PaymentService().reconcileRefund(String(payment._id), amountMinor, idempotencyKey);
+      }
+      if (!result) throw error;
+    }
+    issue.adjustmentStatus = 'CONFIRMED';
+    issue.adjustmentProviderReference = result.providerReference;
+    issue.adjustmentProcessedAt = new Date();
+    issue.history.push({ action: 'REFUND_CONFIRMED', actorId: customerId, providerReference: result.providerReference, at: new Date() });
+    await this.applyResolvedSubstitution(issue, customerId);
+  }
+
+  async verifySubstitutionTopUp(reference: string, providerEventId?: string) {
+    const issue = await ItemResolution.findOne({ adjustmentPaymentReference: reference });
+    if (!issue) return { matched: false };
+    if (issue.status === 'RESOLVED' && issue.adjustmentStatus === 'CONFIRMED') return { matched: true, duplicate: true };
+    if (issue.status !== 'PAYMENT_PENDING') throw new HttpError(409, 'This top-up is no longer payable', undefined, 'INVALID_STATE_TRANSITION');
+    const order = await Order.findById(issue.orderId).lean() as any;
+    if (!order) throw new HttpError(404, 'Order not found', undefined, 'NOT_FOUND');
+    const verified = await paymentProvider('paystack').verify(reference);
+    if (verified.reference !== reference || verified.status !== 'success' || verified.amountMinor !== Number(issue.adjustmentMinor) || verified.currency !== String(order.currency || 'NGN').toUpperCase()) {
+      throw new HttpError(409, 'Top-up payment evidence does not match this replacement', undefined, 'PAYMENT_EVIDENCE_MISMATCH');
+    }
+    issue.adjustmentStatus = 'CONFIRMED';
+    issue.adjustmentProviderReference = verified.providerId || providerEventId || reference;
+    issue.adjustmentProcessedAt = verified.paidAt || new Date();
+    issue.history.push({ action: 'TOP_UP_CONFIRMED', actorId: 'PAYSTACK_WEBHOOK', providerReference: issue.adjustmentProviderReference, at: new Date() });
+    await this.applyResolvedSubstitution(issue, 'PAYSTACK_WEBHOOK');
+    await this.publishOrderUpdate(issue.orderId);
+    return { matched: true, processed: true };
+  }
+
+  async completeItemAdjustment(actor: Actor, issueIdentifier: string, body: Record<string, any>) {
+    const issue = await ItemResolution.findOne(identifier(issueIdentifier));
+    if (!issue) throw new HttpError(404, 'Replacement request not found', undefined, 'NOT_FOUND');
+    const task = await taskByIdentifier(issue.taskId);
+    await assertStaffScope(actor, task.sourceStateId, task.hubId);
+    if (!['PAYMENT_PENDING', 'REFUND_PENDING'].includes(issue.status)) throw new HttpError(409, 'No price adjustment is pending', undefined, 'INVALID_STATE_TRANSITION');
+    if (!body.providerReference) throw new HttpError(400, 'A verified payment or refund reference is required', undefined, 'VALIDATION_ERROR');
+    issue.adjustmentStatus = 'CONFIRMED';
+    issue.history.push({ action: 'ADJUSTMENT_CONFIRMED', actorId: actor.accountId, providerReference: body.providerReference, at: new Date() });
+    await this.applyResolvedSubstitution(issue, actor.accountId);
+    await this.publishOrderUpdate(issue.orderId, task.sourceStateId, task.hubId);
+    return issue.toObject();
+  }
+
+  private async applyResolvedSubstitution(issue: any, actorId: string) {
+    const proposal = issue.proposal as any;
+    await this.atomically(async (session) => {
+      const item = await OrderItem.findOneAndUpdate(
+        { _id: issue.orderItemId, resolutionState: 'REPLACEMENT_PENDING' },
+        { $set: { productId: proposal.productId, productTitle: proposal.productTitle, productImage: proposal.productImage, selectedVariants: proposal.selectedVariants, quantity: proposal.quantity, unitPriceMinor: proposal.unitPriceMinor, totalPriceMinor: proposal.totalPriceMinor, unitPrice: proposal.unitPriceMinor / 100, totalPrice: proposal.totalPriceMinor / 100, replacementSnapshot: { ...proposal, original: issue.originalSnapshot, approvedByCustomerAt: issue.customerDecidedAt }, resolutionState: 'RESOLVED', fulfilmentStatus: 'SOURCING' } },
+        { returnDocument: 'after', session },
+      ).lean() as any;
+      if (!item) throw new HttpError(409, 'Order item is no longer awaiting replacement', undefined, 'INVALID_STATE_TRANSITION');
+      const order = await Order.findById(issue.orderId).session(session).lean() as any;
+      if (!order) throw new HttpError(404, 'Order not found', undefined, 'NOT_FOUND');
+      const subtotalMinor = Math.max(0, Number(order.subtotalMinor || 0) + Number(issue.adjustmentMinor || 0));
+      const vatMinor = Math.round(subtotalMinor * Number(order.vatRate || 0));
+      const totalMinor = Math.max(0, subtotalMinor + vatMinor + Number(order.deliveryFeeMinor || 0) - Number(order.couponDiscountMinor || 0) - Number(order.creditsAppliedMinor || 0));
+      await Order.updateOne({ _id: issue.orderId }, { $set: { subtotalMinor, vatMinor, totalMinor, subtotal: subtotalMinor / 100, total: totalMinor / 100 }, $inc: { version: 1 } }, { session });
+      await FulfilmentTask.updateOne({ _id: issue.taskId }, { $inc: { version: 1 } }, { session });
+      issue.status = 'RESOLVED'; issue.adjustmentStatus = issue.adjustmentStatus || 'NOT_REQUIRED'; issue.version += 1;
+      issue.history.push({ action: 'SUBSTITUTION_APPLIED', actorId, at: new Date() });
+      await issue.save({ session });
+    });
   }
 
   async assignmentMarketAssociates(actor: Actor, query: Record<string, unknown>) {
@@ -518,9 +740,15 @@ export class FulfilmentService {
       OrderItem.find({ _id: { $in: task.orderItemIds } }).lean({ virtuals: true }),
       Market.findOne(identifier(task.marketId)).lean({ virtuals: true }),
       task.hubId ? DispatchHub.findOne(identifier(task.hubId)).lean({ virtuals: true }) : null,
-      RunnerPackage.findOne({ taskId: task._id }).select('-scanCredentialHash').lean({ virtuals: true }),
+      RunnerPackage.findOne({ taskId: task._id }).select('+scanCredentialCiphertext -scanCredentialHash').lean({ virtuals: true }),
     ]);
-    return { ...task, items, market, hub, package: pack };
+    const itemIds = items.map((item: any) => String(item._id));
+    const issues = itemIds.length ? await ItemResolution.find({ taskId: String(task._id), orderItemId: { $in: itemIds }, status: { $nin: ['RESOLVED', 'CANCELLED'] } }).lean({ virtuals: true }) : [];
+    const visibleCredential = pack?.status === RunnerPackageStatus.READY_FOR_HUB && (pack as any).scanCredentialCiphertext
+      ? decryptPackageCredential(String((pack as any).scanCredentialCiphertext))
+      : undefined;
+    if (pack) delete (pack as any).scanCredentialCiphertext;
+    return { ...task, items, market, hub, issues, package: pack ? { ...pack, ...(visibleCredential ? { scanCredential: visibleCredential } : {}) } : null };
   }
 
   async verifyItem(accountId: string, taskIdentifier: string, orderItemId: string, body: Record<string, any>) {
@@ -528,10 +756,11 @@ export class FulfilmentService {
     const task = await taskByIdentifier(taskIdentifier);
     if (task.marketAssociateId !== (marketAssociate as any)._id.toString()) throw new HttpError(404, 'Fulfilment task not found', undefined, 'NOT_FOUND');
     if (!task.orderItemIds.map(String).includes(String(orderItemId))) throw new HttpError(404, 'Order item not found on this task', undefined, 'NOT_FOUND');
-    if (![FulfilmentTaskStatus.PRODUCT_SECURED, FulfilmentTaskStatus.PACKING].includes(task.status)) {
-      throw new HttpError(409, 'Items can only be verified after sourcing is secured and before packing is complete', { current: task.status }, 'INVALID_STATE_TRANSITION');
+    if (![FulfilmentTaskStatus.SOURCING, FulfilmentTaskStatus.PRODUCT_SECURED, FulfilmentTaskStatus.PACKING].includes(task.status)) {
+      throw new HttpError(409, 'Items can only be verified while sourcing or packing', { current: task.status }, 'INVALID_STATE_TRANSITION');
     }
-    if (!body.photoUrl) throw new HttpError(400, 'A photo of the picked-up item is required', undefined, 'VALIDATION_ERROR');
+    const photos = Array.isArray(body.photos) ? body.photos : [];
+    if (photos.length !== 3 || new Set(photos.map((photo: any) => photo.view)).size !== 3) throw new HttpError(400, 'Front, side and back photos are required', undefined, 'VALIDATION_ERROR');
     const checks = {
       productMatches: Boolean(body.checks?.productMatches),
       sizeMatches: Boolean(body.checks?.sizeMatches),
@@ -541,8 +770,14 @@ export class FulfilmentService {
     const matched = Object.values(checks).every(Boolean);
     const entry = {
       orderItemId: String(orderItemId),
-      photoUrl: String(body.photoUrl),
-      photoAssetId: body.photoAssetId ? String(body.photoAssetId) : undefined,
+      photoUrl: String(photos.find((photo: any) => photo.view === 'front')?.url || ''),
+      photos,
+      actualColor: String(body.actualColor),
+      actualSize: String(body.actualSize),
+      actualQuantity: Number(body.actualQuantity),
+      unitCostMinor: Number(body.unitCostMinor),
+      supplierReference: body.supplierReference ? String(body.supplierReference) : undefined,
+      conditionNote: String(body.conditionNote),
       checks,
       matched,
       verifiedAt: new Date(),
@@ -554,9 +789,10 @@ export class FulfilmentService {
       { returnDocument: 'after' },
     ).lean({ virtuals: true });
     if (!updated) {
+      const previous = (task.itemVerifications || []).find((item: any) => String(item.orderItemId) === String(orderItemId));
       updated = await FulfilmentTask.findOneAndUpdate(
         { _id: task._id, 'itemVerifications.orderItemId': String(orderItemId) },
-        { $set: { 'itemVerifications.$.photoUrl': entry.photoUrl, 'itemVerifications.$.photoAssetId': entry.photoAssetId, 'itemVerifications.$.checks': entry.checks, 'itemVerifications.$.matched': entry.matched, 'itemVerifications.$.verifiedAt': entry.verifiedAt, 'itemVerifications.$.verifiedBy': entry.verifiedBy } },
+        { $set: { 'itemVerifications.$': { ...entry, revisions: [...((previous as any)?.revisions || []), ...(previous ? [{ ...previous, revisedAt: new Date() }] : [])] } } },
         { returnDocument: 'after' },
       ).lean({ virtuals: true });
     }
@@ -583,16 +819,28 @@ export class FulfilmentService {
     const set: Record<string, unknown> = { version: task.version + 1 };
     if (action === 'accept') { set.status = FulfilmentTaskStatus.ACCEPTED; set.acceptedAt = now; }
     if (action === 'start_sourcing') { set.status = FulfilmentTaskStatus.SOURCING; set.sourcingStartedAt = now; }
-    if (action === 'secure') { if (!Number.isSafeInteger(body.actualCostMinor) || body.actualCostMinor < 0) throw new HttpError(400, 'Actual sourcing cost is required', undefined, 'VALIDATION_ERROR'); set.status = FulfilmentTaskStatus.PRODUCT_SECURED; set.productSecuredAt = now; set.actualCostMinor = body.actualCostMinor; set.evidence = evidence(body.evidence); }
+    if (action === 'secure') {
+      const matched = (task.itemVerifications || []).filter((entry: any) => entry.matched);
+      const matchedIds = new Set(matched.map((entry: any) => String(entry.orderItemId)));
+      if (task.orderItemIds.some((id: string) => !matchedIds.has(String(id)))) throw new HttpError(409, 'Verify every item before marking the task secured', undefined, 'INVALID_STATE_TRANSITION');
+      const unresolvedIssues = await ItemResolution.countDocuments({ taskId: String(task._id), status: { $nin: ['RESOLVED', 'CANCELLED'] } });
+      if (unresolvedIssues) throw new HttpError(409, 'Resolve every item issue before marking the task secured', undefined, 'INVALID_STATE_TRANSITION');
+      set.status = FulfilmentTaskStatus.PRODUCT_SECURED; set.productSecuredAt = now;
+      set.actualCostMinor = matched.reduce((sum: number, entry: any) => sum + Number(entry.unitCostMinor || 0) * Number(entry.actualQuantity || 1), 0);
+      set.evidence = evidence(body.evidence);
+    }
     if (action === 'begin_packing') { set.status = FulfilmentTaskStatus.PACKING; set.packingStartedAt = now; }
     if (action === 'pack') {
+      const unresolvedIssues = await ItemResolution.countDocuments({ taskId: String(task._id), status: { $nin: ['RESOLVED', 'CANCELLED'] } });
+      if (unresolvedIssues) throw new HttpError(409, `${unresolvedIssues} item issue(s) must be resolved before packing`, { unresolvedIssues }, 'INVALID_STATE_TRANSITION');
       const verifiedIds = new Set((task.itemVerifications || []).filter((v: any) => v.matched).map((v: any) => String(v.orderItemId)));
       const missingItemIds = task.orderItemIds.filter((id: string) => !verifiedIds.has(String(id)));
       if (missingItemIds.length) throw new HttpError(409, `${missingItemIds.length} item(s) still need photo verification before packing`, { missingItemIds }, 'ITEMS_NOT_VERIFIED');
       set.status = FulfilmentTaskStatus.READY_FOR_HUB; set.packedAt = now; set.hubArrivedAt = body.arrivedAt ? new Date(body.arrivedAt) : undefined;
       const existingPackage = await RunnerPackage.findOne({ taskId: task._id }).select('-scanCredentialHash').lean({ virtuals: true });
-      const rawCredential = existingPackage ? undefined : String(randomInt(100000, 999999));
-      const created = existingPackage || await RunnerPackage.findOneAndUpdate({ taskId: task._id }, { $setOnInsert: { publicId: await nextPublicId('runnerPackage'), orderId: task.orderId, taskId: task._id.toString(), marketAssociateId: task.marketAssociateId, hubId: task.hubId, status: RunnerPackageStatus.READY_FOR_HUB, scanCredentialHash: digest(rawCredential as string), scanCredentialHint: hint(rawCredential as string), itemIds: task.orderItemIds, packedAt: now, evidence: evidence(body.evidence), version: 1 } }, { upsert: true, returnDocument: 'after' }).select('-scanCredentialHash').lean({ virtuals: true });
+      const packageResult = existingPackage ? { package: existingPackage, credential: undefined } : await this.createRunnerPackage(task, now, body.evidence);
+      const created = packageResult.package;
+      const rawCredential = packageResult.credential;
       const packSet = { ...set };
       delete packSet.version;
       const updatedTask = await FulfilmentTask.findOneAndUpdate({ _id: task._id, version }, { $set: { ...packSet, status: FulfilmentTaskStatus.READY_FOR_HUB, packedAt: now }, $inc: { version: 1 } }, { returnDocument: 'after' }).lean({ virtuals: true });
@@ -607,6 +855,27 @@ export class FulfilmentService {
     await audit(`fulfilment.marketassociate.${action}`, 'fulfilment_task', task._id.toString(), accountId, { status: (updated as any).status }, undefined, task.sourceStateId, task.hubId);
     await this.publishOrderUpdate(task.orderId, task.sourceStateId, task.hubId);
     return updated;
+  }
+
+  private async createRunnerPackage(task: any, now: Date, evidenceInput?: EvidenceInput) {
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const credential = String(randomInt(1000, 10000));
+      try {
+        const created = await RunnerPackage.create({
+          publicId: await nextPublicId('runnerPackage'), orderId: task.orderId, taskId: task._id.toString(), marketAssociateId: task.marketAssociateId, hubId: task.hubId,
+          status: RunnerPackageStatus.READY_FOR_HUB, scanCredentialHash: digest(credential), scanCredentialHint: hint(credential), scanCredentialCiphertext: encryptPackageCredential(credential),
+          credentialGeneratedAt: now, credentialFailedAttempts: 0, itemIds: task.orderItemIds,
+          labelReference: `${String(task.orderId).slice(-10).toUpperCase()}-${String(task.publicId).slice(-6).toUpperCase()}`, packedAt: now, evidence: evidence(evidenceInput), version: 1,
+        });
+        const safe = created.toObject() as any; delete safe.scanCredentialHash; delete safe.scanCredentialCiphertext;
+        return { package: safe, credential };
+      } catch (error) {
+        if (!isDuplicateKey(error)) throw error;
+        const existing = await RunnerPackage.findOne({ taskId: task._id }).select('-scanCredentialHash -scanCredentialCiphertext').lean({ virtuals: true });
+        if (existing) return { package: existing, credential: undefined };
+      }
+    }
+    throw new HttpError(503, 'Unable to reserve a Hub handover code. Please try again.', undefined, 'PROVIDER_NOT_READY');
   }
 
   async marketAssociateIssue(accountId: string, taskIdentifier: string, body: Record<string, any>) {
@@ -638,6 +907,29 @@ export class FulfilmentService {
     await audit('fulfilment.task.blocked', 'fulfilment_task', task._id.toString(), accountId, { issue }, undefined, task.sourceStateId, task.hubId);
     await this.publishOrderUpdate(task.orderId, task.sourceStateId, task.hubId);
     return (await FulfilmentTask.findById(task._id).lean({ virtuals: true })) as any;
+  }
+
+  async marketAssociateItemIssue(accountId: string, taskIdentifier: string, orderItemId: string, body: Record<string, any>) {
+    const marketAssociate = await marketAssociateContext(accountId);
+    const task = await taskByIdentifier(taskIdentifier);
+    if (task.marketAssociateId !== (marketAssociate as any)._id.toString()) throw new HttpError(404, 'Fulfilment task not found', undefined, 'NOT_FOUND');
+    if (!task.orderItemIds.map(String).includes(String(orderItemId))) throw new HttpError(404, 'Order item not found on this task', undefined, 'NOT_FOUND');
+    const item = await OrderItem.findById(orderItemId).lean({ virtuals: true }) as any;
+    if (!item) throw new HttpError(404, 'Order item not found', undefined, 'NOT_FOUND');
+    const order = await Order.findById(task.orderId).select('userId publicId').lean() as any;
+    const key = String(body.idempotencyKey);
+    const existing = await ItemResolution.findOne({ idempotencyKey: key }).lean({ virtuals: true });
+    if (existing) return existing;
+    const resolution = await ItemResolution.create({
+      publicId: await nextPublicId('itemResolution'), orderId: task.orderId, taskId: String(task._id), orderItemId: String(orderItemId), marketId: task.marketId,
+      type: body.type, summary: body.summary, evidence: evidence(body.evidence), originalSnapshot: { productId: item.productId, title: item.productTitle, image: item.productImage, quantity: item.quantity, selectedVariants: item.selectedVariants, unitPriceMinor: item.unitPriceMinor },
+      status: 'OPEN', reportedBy: accountId, customerId: order?.userId, adjustmentMinor: 0, idempotencyKey: key, version: 1,
+      history: [{ action: 'REPORTED', actorId: accountId, at: new Date() }],
+    });
+    await OrderItem.updateOne({ _id: orderItemId }, { $set: { fulfilmentStatus: 'EXCEPTION', resolutionState: 'REPLACEMENT_PENDING' } });
+    await audit('fulfilment.item.issue_created', 'item_resolution', resolution.id, accountId, { taskId: task.publicId, orderItemId, type: body.type }, undefined, task.sourceStateId, task.hubId);
+    await this.publishOrderUpdate(task.orderId, task.sourceStateId, task.hubId);
+    return resolution.toObject();
   }
 
   /**
@@ -768,11 +1060,38 @@ export class FulfilmentService {
     }
     if (runnerPackage.status !== RunnerPackageStatus.READY_FOR_HUB) throw new HttpError(409, 'Package is not ready for Hub receiving', undefined, 'INVALID_STATE_TRANSITION');
     if (body.hubId && body.hubId !== runnerPackage.hubId) throw new HttpError(403, 'Package is assigned to another Hub', undefined, 'SCOPE_DENIED');
-    if (!body.scanCredential || digest(String(body.scanCredential)) !== runnerPackage.scanCredentialHash) throw new HttpError(403, 'Invalid package scan credential', undefined, 'ACCESS_DENIED');
-    const received = await HubPackage.create({ publicId: await nextPublicId('hubPackage'), orderId: runnerPackage.orderId, taskId: runnerPackage.taskId, runnerPackageId: runnerPackage._id.toString(), hubId: runnerPackage.hubId, marketAssociateId: runnerPackage.marketAssociateId, status: HubPackageStatus.QC_PENDING, itemIds: runnerPackage.itemIds, receivedAt: new Date(), receivedBy: actor.accountId, qualityChecks: [], custodyHistory: [{ action: 'RECEIVED', actorId: actor.accountId, at: new Date() }], evidence: evidence(body.evidence), version: 1, receiveIdempotencyKey: body.idempotencyKey });
-    await RunnerPackage.updateOne({ _id: runnerPackage._id }, { $set: { status: RunnerPackageStatus.HUB_RECEIVED, handedOverAt: new Date() } });
-    await FulfilmentTask.updateOne({ _id: runnerPackage.taskId }, { $set: { status: FulfilmentTaskStatus.HUB_RECEIVED, hubReceivedAt: new Date() }, $inc: { version: 1 } });
-    await OrderItem.updateMany({ _id: { $in: runnerPackage.itemIds } }, { $set: { fulfilmentStatus: 'RECEIVED', hubPackageId: received.id } });
+    if (runnerPackage.credentialLockedAt) throw new HttpError(423, 'Package verification is locked. Ask an administrator to review it.', undefined, 'ACCESS_DENIED');
+    if (!body.scanCredential || digest(String(body.scanCredential)) !== runnerPackage.scanCredentialHash) {
+      const failedAttempts = Number(runnerPackage.credentialFailedAttempts || 0) + 1;
+      await RunnerPackage.updateOne(
+        { _id: runnerPackage._id, status: RunnerPackageStatus.READY_FOR_HUB },
+        { $set: { credentialFailedAttempts: failedAttempts, ...(failedAttempts >= 5 ? { credentialLockedAt: new Date() } : {}) } },
+      );
+      throw new HttpError(403, failedAttempts >= 5 ? 'Package verification is locked after too many attempts' : 'Invalid package handover code', { attemptsRemaining: Math.max(0, 5 - failedAttempts) }, 'ACCESS_DENIED');
+    }
+    const hubPackageId = await nextPublicId('hubPackage');
+    let received: any;
+    try {
+      received = await this.atomically(async (session) => {
+        // The claim is the guard: only one receive can flip READY_FOR_HUB, so
+        // a double scan cannot create two hub packages for one runner package.
+        const claimed = await RunnerPackage.updateOne({ _id: runnerPackage._id, status: RunnerPackageStatus.READY_FOR_HUB }, { $set: { status: RunnerPackageStatus.HUB_RECEIVED, handedOverAt: new Date(), credentialVerifiedAt: new Date() }, $unset: { scanCredentialCiphertext: 1 } }, { session });
+        if (!claimed.modifiedCount) return null;
+        const [created] = await HubPackage.create([{ publicId: hubPackageId, orderId: runnerPackage.orderId, taskId: runnerPackage.taskId, runnerPackageId: runnerPackage._id.toString(), hubId: runnerPackage.hubId, marketAssociateId: runnerPackage.marketAssociateId, status: HubPackageStatus.QC_PENDING, itemIds: runnerPackage.itemIds, receivedAt: new Date(), receivedBy: actor.accountId, qualityChecks: [], custodyHistory: [{ action: 'RECEIVED', actorId: actor.accountId, at: new Date() }], evidence: evidence(body.evidence), version: 1, receiveIdempotencyKey: body.idempotencyKey }], { session });
+        await FulfilmentTask.updateOne({ _id: runnerPackage.taskId }, { $set: { status: FulfilmentTaskStatus.HUB_RECEIVED, hubReceivedAt: new Date() }, $inc: { version: 1 } }, { session });
+        await OrderItem.updateMany({ _id: { $in: runnerPackage.itemIds } }, { $set: { fulfilmentStatus: 'RECEIVED', hubPackageId: created.id } }, { session });
+        return created;
+      });
+    } catch (error) {
+      if (!isDuplicateKey(error) || !body.idempotencyKey) throw error;
+      received = null;
+    }
+    if (!received) {
+      // Lost a race with another receive of the same package: return its result.
+      const winner = await HubPackage.findOne({ runnerPackageId: runnerPackage._id.toString() }).lean({ virtuals: true });
+      if (winner) return winner;
+      throw new HttpError(409, 'Package is not ready for Hub receiving', undefined, 'INVALID_STATE_TRANSITION');
+    }
     await audit('fulfilment.hub.package_received', 'hub_package', received.id, actor.accountId, { publicId: received.publicId }, undefined, body.stateId, runnerPackage.hubId);
     await this.publishOrderUpdate(runnerPackage.orderId, task.sourceStateId, runnerPackage.hubId);
     return received.toJSON();
@@ -792,10 +1111,14 @@ export class FulfilmentService {
       const missingItemIds = pack.itemIds.filter((id: string) => !confirmedIds.has(String(id)));
       if (missingItemIds.length) throw new HttpError(409, `${missingItemIds.length} item(s) still need Hub confirmation before QC can pass`, { missingItemIds }, 'ITEMS_NOT_CONFIRMED');
     }
-    const updated = await HubPackage.findOneAndUpdate({ _id: pack._id, version: body.version ?? pack.version }, { $set: { status: passed ? HubPackageStatus.QC_PASSED : HubPackageStatus.QC_FAILED, qualityChecks: checks, qcPassedAt: passed ? new Date() : undefined, qcPassedBy: passed ? actor.accountId : undefined }, $push: { custodyHistory: { action: passed ? 'QC_PASSED' : 'QC_FAILED', actorId: actor.accountId, at: new Date(), checks } }, $inc: { version: 1 } }, { returnDocument: 'after' }).lean({ virtuals: true });
+    const updated = await this.atomically(async (session) => {
+      const changed = await HubPackage.findOneAndUpdate({ _id: pack._id, version: body.version ?? pack.version, status: { $in: [HubPackageStatus.QC_PENDING, HubPackageStatus.RECEIVED] } }, { $set: { status: passed ? HubPackageStatus.QC_PASSED : HubPackageStatus.QC_FAILED, qualityChecks: checks, qcPassedAt: passed ? new Date() : undefined, qcPassedBy: passed ? actor.accountId : undefined }, $push: { custodyHistory: { action: passed ? 'QC_PASSED' : 'QC_FAILED', actorId: actor.accountId, at: new Date(), checks } }, $inc: { version: 1 } }, { returnDocument: 'after', session }).lean({ virtuals: true });
+      if (!changed) return null;
+      await OrderItem.updateMany({ _id: { $in: pack.itemIds } }, { $set: { fulfilmentStatus: passed ? 'QC_PASSED' : 'EXCEPTION' } }, { session });
+      if (passed) await FulfilmentTask.updateOne({ _id: pack.taskId }, { $set: { status: FulfilmentTaskStatus.QC_PASSED }, $inc: { version: 1 } }, { session });
+      return changed;
+    });
     if (!updated) throw new HttpError(409, 'This package changed. Refresh and try again.', undefined, 'STALE_VERSION');
-    await OrderItem.updateMany({ _id: { $in: pack.itemIds } }, { $set: { fulfilmentStatus: passed ? 'QC_PASSED' : 'EXCEPTION' } });
-    if (passed) await FulfilmentTask.updateOne({ _id: pack.taskId }, { $set: { status: FulfilmentTaskStatus.QC_PASSED }, $inc: { version: 1 } });
     await this.publishOrderUpdate(pack.orderId, task.sourceStateId, pack.hubId);
     if (passed) await this.notifyHubQcPassed(pack);
     return updated;
@@ -878,17 +1201,21 @@ export class FulfilmentService {
     await assertStaffScope(actor, sourceStateId, packageHubIds[0]);
     const existing = await Consolidation.findOne({ orderId: order._id.toString(), ...(group ? { fulfilmentGroupId: group.publicId } : { sourceStateId }) }).lean({ virtuals: true });
     if (existing) return existing;
-    let consolidation;
+    const consolidationId = await nextPublicId('consolidation');
+    let consolidation: any;
     try {
-      consolidation = await Consolidation.create({ publicId: await nextPublicId('consolidation'), orderId: order._id.toString(), fulfilmentGroupId: group?.publicId, sourceStateId, hubId: packageHubIds[0], hubPackageIds: packages.map((item: any) => item._id.toString()), status: 'DRAFT', evidence: [], version: 1 });
+      consolidation = await this.atomically(async (session) => {
+        const [created] = await Consolidation.create([{ publicId: consolidationId, orderId: order._id.toString(), fulfilmentGroupId: group?.publicId, sourceStateId, hubId: packageHubIds[0], hubPackageIds: packages.map((item: any) => item._id.toString()), status: 'DRAFT', evidence: [], version: 1 }], { session });
+        await HubPackage.updateMany({ _id: { $in: packages.map((item: any) => item._id) } }, { $set: { status: HubPackageStatus.CONSOLIDATED }, $push: { custodyHistory: { action: 'CONSOLIDATION_STARTED', actorId: actor.accountId, at: new Date() } } }, { session });
+        await Order.updateOne({ _id: order._id }, { $set: { commerceStatus: CommerceOrderStatus.READY_FOR_CONSOLIDATION, customerProgress: [{ key: 'hub', label: 'Order received and checked', at: new Date() }] }, $push: { timeline: timelineEntry('READY_FOR_CONSOLIDATION', actor.accountId) } }, { session });
+        return created;
+      });
     } catch (error) {
       if (!isDuplicateKey(error)) throw error;
       const concurrent = await Consolidation.findOne({ orderId: order._id.toString(), ...(group ? { fulfilmentGroupId: group.publicId } : { sourceStateId }) }).lean({ virtuals: true });
       if (concurrent) return concurrent;
       throw error;
     }
-    await HubPackage.updateMany({ _id: { $in: packages.map((item: any) => item._id) } }, { $set: { status: HubPackageStatus.CONSOLIDATED }, $push: { custodyHistory: { action: 'CONSOLIDATION_STARTED', actorId: actor.accountId, at: new Date() } } });
-    await Order.updateOne({ _id: order._id }, { $set: { commerceStatus: CommerceOrderStatus.READY_FOR_CONSOLIDATION, customerProgress: [{ key: 'hub', label: 'Order received and checked', at: new Date() }] }, $push: { timeline: timelineEntry('READY_FOR_CONSOLIDATION', actor.accountId) } });
     await notifyStatus(order._id, 'READY_FOR_CONSOLIDATION');
     await this.publishOrderUpdate(order._id.toString(), sourceStateId, packageHubIds[0]);
     return consolidation.toJSON();
@@ -899,9 +1226,13 @@ export class FulfilmentService {
     if (!consolidation) throw new HttpError(404, 'Consolidation not found', undefined, 'NOT_FOUND');
     await assertStaffScope(actor, consolidation.sourceStateId, consolidation.hubId);
     if (consolidation.status !== 'DRAFT') throw new HttpError(409, 'Consolidation is not open for sealing', undefined, 'INVALID_STATE_TRANSITION');
-    const updated = await Consolidation.findOneAndUpdate({ _id: consolidation._id, version: body.version ?? consolidation.version }, { $set: { status: 'SEALED', weightGrams: body.weightGrams, dimensions: body.dimensions, sealReference: String(body.sealReference || `HK-${randomInt(100000, 999999)}`), sealedAt: new Date(), sealedBy: actor.accountId }, $inc: { version: 1 } }, { returnDocument: 'after' }).lean({ virtuals: true });
+    const updated = await this.atomically(async (session) => {
+      const sealed = await Consolidation.findOneAndUpdate({ _id: consolidation._id, status: 'DRAFT', version: body.version ?? consolidation.version }, { $set: { status: 'SEALED', weightGrams: body.weightGrams, dimensions: body.dimensions, sealReference: String(body.sealReference || `HK-${randomInt(100000, 999999)}`), sealedAt: new Date(), sealedBy: actor.accountId }, $inc: { version: 1 } }, { returnDocument: 'after', session }).lean({ virtuals: true });
+      if (!sealed) return null;
+      await Order.updateOne({ _id: consolidation.orderId }, { $set: { commerceStatus: CommerceOrderStatus.READY_FOR_DISPATCH, customerProgress: [{ key: 'consolidated', label: 'Order packed for dispatch', at: new Date() }] }, $push: { timeline: timelineEntry('READY_FOR_DISPATCH', actor.accountId) } }, { session });
+      return sealed;
+    });
     if (!updated) throw new HttpError(409, 'Consolidation changed. Refresh and try again.', undefined, 'STALE_VERSION');
-    await Order.updateOne({ _id: consolidation.orderId }, { $set: { commerceStatus: CommerceOrderStatus.READY_FOR_DISPATCH, customerProgress: [{ key: 'consolidated', label: 'Order packed for dispatch', at: new Date() }] }, $push: { timeline: timelineEntry('READY_FOR_DISPATCH', actor.accountId) } });
     await notifyStatus(consolidation.orderId, 'READY_FOR_DISPATCH');
     await this.publishOrderUpdate(consolidation.orderId, consolidation.sourceStateId, consolidation.hubId);
     return updated;
@@ -943,16 +1274,20 @@ export class FulfilmentService {
     const simulationBooking = provider === 'simulated'
       ? await logisticsProvider('simulated').book({ orderId: order.publicId, providerCostMinor: body.providerCostMinor, providerQuoteMinor: body.providerQuoteMinor })
       : undefined;
-    let shipment;
+    const shipmentId = await nextPublicId('shipment');
+    let shipment: any;
     try {
-      shipment = await Shipment.create({ publicId: await nextPublicId('shipment'), orderId: order._id.toString(), fulfilmentGroupId: consolidation.fulfilmentGroupId, sourceStateId: consolidation.sourceStateId, hubId: consolidation.hubId, consolidationId: consolidation._id.toString(), provider, courierCode, courierName, substitutedFrom: substituting ? String(chosen.code) : undefined, substitutionReason: substituting ? String(body.substitutionReason).trim() : undefined, serviceName: body.serviceName || (provider === 'simulated' ? 'Hook Logistics Simulator' : undefined), externalReference: body.externalReference || simulationBooking?.externalReference, status: ShipmentStatus.BOOKED_WITH_PROVIDER, deliveryAddressSnapshot: order.addressSnapshot || order.deliveryAddress, estimatedDeliveryAt: body.estimatedDeliveryAt ? new Date(body.estimatedDeliveryAt) : simulationBooking?.estimatedDeliveryAt ? new Date(String(simulationBooking.estimatedDeliveryAt)) : undefined, bookedAt: new Date(), providerCostMinor: body.providerCostMinor, providerQuoteMinor: body.providerQuoteMinor, trackingNumber: body.trackingNumber || simulationBooking?.trackingNumber, trackingEvents: [{ status: 'BOOKED_WITH_PROVIDER', at: new Date(), actorId: actor.accountId, mode: provider === 'simulated' ? 'simulation' : undefined }], evidence: evidence(body.evidence), releaseStatus: order.commercePaymentMethod === 'PAY_AT_HANDOVER' ? 'AWAITING_HANDOVER_PAYMENT' : 'NOT_REQUIRED', bookingIdempotencyKey: body.idempotencyKey, version: 1 });
+      shipment = await this.atomically(async (session) => {
+        const [created] = await Shipment.create([{ publicId: shipmentId, orderId: order._id.toString(), fulfilmentGroupId: consolidation.fulfilmentGroupId, sourceStateId: consolidation.sourceStateId, hubId: consolidation.hubId, consolidationId: consolidation._id.toString(), provider, courierCode, courierName, substitutedFrom: substituting ? String(chosen.code) : undefined, substitutionReason: substituting ? String(body.substitutionReason).trim() : undefined, serviceName: body.serviceName || (provider === 'simulated' ? 'Hook Logistics Simulator' : undefined), externalReference: body.externalReference || simulationBooking?.externalReference, status: ShipmentStatus.BOOKED_WITH_PROVIDER, deliveryAddressSnapshot: order.addressSnapshot || order.deliveryAddress, estimatedDeliveryAt: body.estimatedDeliveryAt ? new Date(body.estimatedDeliveryAt) : simulationBooking?.estimatedDeliveryAt ? new Date(String(simulationBooking.estimatedDeliveryAt)) : undefined, bookedAt: new Date(), providerCostMinor: body.providerCostMinor, providerQuoteMinor: body.providerQuoteMinor, trackingNumber: body.trackingNumber || simulationBooking?.trackingNumber, trackingEvents: [{ status: 'BOOKED_WITH_PROVIDER', at: new Date(), actorId: actor.accountId, mode: provider === 'simulated' ? 'simulation' : undefined }], evidence: evidence(body.evidence), releaseStatus: order.commercePaymentMethod === 'PAY_AT_HANDOVER' ? 'AWAITING_HANDOVER_PAYMENT' : 'NOT_REQUIRED', bookingIdempotencyKey: body.idempotencyKey, version: 1 }], { session });
+        await Order.updateOne({ _id: order._id }, { $set: { commerceStatus: CommerceOrderStatus.READY_FOR_DISPATCH, customerProgress: [{ key: 'shipment', label: 'Shipment booked and awaiting pickup', at: new Date() }] }, $push: { timeline: timelineEntry('BOOKED_WITH_PROVIDER', actor.accountId) } }, { session });
+        return created;
+      });
     } catch (error) {
       if (!isDuplicateKey(error)) throw error;
       const concurrent = await Shipment.findOne({ orderId: order._id.toString(), sourceStateId: consolidation.sourceStateId }).lean({ virtuals: true });
       if (concurrent) return concurrent;
       throw error;
     }
-    await Order.updateOne({ _id: order._id }, { $set: { commerceStatus: CommerceOrderStatus.READY_FOR_DISPATCH, customerProgress: [{ key: 'shipment', label: 'Shipment booked and awaiting pickup', at: new Date() }] }, $push: { timeline: timelineEntry('BOOKED_WITH_PROVIDER', actor.accountId) } });
     await notifyStatus(order._id, 'BOOKED_WITH_PROVIDER');
     await this.publishOrderUpdate(order._id.toString(), order.sourceStateId, consolidation.hubId);
     return shipment.toJSON();
@@ -969,23 +1304,30 @@ export class FulfilmentService {
     if (next === ShipmentStatus.AWAITING_HANDOVER_PAYMENT && order?.commercePaymentMethod !== 'PAY_AT_HANDOVER') throw new HttpError(409, 'Only Pay-at-Handover shipments can require handover payment', undefined, 'PAYMENT_METHOD_NOT_ALLOWED');
     if (next === ShipmentStatus.RELEASE_APPROVED && order?.commercePaymentMethod !== 'PAY_AT_HANDOVER') throw new HttpError(409, 'Only Pay-at-Handover shipments can be released through handover payment', undefined, 'PAYMENT_METHOD_NOT_ALLOWED');
     if (next === ShipmentStatus.DELIVERED && shipment.releaseStatus === 'AWAITING_HANDOVER_PAYMENT') throw new HttpError(409, 'Verified Pay-at-Handover payment is required before release', undefined, 'PAYMENT_REQUIRED');
-    const updated = await Shipment.findOneAndUpdate({ _id: shipment._id, version: body.version ?? shipment.version }, { $set: { status: next, releaseStatus: next === ShipmentStatus.RELEASE_APPROVED ? 'RELEASE_APPROVED' : shipment.releaseStatus, pickedUpAt: next === ShipmentStatus.PICKED_UP ? new Date() : shipment.pickedUpAt, deliveredAt: next === ShipmentStatus.DELIVERED ? new Date() : shipment.deliveredAt, failedAt: next === ShipmentStatus.DELIVERY_FAILED ? new Date() : shipment.failedAt }, $push: { trackingEvents: { status: next, at: new Date(), actorId: actor.accountId, note: body.note } }, $inc: { version: 1 } }, { returnDocument: 'after' }).lean({ virtuals: true });
+    let orderStatus: CommerceOrderStatus | undefined;
+    const updated = await this.atomically(async (session) => {
+      const moved = await Shipment.findOneAndUpdate({ _id: shipment._id, version: body.version ?? shipment.version }, { $set: { status: next, releaseStatus: next === ShipmentStatus.RELEASE_APPROVED ? 'RELEASE_APPROVED' : shipment.releaseStatus, pickedUpAt: next === ShipmentStatus.PICKED_UP ? new Date() : shipment.pickedUpAt, deliveredAt: next === ShipmentStatus.DELIVERED ? new Date() : shipment.deliveredAt, failedAt: next === ShipmentStatus.DELIVERY_FAILED ? new Date() : shipment.failedAt }, $push: { trackingEvents: { status: next, at: new Date(), actorId: actor.accountId, note: body.note } }, $inc: { version: 1 } }, { returnDocument: 'after', session }).lean({ virtuals: true });
+      if (!moved) return null;
+      if (shipment.fulfilmentGroupId) {
+        const groupStatus = next === ShipmentStatus.DELIVERED ? 'DELIVERED'
+          : [ShipmentStatus.PICKED_UP, ShipmentStatus.IN_TRANSIT, ShipmentStatus.OUT_FOR_DELIVERY].includes(next) ? 'IN_TRANSIT'
+            : next === ShipmentStatus.RETURN_IN_TRANSIT ? 'ON_HOLD' : undefined;
+        if (groupStatus) await OrderFulfilmentGroup.updateOne({ publicId: shipment.fulfilmentGroupId }, { $set: { status: groupStatus, shipmentId: shipment.publicId } }, { session });
+      }
+      // Read inside the transaction so concurrent deliveries of two shipments
+      // of one order each see the other's committed state, not a stale count.
+      const allShipments = await Shipment.find({ orderId: shipment.orderId }).select('status').session(session).lean();
+      const deliveredCount = allShipments.filter((entry) => entry.status === ShipmentStatus.DELIVERED).length;
+      const movingCount = allShipments.filter((entry) => [ShipmentStatus.PICKED_UP, ShipmentStatus.IN_TRANSIT, ShipmentStatus.OUT_FOR_DELIVERY].includes(entry.status)).length;
+      orderStatus = next === ShipmentStatus.RETURN_IN_TRANSIT ? CommerceOrderStatus.RETURN_IN_PROGRESS
+        : deliveredCount === allShipments.length ? CommerceOrderStatus.DELIVERED
+          : deliveredCount > 0 ? CommerceOrderStatus.PARTIALLY_DELIVERED
+            : movingCount > 0 && allShipments.length > 1 ? CommerceOrderStatus.PARTIALLY_IN_TRANSIT
+              : movingCount > 0 ? CommerceOrderStatus.IN_TRANSIT : undefined;
+      if (orderStatus) await Order.updateOne({ _id: shipment.orderId }, { $set: { commerceStatus: orderStatus, ...(orderStatus === CommerceOrderStatus.DELIVERED ? { deliveredAt: new Date() } : {}) }, $push: { timeline: timelineEntry(next, actor.accountId) } }, { session });
+      return moved;
+    });
     if (!updated) throw new HttpError(409, 'Shipment changed. Refresh and try again.', undefined, 'STALE_VERSION');
-    if (shipment.fulfilmentGroupId) {
-      const groupStatus = next === ShipmentStatus.DELIVERED ? 'DELIVERED'
-        : [ShipmentStatus.PICKED_UP, ShipmentStatus.IN_TRANSIT, ShipmentStatus.OUT_FOR_DELIVERY].includes(next) ? 'IN_TRANSIT'
-          : next === ShipmentStatus.RETURN_IN_TRANSIT ? 'ON_HOLD' : undefined;
-      if (groupStatus) await OrderFulfilmentGroup.updateOne({ publicId: shipment.fulfilmentGroupId }, { $set: { status: groupStatus, shipmentId: shipment.publicId } });
-    }
-    const allShipments = await Shipment.find({ orderId: shipment.orderId }).select('status').lean();
-    const deliveredCount = allShipments.filter((entry) => entry.status === ShipmentStatus.DELIVERED).length;
-    const movingCount = allShipments.filter((entry) => [ShipmentStatus.PICKED_UP, ShipmentStatus.IN_TRANSIT, ShipmentStatus.OUT_FOR_DELIVERY].includes(entry.status)).length;
-    const orderStatus = next === ShipmentStatus.RETURN_IN_TRANSIT ? CommerceOrderStatus.RETURN_IN_PROGRESS
-      : deliveredCount === allShipments.length ? CommerceOrderStatus.DELIVERED
-        : deliveredCount > 0 ? CommerceOrderStatus.PARTIALLY_DELIVERED
-          : movingCount > 0 && allShipments.length > 1 ? CommerceOrderStatus.PARTIALLY_IN_TRANSIT
-            : movingCount > 0 ? CommerceOrderStatus.IN_TRANSIT : undefined;
-    if (orderStatus) await Order.updateOne({ _id: shipment.orderId }, { $set: { commerceStatus: orderStatus, deliveredAt: orderStatus === CommerceOrderStatus.DELIVERED ? new Date() : undefined }, $push: { timeline: timelineEntry(next, actor.accountId) } });
     if (orderStatus) await notifyStatus(shipment.orderId, next);
     await this.publishOrderUpdate(shipment.orderId, shipment.sourceStateId, shipment.hubId);
     if (orderStatus === CommerceOrderStatus.DELIVERED && order?.userId) {
@@ -1125,58 +1467,154 @@ export class FulfilmentService {
     if (!order) throw new HttpError(404, 'Refund record not found', undefined, 'NOT_FOUND');
     await assertStaffScope(actor, order.sourceStateId);
     if (refund.status === 'REFUNDED') return refund;
-    if (!['REQUESTED', 'APPROVED', 'FAILED'].includes(refund.status)) {
+    if (!['REQUESTED', 'APPROVED', 'FAILED', 'PROVIDER_UNKNOWN'].includes(refund.status)) {
       throw new HttpError(409, 'Refund is already being processed', undefined, 'INVALID_STATE_TRANSITION');
     }
     if (body.idempotencyKey && body.idempotencyKey !== refund.idempotencyKey) {
       throw new HttpError(409, 'Refund idempotency key does not match the request', undefined, 'IDEMPOTENCY_CONFLICT');
     }
     if (!refund.paymentId) throw new HttpError(409, 'Refund payment record is missing', undefined, 'PAYMENT_RECORD_MISSING');
-    await FulfilmentRefund.updateOne({ _id: refund._id }, { $set: { status: 'PROVIDER_PENDING', approvedBy: actor.accountId }, $unset: { failureReason: 1 } });
-    try {
-      const providerResult = await this.payments.refund(refund.paymentId, refund.amountMinor, refund.idempotencyKey);
-      const updated = await FulfilmentRefund.findOneAndUpdate(
-        { _id: refund._id, status: 'PROVIDER_PENDING' },
-        { $set: { status: 'REFUNDED', providerReference: providerResult.providerReference, processedAt: new Date() } },
-        { returnDocument: 'after' },
-      ).lean({ virtuals: true });
-      const paymentAfter = await Payment.findById(refund.paymentId).select('commerceStatus').lean() as any;
-      const fullyRefunded = paymentAfter?.commerceStatus === CommercePaymentStatus.REFUNDED;
-      await Order.updateOne(
-        { _id: refund.orderId },
-        {
-          ...(fullyRefunded ? { $set: { commerceStatus: CommerceOrderStatus.REFUNDED } } : {}),
-          $push: { timeline: timelineEntry(fullyRefunded ? 'REFUNDED' : 'PARTIALLY_REFUNDED', actor.accountId) },
-        },
-      );
-      if (fullyRefunded) await notifyStatus(refund.orderId, 'REFUNDED');
-      await this.publishOrderUpdate(refund.orderId, order.sourceStateId);
-      if (order.userId) {
-        await createCommerceNotification({
-          eventKey: `order:${order.publicId}:refund:${refund.publicId}`,
-          userId: order.userId,
-          title: fullyRefunded ? "Refund processed" : "Partial refund processed",
-          body: `A refund of ${(refund.amountMinor / 100).toLocaleString("en-NG", { style: "currency", currency: refund.currency || "NGN" })} has been processed to your original payment method.`,
-          type: "refund_processed",
-          data: { orderId: order.publicId, refundId: refund.publicId },
-        }).catch(() => undefined);
-        const customer = await User.findById(order.userId).select('email firstName').lean() as any;
-        if (customer?.email) {
-          await this.email.sendRefundIssued({
-            to: customer.email,
-            name: customer.firstName,
-            orderCode: order.publicId,
-            amountMinor: refund.amountMinor,
-            currency: refund.currency || 'NGN',
-            fullyRefunded,
-          }).catch(() => undefined);
-        }
+
+    // An earlier attempt whose provider outcome was never confirmed. Never
+    // call the provider again until we know whether it already refunded.
+    if (refund.status === 'PROVIDER_UNKNOWN') {
+      const found = await this.payments.reconcileRefund(refund.paymentId, refund.amountMinor, refund.idempotencyKey);
+      if (found) return this.finalizeRefund(actor, refund, order, found.providerReference, body.reason);
+      const quietForMs = Date.now() - new Date(refund.updatedAt || 0).getTime();
+      if (quietForMs < 15 * 60_000) {
+        throw new HttpError(409, 'The previous refund attempt is still being verified with the payment provider', undefined, 'PROVIDER_OUTCOME_UNKNOWN');
       }
-      await audit('fulfilment.refund.processed', 'refund', refund.publicId, actor.accountId, { providerReference: providerResult.providerReference, amountMinor: refund.amountMinor }, body.reason);
-      return updated;
+      // Provider shows nothing after a quiet period: free the reserved amount
+      // so the refund can be retried safely.
+      await this.payments.releaseRefundReservation(refund.paymentId, refund.amountMinor);
+      await FulfilmentRefund.updateOne({ _id: refund._id, status: 'PROVIDER_UNKNOWN' }, { $set: { status: 'FAILED', failureReason: 'Provider reported no refund after verification' } });
+      throw new HttpError(409, 'No refund was found at the provider. You can retry the refund.', undefined, 'INVALID_STATE_TRANSITION');
+    }
+
+    // Claim atomically: two concurrent process calls cannot both reach the provider.
+    const claimed = await FulfilmentRefund.findOneAndUpdate(
+      { _id: refund._id, status: { $in: ['REQUESTED', 'APPROVED', 'FAILED'] } },
+      { $set: { status: 'PROVIDER_PENDING', approvedBy: actor.accountId }, $unset: { failureReason: 1 } },
+      { returnDocument: 'after' },
+    ).lean();
+    if (!claimed) throw new HttpError(409, 'Refund is already being processed', undefined, 'INVALID_STATE_TRANSITION');
+    let providerResult: { providerReference?: string };
+    try {
+      providerResult = await this.payments.refund(refund.paymentId, refund.amountMinor, refund.idempotencyKey);
     } catch (error) {
-      await FulfilmentRefund.updateOne({ _id: refund._id }, { $set: { status: 'FAILED', failureReason: error instanceof Error ? error.message.slice(0, 500) : 'Provider refund failed' } });
+      if ((error as { code?: string })?.code === 'PROVIDER_OUTCOME_UNKNOWN') {
+        // The provider may have refunded. Park it for reconciliation; do not mark FAILED.
+        await FulfilmentRefund.updateOne({ _id: refund._id, status: 'PROVIDER_PENDING' }, { $set: { status: 'PROVIDER_UNKNOWN', failureReason: 'Provider outcome unknown' } });
+      } else {
+        await FulfilmentRefund.updateOne({ _id: refund._id, status: 'PROVIDER_PENDING' }, { $set: { status: 'FAILED', failureReason: error instanceof Error ? error.message.slice(0, 500) : 'Provider refund failed' } });
+      }
       throw error;
+    }
+    try {
+      return await this.finalizeRefund(actor, refund, order, providerResult.providerReference, body.reason);
+    } catch (error) {
+      // The provider DID refund. Never mark FAILED (that would allow a second
+      // refund); park it so reconciliation completes the bookkeeping.
+      await FulfilmentRefund.updateOne({ _id: refund._id, status: 'PROVIDER_PENDING' }, { $set: { status: 'PROVIDER_UNKNOWN', failureReason: 'Refund sent; bookkeeping pending' } });
+      throw error;
+    }
+  }
+
+  /**
+   * Resolves refunds parked as PROVIDER_UNKNOWN: if the provider shows the
+   * refund, the bookkeeping is completed; otherwise it stays parked (a person
+   * can retry it from Admin after the quiet period, see processRefund).
+   */
+  async reconcileUnknownRefunds(limit = 10) {
+    const parked = await FulfilmentRefund.find({ status: 'PROVIDER_UNKNOWN' }).sort({ updatedAt: 1 }).limit(limit).lean({ virtuals: true }) as any[];
+    let resolved = 0;
+    for (const refund of parked) {
+      try {
+        if (!refund.paymentId) continue;
+        const found = await this.payments.reconcileRefund(refund.paymentId, refund.amountMinor, refund.idempotencyKey);
+        if (!found) continue;
+        const order = await Order.findById(refund.orderId).select('sourceStateId userId publicId').lean() as any;
+        if (!order) continue;
+        await this.finalizeRefund({ accountId: 'SYSTEM' } as Actor, refund, order, found.providerReference, 'Reconciled with provider');
+        resolved += 1;
+      } catch (error) {
+        console.error('[refund-reconcile] failed for', refund.publicId, error instanceof Error ? error.message : error);
+      }
+    }
+    return { checked: parked.length, resolved };
+  }
+
+  /**
+   * Records a successful provider refund. The refund status, the order
+   * timeline and the outbox event commit together; notification and email
+   * are delivered from the outbox so a mail outage cannot undo or hide it.
+   */
+  private async finalizeRefund(actor: Actor, refund: any, order: any, providerReference: string | undefined, reason?: string) {
+    const session = await mongoose.startSession();
+    let updated: any;
+    let fullyRefunded = false;
+    try {
+      await session.withTransaction(async () => {
+        updated = await FulfilmentRefund.findOneAndUpdate(
+          { _id: refund._id, status: { $in: ['PROVIDER_PENDING', 'PROVIDER_UNKNOWN'] } },
+          { $set: { status: 'REFUNDED', providerReference, processedAt: new Date() }, $unset: { failureReason: 1 } },
+          { returnDocument: 'after', session },
+        ).lean({ virtuals: true });
+        if (!updated) return;
+        const paymentAfter = await Payment.findById(refund.paymentId).select('commerceStatus').session(session).lean() as any;
+        fullyRefunded = paymentAfter?.commerceStatus === CommercePaymentStatus.REFUNDED;
+        await Order.updateOne(
+          { _id: refund.orderId },
+          {
+            ...(fullyRefunded ? { $set: { commerceStatus: CommerceOrderStatus.REFUNDED } } : {}),
+            $push: { timeline: timelineEntry(fullyRefunded ? 'REFUNDED' : 'PARTIALLY_REFUNDED', actor.accountId) },
+          },
+          { session },
+        );
+        await emitOutbox([{
+          aggregateType: 'refund',
+          aggregateId: String(refund._id),
+          eventType: 'REFUND_PROCESSED_EFFECTS',
+          payload: { refundId: refund.publicId, orderId: String(refund.orderId), fullyRefunded },
+        }], session);
+      });
+    } finally {
+      await session.endSession();
+    }
+    // Lost the claim: another caller already finalized this refund.
+    if (!updated) return FulfilmentRefund.findById(refund._id).lean({ virtuals: true });
+    wakeOutbox();
+    await this.publishOrderUpdate(refund.orderId, order.sourceStateId);
+    await audit('fulfilment.refund.processed', 'refund', refund.publicId, actor.accountId, { providerReference, amountMinor: refund.amountMinor }, reason).catch(() => undefined);
+    return updated;
+  }
+
+  /** Outbox consumer for REFUND_PROCESSED_EFFECTS. Keyed, so replays are harmless. */
+  async deliverRefundEffects(event: { payload: Record<string, any> }) {
+    const { refundId, orderId, fullyRefunded } = event.payload;
+    const refund = await FulfilmentRefund.findOne({ publicId: refundId }).lean({ virtuals: true }) as any;
+    const order = await Order.findById(orderId).select('userId publicId').lean() as any;
+    if (!refund || !order) return;
+    if (fullyRefunded) await notifyStatus(orderId, 'REFUNDED');
+    if (!order.userId) return;
+    await createCommerceNotification({
+      eventKey: `order:${order.publicId}:refund:${refund.publicId}`,
+      userId: order.userId,
+      title: fullyRefunded ? "Refund processed" : "Partial refund processed",
+      body: `A refund of ${(refund.amountMinor / 100).toLocaleString("en-NG", { style: "currency", currency: refund.currency || "NGN" })} has been processed to your original payment method.`,
+      type: "refund_processed",
+      data: { orderId: order.publicId, refundId: refund.publicId },
+    });
+    const customer = await User.findById(order.userId).select('email firstName').lean() as any;
+    if (customer?.email) {
+      await this.email.sendRefundIssued({
+        to: customer.email,
+        name: customer.firstName,
+        orderCode: order.publicId,
+        amountMinor: refund.amountMinor,
+        currency: refund.currency || 'NGN',
+        fullyRefunded,
+      });
     }
   }
 
@@ -1391,9 +1829,34 @@ export class FulfilmentService {
     if (!logisticsSignature(provider, payload, signature)) throw new HttpError(401, 'Invalid logistics webhook signature', undefined, 'WEBHOOK_SIGNATURE_INVALID');
     const payloadHash = digest(JSON.stringify(payload));
     const normalizedProvider = provider as any;
-    const existing = await LogisticsWebhookEvent.findOne({ provider: normalizedProvider, providerEventId: eventId }).lean({ virtuals: true });
-    if (existing) return { duplicate: true, event: existing };
-    const event = await LogisticsWebhookEvent.create({ provider: normalizedProvider, providerEventId: eventId, payloadHash, eventType: String(payload.eventType || payload.status || 'unknown'), shipmentId: payload.shipmentId ? String(payload.shipmentId) : undefined, signatureVerified: true, status: 'RECEIVED', receivedAt: new Date() });
+    // Only a fully handled delivery is a duplicate. One left RECEIVED (crash,
+    // stale version) must be reprocessed when the provider retries it,
+    // otherwise the shipment would never advance.
+    const existing = await LogisticsWebhookEvent.findOne({ provider: normalizedProvider, providerEventId: eventId }).lean({ virtuals: true }) as any;
+    if (existing && ['PROCESSED', 'IGNORED'].includes(String(existing.status))) return { duplicate: true, event: existing };
+    const LEASE_MS = 30_000;
+    let event: any;
+    if (!existing) {
+      try {
+        // Created already holding the lease, so this delivery owns the event.
+        event = await LogisticsWebhookEvent.create({ provider: normalizedProvider, providerEventId: eventId, payloadHash, eventType: String(payload.eventType || payload.status || 'unknown'), shipmentId: payload.shipmentId ? String(payload.shipmentId) : undefined, signatureVerified: true, status: 'RECEIVED', receivedAt: new Date(), lockedUntil: new Date(Date.now() + LEASE_MS) });
+      } catch (error) {
+        if (!isDuplicateKey(error)) throw error;
+        // A concurrent delivery of the same event is already being handled.
+        const concurrent = await LogisticsWebhookEvent.findOne({ provider: normalizedProvider, providerEventId: eventId }).lean({ virtuals: true });
+        return { duplicate: true, event: concurrent };
+      }
+    } else {
+      // A previous attempt left it unfinished. Take it over only if nobody
+      // holds a live lease, so concurrent retries cannot all reprocess it.
+      event = await LogisticsWebhookEvent.findOneAndUpdate(
+        { _id: existing._id, status: { $in: ['RECEIVED', 'FAILED'] }, $or: [{ lockedUntil: { $exists: false } }, { lockedUntil: { $lt: new Date() } }] } as any,
+        { $set: { lockedUntil: new Date(Date.now() + LEASE_MS) } },
+        { returnDocument: 'after' },
+      );
+      if (!event) return { duplicate: true, event: existing };
+    }
+    try {
     const shipmentValue = payload.shipmentId ? String(payload.shipmentId) : undefined;
     const shipment = shipmentValue
       ? await Shipment.findOne({ $or: [identifier(shipmentValue), { externalReference: shipmentValue }, { trackingNumber: shipmentValue }] } as any).lean({ virtuals: true }) as any
@@ -1418,18 +1881,34 @@ export class FulfilmentService {
       return { duplicate: false, event: { ...event.toJSON(), status: 'IGNORED' }, accepted: false };
     }
     const allowed: Record<string, string[]> = { READY_FOR_BOOKING: ['BOOKED_WITH_PROVIDER'], BOOKING_PENDING: ['BOOKED_WITH_PROVIDER'], BOOKED_WITH_PROVIDER: ['AWAITING_PICKUP', 'CANCELLED'], AWAITING_PICKUP: ['PICKED_UP', 'CANCELLED'], PICKED_UP: ['IN_TRANSIT', 'DELIVERY_FAILED'], IN_TRANSIT: ['OUT_FOR_DELIVERY', 'DELIVERY_FAILED', 'RETURN_IN_TRANSIT'], OUT_FOR_DELIVERY: ['DELIVERED', 'DELIVERY_FAILED', 'AWAITING_HANDOVER_PAYMENT'], AWAITING_HANDOVER_PAYMENT: ['RELEASE_APPROVED'], RELEASE_APPROVED: ['DELIVERED'], DELIVERY_FAILED: ['RETURN_IN_TRANSIT'], RETURN_IN_TRANSIT: ['RETURNED_TO_HOOK'] };
+    if (shipment.status === next) {
+      // Already in this state (e.g. the provider re-sent it under a new event id): nothing to apply.
+      await LogisticsWebhookEvent.updateOne({ _id: event._id }, { $set: { status: 'PROCESSED', processedAt: new Date(), shipmentId: shipment.publicId || shipment._id.toString() } });
+      return { duplicate: false, event: { ...event.toJSON(), status: 'PROCESSED' }, shipment, accepted: true };
+    }
     if (shipment.status !== next && !allowed[shipment.status]?.includes(next)) {
       await LogisticsWebhookEvent.updateOne({ _id: event._id }, { $set: { status: 'IGNORED', processedAt: new Date() } });
       return { duplicate: false, event: { ...event.toJSON(), status: 'IGNORED' }, accepted: false };
     }
-    const updated = await Shipment.findOneAndUpdate({ _id: shipment._id, version: shipment.version }, { $set: { status: next, trackingNumber: payload.trackingNumber ? String(payload.trackingNumber) : shipment.trackingNumber, pickedUpAt: next === ShipmentStatus.PICKED_UP ? new Date() : shipment.pickedUpAt, deliveredAt: next === ShipmentStatus.DELIVERED ? new Date() : shipment.deliveredAt, failedAt: next === ShipmentStatus.DELIVERY_FAILED ? new Date() : shipment.failedAt }, $push: { trackingEvents: { status: next, at: new Date(), actorId: `WEBHOOK:${provider}`, note: typeof payload.note === 'string' ? payload.note.slice(0, 500) : undefined } }, $inc: { version: 1 } }, { returnDocument: 'after' }).lean({ virtuals: true });
-    if (!updated) throw new HttpError(409, 'Shipment changed while processing provider event', undefined, 'STALE_VERSION');
     const orderStatus = next === ShipmentStatus.DELIVERED ? CommerceOrderStatus.DELIVERED : next === ShipmentStatus.RETURN_IN_TRANSIT ? CommerceOrderStatus.RETURN_IN_PROGRESS : [ShipmentStatus.PICKED_UP, ShipmentStatus.IN_TRANSIT, ShipmentStatus.OUT_FOR_DELIVERY].includes(next) ? CommerceOrderStatus.IN_TRANSIT : undefined;
-    if (orderStatus) await Order.updateOne({ _id: shipment.orderId }, { $set: { commerceStatus: orderStatus, deliveredAt: next === ShipmentStatus.DELIVERED ? new Date() : undefined }, $push: { timeline: timelineEntry(next, `WEBHOOK:${provider}`) } });
+    // Shipment, order and the event marker commit together, so a crash cannot
+    // leave a moved shipment whose event is still "received".
+    const updated = await this.atomically(async (session) => {
+      const moved = await Shipment.findOneAndUpdate({ _id: shipment._id, version: shipment.version }, { $set: { status: next, trackingNumber: payload.trackingNumber ? String(payload.trackingNumber) : shipment.trackingNumber, pickedUpAt: next === ShipmentStatus.PICKED_UP ? new Date() : shipment.pickedUpAt, deliveredAt: next === ShipmentStatus.DELIVERED ? new Date() : shipment.deliveredAt, failedAt: next === ShipmentStatus.DELIVERY_FAILED ? new Date() : shipment.failedAt }, $push: { trackingEvents: { status: next, at: new Date(), actorId: `WEBHOOK:${provider}`, note: typeof payload.note === 'string' ? payload.note.slice(0, 500) : undefined } }, $inc: { version: 1 } }, { returnDocument: 'after', session }).lean({ virtuals: true });
+      if (!moved) return null;
+      if (orderStatus) await Order.updateOne({ _id: shipment.orderId }, { $set: { commerceStatus: orderStatus, ...(next === ShipmentStatus.DELIVERED ? { deliveredAt: new Date() } : {}) }, $push: { timeline: timelineEntry(next, `WEBHOOK:${provider}`) } }, { session });
+      await LogisticsWebhookEvent.updateOne({ _id: event._id }, { $set: { status: 'PROCESSED', processedAt: new Date(), shipmentId: shipment.publicId || shipment._id.toString() } }, { session });
+      return moved;
+    });
+    if (!updated) throw new HttpError(409, 'Shipment changed while processing provider event', undefined, 'STALE_VERSION');
     if (orderStatus) await notifyStatus(shipment.orderId, next);
     await this.publishOrderUpdate(shipment.orderId, shipment.sourceStateId, shipment.hubId);
-    await LogisticsWebhookEvent.updateOne({ _id: event._id }, { $set: { status: 'PROCESSED', processedAt: new Date(), shipmentId: shipment.publicId || shipment._id.toString() } });
     return { duplicate: false, event: { ...event.toJSON(), status: 'PROCESSED' }, shipment: updated, accepted: true };
+    } catch (error) {
+      // Free the event immediately so the provider's retry is not made to wait out the lease.
+      await LogisticsWebhookEvent.updateOne({ _id: event._id, status: { $ne: 'PROCESSED' } }, { $unset: { lockedUntil: 1 } }).catch(() => undefined);
+      throw error;
+    }
   }
 }
 

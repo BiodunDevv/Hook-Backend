@@ -1,5 +1,5 @@
 import { createHash } from "crypto";
-import { isValidObjectId } from "mongoose";
+import mongoose, { isValidObjectId, type ClientSession } from "mongoose";
 import {
   CommerceOrderStatus,
   CommercePaymentStatus,
@@ -25,11 +25,20 @@ import { EmailService } from "@emails/email.service";
 import { ReferralService } from "@services/referral.service";
 import { CreditService } from "@services/credit.service";
 import { CreditLedger } from "@models/promotions/credit-ledger.model";
-import { HttpError } from "@utils/http";
+import { HttpError, isDuplicateKeyError } from "@utils/http";
 import { paymentProvider, type ProviderName } from "./payments/provider-registry";
 import { PaymentAttempt, PaymentLink } from "@models/payments/payment-link.model";
 import { publishRealtime } from "@services/realtime.service";
-import { appendTimeline } from "@lib/order-timeline";
+import { timelineEntry } from "@lib/order-timeline";
+import { emitOutbox } from "@services/outbox.service";
+import { wakeOutbox } from "../jobs/wake";
+
+/** True when the provider may have acted on the request even though it failed. */
+export function isAmbiguousProviderError(error: unknown) {
+  const err = error as { code?: string; details?: { httpStatus?: number } };
+  if (err?.code === 'PAYMENT_PROVIDER_UNAVAILABLE') return true;
+  return err?.code === 'PAYMENT_PROVIDER_ERROR' && Number(err.details?.httpStatus || 0) >= 500;
+}
 
 function identity(value: string) {
   return isValidObjectId(value)
@@ -132,9 +141,39 @@ export class PaymentService {
       initializedAt: new Date(),
       reference: initialized.reference,
     };
-    await payment.save();
+    // Payment and order move to PROCESSING together, and only from a state
+    // that has not already been confirmed: a webhook that lands while this
+    // request is still talking to the provider must not be overwritten.
+    const session = await mongoose.startSession();
+    let moved = false;
+    try {
+      await session.withTransaction(async () => {
+        const paymentUpdate = await Payment.updateOne(
+          { _id: payment._id, commerceStatus: { $ne: CommercePaymentStatus.CONFIRMED } },
+          {
+            $set: {
+              authorizationUrl: payment.authorizationUrl,
+              accessCode: payment.accessCode,
+              commerceStatus: CommercePaymentStatus.PROCESSING,
+              status: PaymentStatus.PENDING,
+              gatewayResponse: payment.gatewayResponse,
+            },
+          },
+          { session },
+        );
+        moved = paymentUpdate.modifiedCount > 0;
+        if (!moved) return;
+        await Order.updateOne(
+          { _id: order._id, commercePaymentStatus: { $ne: CommercePaymentStatus.CONFIRMED } },
+          { $set: { commercePaymentStatus: CommercePaymentStatus.PROCESSING } },
+          { session },
+        );
+      });
+    } finally {
+      await session.endSession();
+    }
+    if (!moved) return this.status(customerId, order.publicId || order.id);
     order.commercePaymentStatus = CommercePaymentStatus.PROCESSING;
-    await order.save();
     this.publishOrderUpdate(order);
     return this.publicPayment(payment);
   }
@@ -217,6 +256,24 @@ export class PaymentService {
     return { confirmed: true };
   }
 
+  /**
+   * Safety net for a webhook that never arrived or failed permanently: finds
+   * payments still PROCESSING after a grace period and re-verifies them with
+   * the provider through the same guarded confirmation path.
+   */
+  async reconcileStalePayments(limit = 20) {
+    const stale = await Payment.find({
+      commerceStatus: CommercePaymentStatus.PROCESSING,
+      updatedAt: { $lt: new Date(Date.now() - 2 * 60_000), $gt: new Date(Date.now() - 48 * 60 * 60_000) },
+    }).sort({ updatedAt: 1 }).limit(limit);
+    let confirmed = 0;
+    for (const payment of stale) {
+      const result = await this.verifyByReference(payment).catch(() => ({ confirmed: false }));
+      if (result.confirmed) confirmed += 1;
+    }
+    return { checked: stale.length, confirmed };
+  }
+
   async webhook(providerName: ProviderName, rawBody: Buffer, signature: string, requestId?: string) {
     const provider = paymentProvider(providerName);
     const parsed = provider.parseWebhook(rawBody, signature);
@@ -233,14 +290,33 @@ export class PaymentService {
         processingStatus: "received",
       });
     } catch (error: any) {
-      if (error?.code === 11000) return { received: true, duplicate: true };
-      throw error;
+      if (!isDuplicateKeyError(error)) throw error;
+      // Only a fully handled delivery is a true duplicate. One that failed or
+      // died mid-way ("received"/"failed") must be reprocessed on Paystack's
+      // retry, otherwise the payment would never confirm. Reprocessing is
+      // safe: confirmPayment is a guarded, idempotent transaction.
+      const previous = await PaymentWebhookEvent.findOne({ provider: providerName, providerEventId: parsed.providerEventId });
+      if (!previous || ["processed", "ignored"].includes(previous.processingStatus)) return { received: true, duplicate: true };
+      event = previous;
     }
     if (parsed.eventType !== "charge.success" || !parsed.reference) {
       event.processingStatus = "ignored";
       event.processedAt = new Date();
       await event.save();
       return { received: true, ignored: true };
+    }
+    // Substitution top-ups deliberately do not use an Order Payment record:
+    // they are a narrowly scoped price adjustment on an already-paid order.
+    // Route them through the fulfilment service so a successful webhook can
+    // atomically apply the approved replacement without re-activating or
+    // re-crediting the original order.
+    const { fulfilmentService } = await import('@services/fulfilment.service');
+    const substitution = await fulfilmentService.verifySubstitutionTopUp(parsed.reference, parsed.providerEventId);
+    if (substitution.matched) {
+      event.processingStatus = "processed";
+      event.processedAt = new Date();
+      await event.save();
+      return { received: true, ...substitution };
     }
     const attempt = await PaymentAttempt.findOne({ reference: parsed.reference });
     const payment = attempt ? await Payment.findById(attempt.paymentId) : await Payment.findOne({ transactionRef: parsed.reference });
@@ -300,18 +376,17 @@ export class PaymentService {
       event.processingStatus = "failed";
       event.failureCode = error?.code || "PAYMENT_EVIDENCE_MISMATCH";
       await event.save();
-      await IntegrationException.create({
-        provider: providerName,
-        type: error?.message?.toLowerCase().includes("amount")
-          ? "amount"
-          : "status",
-        reference: parsed.reference,
-        paymentId: payment.id,
-        orderId: payment.orderId,
-        requestId,
-        details: { code: error?.code, message: error?.message },
-        status: "open",
-      });
+      // One open exception per (reference, type): Paystack retries a failing
+      // webhook, and each retry used to write another row.
+      const exceptionType = error?.message?.toLowerCase().includes("amount") ? "amount" : "status";
+      await IntegrationException.updateOne(
+        { provider: providerName, reference: parsed.reference, type: exceptionType, status: "open" },
+        {
+          $set: { requestId, details: { code: error?.code, message: error?.message } },
+          $setOnInsert: { paymentId: payment.id, orderId: payment.orderId },
+        },
+        { upsert: true },
+      ).catch(() => undefined);
       throw error;
     }
   }
@@ -346,6 +421,17 @@ export class PaymentService {
     return { confirmed: true };
   }
 
+  /**
+   * The single place a payment becomes confirmed. Every DB write that must
+   * agree (payment, links, order, shipment, Hook Coin, outbox) commits in one
+   * transaction; everything else (referral, notification, email, realtime)
+   * is written to the outbox and delivered, with retries, after the commit.
+   *
+   * Replay-safe: the payment transition is a guarded update, so a duplicate
+   * webhook, a status poll and a manual verify racing each other produce one
+   * effect. A payment confirmed by the old non-atomic code, whose order was
+   * never activated, is repaired on the next call.
+   */
   private async confirmPayment(
     payment: any,
     providerId?: string,
@@ -355,135 +441,210 @@ export class PaymentService {
     const order = await Order.findById(payment.orderId);
     if (!order || !["PREPAID", "PAY_AT_HANDOVER"].includes(String(order.commercePaymentMethod)))
       throw new HttpError(409, "Payment cannot activate this Order");
-    if (payment.commerceStatus === CommercePaymentStatus.CONFIRMED) {
-      if (order.userId)
-        await createCommerceNotification({
-          eventKey: `order:${order.publicId}:payment-confirmed`,
-          userId: order.userId,
-          title: "Payment confirmed",
-          body: "Your payment was verified and your Order is approved for fulfilment.",
-          type: "payment_confirmed",
-          data: { orderId: order.publicId, paymentId: payment.publicId },
-        }).catch(() => undefined);
-      return;
-    }
-    payment.commerceStatus = CommercePaymentStatus.CONFIRMED;
-    payment.status = PaymentStatus.SUCCESSFUL;
-    payment.gatewayRef = providerId;
-    payment.providerEventId = providerEventId;
-    payment.paidAt = paidAt || new Date();
-    payment.amountSettled = payment.amount;
-    await payment.save();
-    await PaymentLink.updateMany(
-      { paymentId: String(payment._id), status: { $in: ["active", "processing"] } },
-      { $set: { status: "paid", usedAt: new Date() } },
-    );
-    if (order.commercePaymentMethod === "PAY_AT_HANDOVER") {
-      const group = payment.fulfilmentGroupId
-        ? await OrderFulfilmentGroup.findOne({ publicId: payment.fulfilmentGroupId }).lean()
-        : undefined;
-      const outstanding = await Payment.countDocuments({
-        orderId: String(order._id),
-        _id: { $ne: payment._id },
-        commerceStatus: { $ne: CommercePaymentStatus.CONFIRMED },
+    const handover = order.commercePaymentMethod === "PAY_AT_HANDOVER";
+    const group = handover && payment.fulfilmentGroupId
+      ? await OrderFulfilmentGroup.findOne({ publicId: payment.fulfilmentGroupId }).lean()
+      : undefined;
+    const orderKey = String(order.publicId || order.id);
+    const paymentKey = String(payment.publicId || payment._id);
+    const confirmedAt = paidAt || new Date();
+    let activated = false;
+
+    const session = await mongoose.startSession();
+    try {
+      await session.withTransaction(async () => {
+        activated = false;
+        const transition = await Payment.updateOne(
+          { _id: payment._id, commerceStatus: { $ne: CommercePaymentStatus.CONFIRMED } },
+          {
+            $set: {
+              commerceStatus: CommercePaymentStatus.CONFIRMED,
+              status: PaymentStatus.SUCCESSFUL,
+              gatewayRef: providerId,
+              ...(providerEventId ? { providerEventId } : {}),
+              paidAt: confirmedAt,
+              amountSettled: payment.amount,
+            },
+          },
+          { session },
+        );
+        const transitioned = transition.modifiedCount > 0;
+        await PaymentLink.updateMany(
+          { paymentId: String(payment._id), status: { $in: ["active", "processing"] } },
+          { $set: { status: "paid", usedAt: new Date() } },
+          { session },
+        );
+
+        if (handover) {
+          // Nothing to repair for handover payments: only the first transition acts.
+          if (!transitioned) return;
+          const outstanding = await Payment.countDocuments({
+            orderId: String(order._id),
+            _id: { $ne: payment._id },
+            commerceStatus: { $ne: CommercePaymentStatus.CONFIRMED },
+          }).session(session);
+          await Order.updateOne(
+            { _id: order._id },
+            {
+              $set: {
+                commercePaymentStatus: outstanding ? CommercePaymentStatus.DUE_AT_HANDOVER : CommercePaymentStatus.CONFIRMED,
+                paymentStatus: outstanding ? PaymentStatus.PENDING : PaymentStatus.SUCCESSFUL,
+              },
+              $push: { timeline: timelineEntry("HANDOVER_PAYMENT_CONFIRMED", "PAYSTACK_WEBHOOK") },
+            },
+            { session },
+          );
+          await Shipment.findOneAndUpdate(
+            {
+              orderId: order.id,
+              ...(group?.sourceStateId ? { sourceStateId: group.sourceStateId } : {}),
+              status: ShipmentStatus.AWAITING_HANDOVER_PAYMENT,
+              releaseStatus: "AWAITING_HANDOVER_PAYMENT",
+            },
+            {
+              $set: { status: ShipmentStatus.RELEASE_APPROVED, releaseStatus: "RELEASE_APPROVED" },
+              $push: { trackingEvents: { status: ShipmentStatus.RELEASE_APPROVED, at: new Date(), actorId: "PAYSTACK_WEBHOOK", note: "Verified handover payment" } },
+              $inc: { version: 1 },
+            },
+            { session },
+          );
+          await emitOutbox([{
+            aggregateType: "payment",
+            aggregateId: String(payment._id),
+            eventType: "PAYMENT_CONFIRMED_EFFECTS",
+            payload: { paymentId: paymentKey, orderId: orderKey, flow: "handover" },
+          }], session);
+          activated = true;
+          return;
+        }
+
+        // Prepaid: activate the order the first time, or repair one left
+        // inactive by a confirmation that predates this transaction.
+        const activate = await Order.updateOne(
+          { _id: order._id, commercePaymentStatus: { $ne: CommercePaymentStatus.CONFIRMED } },
+          {
+            $set: {
+              commercePaymentStatus: CommercePaymentStatus.CONFIRMED,
+              commerceStatus: CommerceOrderStatus.APPROVED_FOR_FULFILMENT,
+              paymentStatus: PaymentStatus.SUCCESSFUL,
+              status: OrderStatus.APPROVED_FOR_FULFILMENT,
+            },
+            $push: { timeline: timelineEntry(CommerceOrderStatus.APPROVED_FOR_FULFILMENT, "PAYSTACK_WEBHOOK") },
+          },
+          { session },
+        );
+        if (!transitioned && !activate.modifiedCount) return;
+        if (order.userId) {
+          // Hook Coin is pure DB work keyed on the order, so it commits with
+          // the payment and the success screen can show it immediately.
+          await this.credits.earnOnOrder({
+            userId: order.userId,
+            orderId: orderKey,
+            subtotalMinor: Number(order.subtotalMinor ?? Math.round(Number(order.subtotal || 0) * 100)),
+          }, session);
+        }
+        await emitOutbox([
+          {
+            aggregateType: "order",
+            aggregateId: order.id,
+            eventType: "ORDER_APPROVED_FOR_FULFILMENT",
+            payload: this.approvedPayload(order),
+          },
+          {
+            aggregateType: "payment",
+            aggregateId: String(payment._id),
+            eventType: "PAYMENT_CONFIRMED_EFFECTS",
+            payload: { paymentId: paymentKey, orderId: orderKey, flow: "prepaid" },
+          },
+        ], session);
+        activated = true;
       });
-      order.commercePaymentStatus = outstanding ? CommercePaymentStatus.DUE_AT_HANDOVER : CommercePaymentStatus.CONFIRMED;
-      order.paymentStatus = outstanding ? PaymentStatus.PENDING : PaymentStatus.SUCCESSFUL;
-      order.timeline = appendTimeline(order, "HANDOVER_PAYMENT_CONFIRMED", "PAYSTACK_WEBHOOK");
-      await order.save();
-      this.publishOrderUpdate(order);
-      await Shipment.findOneAndUpdate(
-        {
-          orderId: order.id,
-          ...(group?.sourceStateId ? { sourceStateId: group.sourceStateId } : {}),
-          status: ShipmentStatus.AWAITING_HANDOVER_PAYMENT,
-          releaseStatus: "AWAITING_HANDOVER_PAYMENT",
-        },
-        {
-          $set: { status: ShipmentStatus.RELEASE_APPROVED, releaseStatus: "RELEASE_APPROVED" },
-          $push: { trackingEvents: { status: ShipmentStatus.RELEASE_APPROVED, at: new Date(), actorId: "PAYSTACK_WEBHOOK", note: "Verified handover payment" } },
-          $inc: { version: 1 },
-        },
-        { returnDocument: "after" },
-      );
-      if (order.userId) {
-        await createCommerceNotification({
-          eventKey: `order:${order.publicId}:handover-payment-confirmed`,
-          userId: order.userId,
-          title: "Handover payment confirmed",
-          body: "Your payment was verified. Your delivery can now be released.",
-          type: "payment_confirmed",
-          data: { orderId: order.publicId, paymentId: payment.publicId },
-        }).catch(() => undefined);
-      }
-      return;
+    } finally {
+      await session.endSession();
     }
-    order.commercePaymentStatus = CommercePaymentStatus.CONFIRMED;
-    order.commerceStatus = CommerceOrderStatus.APPROVED_FOR_FULFILMENT;
-    order.paymentStatus = PaymentStatus.SUCCESSFUL;
-    order.status = OrderStatus.APPROVED_FOR_FULFILMENT;
-    order.timeline = appendTimeline(order, CommerceOrderStatus.APPROVED_FOR_FULFILMENT, "PAYSTACK_WEBHOOK");
-    await order.save();
-    this.publishOrderUpdate(order);
-    await this.emitOrderApproved(order);
-    if (order.userId) {
-      // A referrer's bonus is only released once the person they referred has
-      // actually paid for something, which is what stops signup farming.
-      // qualify() is idempotent, so a replayed webhook cannot pay twice.
-      if (await this.referrals.isFirstPaidOrder(order.userId, String(order.id))) {
-        await this.referrals.qualify(order.userId, String(order.publicId || order.id));
-      }
-      // Hook Coin earned back on the order. Credited here rather than at
-      // delivery so the success screen can show a figure that is already
-      // true; keyed on the order, so a replayed webhook cannot double-credit.
-      await this.credits.earnOnOrder({
-        userId: order.userId,
-        orderId: String(order.publicId || order.id),
-        subtotalMinor: Number(order.subtotalMinor ?? Math.round(Number(order.subtotal || 0) * 100)),
-      }).catch(() => undefined);
-      await createCommerceNotification({
-        eventKey: `order:${order.publicId}:payment-confirmed`,
-        userId: order.userId,
-        title: "Payment confirmed",
-        body: "Your payment was verified and your Order is approved for fulfilment.",
-        type: "payment_confirmed",
-        data: { orderId: order.publicId, paymentId: payment.publicId },
-      }).catch(() => undefined);
-      const customer = await User.findById(order.userId).select('email firstName').lean() as any;
-      if (customer?.email) {
-        await this.email.sendPaymentConfirmed({
-          to: customer.email,
-          name: customer.firstName,
-          orderCode: order.publicId || String(order.id),
-          amount: Number(order.totalMinor || 0) / 100,
-        }).catch(() => undefined);
-      }
+
+    // Best-effort immediacy only; the outbox consumer delivers the same
+    // update if this process dies here.
+    if (activated) {
+      wakeOutbox();
+      const fresh = await Order.findById(order._id).lean({ virtuals: true });
+      if (fresh) this.publishOrderUpdate(fresh);
     }
   }
 
-  async emitOrderApproved(order: Order) {
-    try {
-      await CommerceOutboxEvent.create({
-        publicId: await nextPublicId("event"),
-        aggregateType: "order",
-        aggregateId: order.id,
-        eventType: "ORDER_APPROVED_FOR_FULFILMENT",
-        eventVersion: 1,
-        payload: {
-          orderId: order.publicId,
-          stateId: order.sourceStateId,
-          channel: order.channel,
-          deliveryMethod: order.deliveryMethod,
-          paymentMethod: order.commercePaymentMethod,
-          approvedAt: new Date().toISOString(),
-        },
-        status: "pending",
-        attempts: 0,
-        availableAt: new Date(),
+  private approvedPayload(order: any) {
+    return {
+      orderId: order.publicId,
+      stateId: order.sourceStateId,
+      channel: order.channel,
+      deliveryMethod: order.deliveryMethod,
+      paymentMethod: order.commercePaymentMethod,
+      approvedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Outbox consumer for PAYMENT_CONFIRMED_EFFECTS: referral bonus, customer
+   * notification and email. Each step is keyed (ledger key, notification
+   * eventKey), so a replay after a partial run is harmless. Errors propagate
+   * so the outbox retries and, eventually, dead-letters for review.
+   */
+  async deliverPaymentConfirmedEffects(event: { payload: Record<string, any> }) {
+    const { orderId, paymentId, flow } = event.payload;
+    const order = await Order.findOne(identity(String(orderId))).lean({ virtuals: true }) as any;
+    if (!order) return;
+    this.publishOrderUpdate(order);
+    if (!order.userId) return;
+    if (flow === "handover") {
+      await createCommerceNotification({
+        eventKey: `order:${order.publicId}:handover-payment-confirmed`,
+        userId: order.userId,
+        title: "Handover payment confirmed",
+        body: "Your payment was verified. Your delivery can now be released.",
+        type: "payment_confirmed",
+        data: { orderId: order.publicId, paymentId },
       });
-    } catch (error: any) {
-      if (error?.code !== 11000) throw error;
+      return;
     }
+    // A referrer's bonus is only released once the person they referred has
+    // actually paid for something, which is what stops signup farming.
+    if (await this.referrals.isFirstPaidOrder(order.userId, String(order._id))) {
+      await this.referrals.qualify(order.userId, String(order.publicId || order._id));
+    }
+    const earned = await CreditLedger.findOne({
+      userId: String(order.userId),
+      orderId: String(order.publicId || order._id),
+      type: "order_earn",
+      amountMinor: { $gt: 0 },
+    }).select("amountMinor").lean();
+    if (earned) await this.credits.announceEarn(String(order.userId), String(order.publicId || order._id), Number(earned.amountMinor));
+    await createCommerceNotification({
+      eventKey: `order:${order.publicId}:payment-confirmed`,
+      userId: order.userId,
+      title: "Payment confirmed",
+      body: "Your payment was verified and your Order is approved for fulfilment.",
+      type: "payment_confirmed",
+      data: { orderId: order.publicId, paymentId },
+    });
+    const customer = await User.findById(order.userId).select("email firstName").lean() as any;
+    if (customer?.email) {
+      await this.email.sendPaymentConfirmed({
+        to: customer.email,
+        name: customer.firstName,
+        orderCode: order.publicId || String(order._id),
+        amount: Number(order.totalMinor || 0) / 100,
+      });
+    }
+  }
+
+  /** Kept for callers outside a transaction (e.g. pay-on-delivery approval). */
+  async emitOrderApproved(order: Order, session?: ClientSession) {
+    await emitOutbox([{
+      aggregateType: "order",
+      aggregateId: order.id,
+      eventType: "ORDER_APPROVED_FOR_FULFILMENT",
+      payload: this.approvedPayload(order),
+    }], session);
   }
 
   private publishOrderUpdate(order: any) {
@@ -504,31 +665,108 @@ export class PaymentService {
     };
   }
 
+  /**
+   * Issues a provider refund exactly once per idempotency key.
+   *
+   * The amount is reserved on the payment with a guarded atomic update BEFORE
+   * the provider is called, so two concurrent refunds cannot both pass the
+   * balance check. A definitive provider rejection releases the reservation.
+   * An ambiguous one (timeout, network error, 5xx) keeps it and throws
+   * PROVIDER_OUTCOME_UNKNOWN: the money may have moved, so the caller must
+   * reconcile with reconcileRefund() rather than call the provider again.
+   */
   async refund(
     paymentIdentifier: string,
     amountMinor: number,
-    _idempotencyKey: string,
+    idempotencyKey: string,
+    options: { alreadyReserved?: boolean } = {},
   ): Promise<{ providerReference?: string }> {
     const payment = await Payment.findOne({
       ...identity(paymentIdentifier),
     });
     if (!payment) throw new HttpError(404, 'Payment record not found', undefined, 'PAYMENT_RECORD_MISSING');
     const captured = Number(payment.amountMinor || Math.round(Number(payment.amount || 0) * 100));
-    const refunded = Number(payment.refundedAmount || 0);
-    if (!Number.isSafeInteger(amountMinor) || amountMinor < 1 || amountMinor > captured - refunded) {
+    if (!Number.isSafeInteger(amountMinor) || amountMinor < 1 || amountMinor > captured) {
       throw new HttpError(409, 'Refund exceeds the captured payment balance', undefined, 'REFUND_LIMIT_EXCEEDED');
     }
     if (!payment.transactionRef || String(payment.gateway) !== 'paystack') {
       throw new HttpError(409, 'This captured payment cannot be refunded through its provider', undefined, 'PAYMENT_METHOD_NOT_ALLOWED');
     }
-    const result = await paymentProvider(payment.gateway as ProviderName).refund({ reference: payment.transactionRef, amountMinor, reason: _idempotencyKey });
-    payment.refundedAmount = refunded + amountMinor;
-    payment.commerceStatus = payment.refundedAmount >= captured ? CommercePaymentStatus.REFUNDED : CommercePaymentStatus.REFUND_PENDING;
-    payment.status = payment.refundedAmount >= captured ? PaymentStatus.REFUNDED : PaymentStatus.PARTIALLY_REFUNDED;
-    payment.refundedAt = new Date();
-    payment.gatewayResponse = { ...(payment.gatewayResponse || {}), lastRefundReference: result.providerReference, lastRefundAt: new Date() };
-    await payment.save();
+    if (!options.alreadyReserved) {
+      const reserved = await Payment.updateOne(
+        {
+          _id: payment._id,
+          $expr: { $lte: [{ $add: [{ $ifNull: ['$refundedAmount', 0] }, amountMinor] }, captured] },
+        },
+        { $inc: { refundedAmount: amountMinor } },
+      );
+      if (!reserved.modifiedCount) {
+        throw new HttpError(409, 'Refund exceeds the captured payment balance', undefined, 'REFUND_LIMIT_EXCEEDED');
+      }
+    }
+    let result: { providerReference: string };
+    try {
+      result = await paymentProvider(payment.gateway as ProviderName).refund({
+        reference: payment.transactionRef,
+        amountMinor,
+        reason: 'Refund from Hook',
+        idempotencyKey,
+      });
+    } catch (error) {
+      if (isAmbiguousProviderError(error)) {
+        throw new HttpError(
+          503,
+          'The refund outcome is unknown. It will be verified before any retry.',
+          { unknown: true },
+          'PROVIDER_OUTCOME_UNKNOWN',
+        );
+      }
+      await this.releaseRefundReservation(String(payment._id), amountMinor);
+      throw error;
+    }
+    await this.settleRefund(String(payment._id), captured, result.providerReference);
     return result;
+  }
+
+  /** Asks the provider whether a refund with this key was actually created. */
+  async reconcileRefund(paymentIdentifier: string, amountMinor: number, idempotencyKey: string) {
+    const payment = await Payment.findOne({ ...identity(paymentIdentifier) }).lean();
+    if (!payment?.transactionRef) throw new HttpError(404, 'Payment record not found', undefined, 'PAYMENT_RECORD_MISSING');
+    const found = await paymentProvider(payment.gateway as ProviderName).lookupRefund({
+      reference: payment.transactionRef,
+      amountMinor,
+      idempotencyKey,
+    });
+    if (found) {
+      const captured = Number(payment.amountMinor || Math.round(Number(payment.amount || 0) * 100));
+      await this.settleRefund(String(payment._id), captured, found.providerReference);
+    }
+    return found;
+  }
+
+  /** Gives back an amount reserved for a refund the provider definitively rejected. */
+  async releaseRefundReservation(paymentId: string, amountMinor: number) {
+    await Payment.updateOne(
+      { _id: paymentId, refundedAmount: { $gte: amountMinor } },
+      { $inc: { refundedAmount: -amountMinor } },
+    );
+  }
+
+  private async settleRefund(paymentId: string, captured: number, providerReference?: string) {
+    const current = await Payment.findById(paymentId).select('refundedAmount').lean();
+    const full = Number(current?.refundedAmount || 0) >= captured;
+    await Payment.updateOne(
+      { _id: paymentId },
+      {
+        $set: {
+          commerceStatus: full ? CommercePaymentStatus.REFUNDED : CommercePaymentStatus.REFUND_PENDING,
+          status: full ? PaymentStatus.REFUNDED : PaymentStatus.PARTIALLY_REFUNDED,
+          refundedAt: new Date(),
+          'gatewayResponse.lastRefundReference': providerReference,
+          'gatewayResponse.lastRefundAt': new Date(),
+        },
+      },
+    );
   }
 
   private publicPayment(payment: any) {

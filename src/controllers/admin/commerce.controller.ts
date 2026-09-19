@@ -1,6 +1,9 @@
 import { createHash } from 'crypto';
 import { Request, Response } from 'express';
 import { PaymentService } from '@services/payment.service';
+import { AccountDeletionService } from '@services/account-deletion.service';
+import { AccountErasureService } from '@services/account-erasure.service';
+import { AccountDeletionRequest } from '@models/support/account-deletion-request.model';
 import { HttpError, sendSuccess } from '@utils/http';
 import { adminRepos, getPagination, paginated, routeParam } from './admin.helpers';
 import { auditAdminAction } from '@lib/audit';
@@ -9,6 +12,8 @@ import {
   CommerceSettings,
   IntegrationException,
 } from '@models/commerce/commerce.model';
+import { DeadLetterEvent } from '@models/platform/dead-letter-event.model';
+import { replayDeadLetter } from '@services/outbox.service';
 import { Order } from '@models/orders/order.model';
 import { Payment } from '@models/payments/payment.model';
 import { PaymentAttempt } from '@models/payments/payment-link.model';
@@ -19,6 +24,7 @@ import { recordAudit } from '@services/platform-audit.service';
 import { paymentProviderReadiness } from '@services/payments/provider-registry';
 import { clearInventorySettingsCache } from '@services/inventory-settings.service';
 import { publicCatalogCache } from '@lib/ttl-cache';
+import { sharedCache } from '@services/cache.service';
 
 export class AdminCommerceController {
   private paymentService = new PaymentService(adminRepos.payments(), adminRepos.orders(), adminRepos.escrowLedger());
@@ -33,27 +39,34 @@ export class AdminCommerceController {
   updateDeletion = async (req: Request, res: Response) => {
     const request = await adminRepos.deletionRequests().findOne({ where: { id: routeParam(req.params.id) } });
     if (!request) throw new HttpError(404, 'Deletion request not found');
-    if (req.body.status === 'anonymized') {
-      if (!request.identityVerifiedAt) throw new HttpError(409, 'Identity must be verified before anonymization');
-      if (request.coolingOffUntil > new Date()) throw new HttpError(409, 'The deletion cooling-off period has not ended');
-      const user = await adminRepos.users().findOne({ where: { id: request.userId } });
-      if (!user) throw new HttpError(404, 'User not found');
-      const anonymousKey = createHash('sha256').update(user.id).digest('hex').slice(0, 16);
-      Object.assign(user, {
-        email: `deleted-${anonymousKey}@anonymized.hook`, phone: undefined, password: undefined,
-        googleId: undefined, firstName: 'Deleted', lastName: 'User', avatarUrl: undefined,
-        address: undefined, preferences: undefined, refreshToken: undefined,
-        isActive: false, isEmailVerified: false, isPhoneVerified: false,
-        accountStatus: 'anonymized', deletedAt: new Date(),
-      });
-      await adminRepos.users().save(user);
-      request.anonymizedAt = new Date();
+    // Older admin builds send a status instead of an action.
+    const action = req.body.action
+      || (req.body.status === 'cancelled' ? 'cancel' : req.body.status === 'anonymized' ? 'erase_now' : undefined);
+    const deletions = new AccountDeletionService();
+    if (action === 'pause' || action === 'resume') {
+      const paused = action === 'pause';
+      const result = await AccountDeletionRequest.updateOne(
+        { _id: request.id, status: { $in: ['requested', 'identity_verified', 'cooling_off', 'approved'] } },
+        { $set: { paused } },
+      );
+      if (!result.modifiedCount && Boolean((request as any).paused) !== paused) throw new HttpError(409, 'Erasure has already started');
+    } else if (action === 'cancel') {
+      await deletions.cancelByAdmin(request.id);
+    } else if (action === 'erase_now') {
+      // The same claim the worker makes, so the two can never both erase.
+      const claimed: any = await AccountDeletionRequest.findOneAndUpdate(
+        { _id: request.id, status: 'cooling_off' },
+        { $set: { status: 'erasing', erasureStartedAt: new Date(), paused: false } },
+        { returnDocument: 'after' },
+      ).lean();
+      if (!claimed) throw new HttpError(409, 'This request cannot be erased right now');
+      const outcome = await new AccountErasureService().erase(claimed);
+      if (outcome === 'deferred') throw new HttpError(409, 'An order, refund or return is still in progress, so erasure was deferred', undefined, 'ACCOUNT_DELETION_BLOCKED');
+    } else if (req.body.assignedTo) {
+      await AccountDeletionRequest.updateOne({ _id: request.id }, { $set: { assignedTo: req.body.assignedTo } });
     }
-    Object.assign(request, req.body);
-    if (req.body.status === 'identity_verified') request.identityVerifiedAt = new Date();
-    await adminRepos.deletionRequests().save(request);
-    await auditAdminAction(req, 'account_deletion.update', 'account_deletion', request.id, { status: request.status });
-    sendSuccess(res, request);
+    await auditAdminAction(req, 'account_deletion.update', 'account_deletion', request.id, { action });
+    sendSuccess(res, await AccountDeletionRequest.findById(request.id).lean({ virtuals: true }));
   };
 
   refundRequests = async (req: Request, res: Response) => {
@@ -285,14 +298,43 @@ export class AdminCommerceController {
         .limit(100)
         .lean({ virtuals: true }),
     );
-  outbox = async (_req: Request, res: Response) =>
+  outbox = async (req: Request, res: Response) => {
+    const status = String(req.query.status || '');
     sendSuccess(
       res,
-      await CommerceOutboxEvent.find()
+      await CommerceOutboxEvent.find((['pending', 'processing', 'published', 'dead_letter'].includes(status) ? { status } : {}) as any)
+        .select('-payload')
         .sort({ createdAt: -1 })
         .limit(100)
         .lean({ virtuals: true }),
     );
+  };
+
+  /** Events that exhausted their retries. Payloads are never included. */
+  deadLetters = async (req: Request, res: Response) => {
+    const replayStatus = String(req.query.replayStatus || 'pending');
+    const filter = (['pending', 'replayed'].includes(replayStatus) ? { replayStatus } : {}) as any;
+    const [data, pendingCount] = await Promise.all([
+      DeadLetterEvent.find(filter).sort({ lastFailedAt: -1 }).limit(100).lean({ virtuals: true }),
+      DeadLetterEvent.countDocuments({ replayStatus: 'pending' }),
+    ]);
+    sendSuccess(res, { data, pendingCount });
+  };
+
+  replayDeadLetter = async (req: Request, res: Response) => {
+    const id = routeParam(req.params.id);
+    if (!isValidObjectId(id)) throw new HttpError(400, 'Invalid dead-letter id');
+    const result = await replayDeadLetter(id, req.user!.sub);
+    if (!result) throw new HttpError(404, 'Dead-letter event not found');
+    await recordAudit(req, {
+      action: 'commerce.outbox.replay',
+      entityType: 'dead_letter_event',
+      entityId: id,
+      after: result,
+    });
+    // A second replay finds the event no longer dead-lettered: report, don't fail.
+    sendSuccess(res, result);
+  };
   podSettings = async (_req: Request, res: Response) =>
     sendSuccess(res, await this.pod.getSettings());
   updatePodSettings = async (req: Request, res: Response) => {
@@ -353,6 +395,8 @@ export class AdminCommerceController {
     ).lean();
     clearInventorySettingsCache();
     publicCatalogCache.clear();
+    sharedCache.noteInvalidated('catalog');
+    void sharedCache.bumpVersion('catalog');
     await recordAudit(req, {
       action: 'commerce.inventory_settings.update',
       entityType: 'commerce_settings',

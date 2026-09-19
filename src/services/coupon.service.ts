@@ -1,3 +1,4 @@
+import type { ClientSession } from 'mongoose';
 import { Coupon } from '@models/promotions/coupon.model';
 import { CouponRedemption } from '@models/promotions/coupon-redemption.model';
 import { nextPublicId } from '@services/public-id.service';
@@ -106,9 +107,13 @@ export class CouponService {
     orderId: string;
     discountMinor: number;
     idempotencyKey: string;
-  }) {
+  }, session?: ClientSession) {
+    const idempotencyKey = `coupon:${input.idempotencyKey}`;
+    // Probe first: a duplicate-key error would abort an enclosing transaction.
+    const existing = await CouponRedemption.findOne({ idempotencyKey }).session(session ?? null).lean({ virtuals: true });
+    if (existing) return existing;
     try {
-      const redemption = await CouponRedemption.create({
+      const [redemption] = await CouponRedemption.create([{
         publicId: await nextPublicId('couponRedemption'),
         couponId: input.couponId,
         couponCode: input.couponCode,
@@ -116,13 +121,13 @@ export class CouponService {
         orderId: input.orderId,
         discountMinor: input.discountMinor,
         status: 'applied',
-        idempotencyKey: `coupon:${input.idempotencyKey}`,
-      });
-      await Coupon.updateOne({ _id: input.couponId }, { $inc: { usedCount: 1 } });
+        idempotencyKey,
+      }], { session });
+      await Coupon.updateOne({ _id: input.couponId }, { $inc: { usedCount: 1 } }, { session });
       return redemption;
     } catch (error) {
-      if ((error as { code?: number }).code === 11000) {
-        return CouponRedemption.findOne({ idempotencyKey: `coupon:${input.idempotencyKey}` }).lean({ virtuals: true });
+      if (!session && (error as { code?: number }).code === 11000) {
+        return CouponRedemption.findOne({ idempotencyKey }).lean({ virtuals: true });
       }
       throw error;
     }
@@ -139,19 +144,21 @@ export class CouponService {
    * because legacy rows may have been redeemed before redemptions were
    * tracked.
    */
-  async release(orderId: string) {
-    const redemptions = await CouponRedemption.find({ orderId, status: 'applied' }).lean();
+  async release(orderId: string, session?: ClientSession) {
+    const redemptions = await CouponRedemption.find({ orderId, status: 'applied' }).session(session ?? null).lean();
     let released = 0;
     for (const redemption of redemptions) {
       const claimed = await CouponRedemption.findOneAndUpdate(
         { _id: redemption._id, status: 'applied' },
         { $set: { status: 'released', releasedAt: new Date() } },
+        { session },
       ).lean();
       if (!claimed) continue;
       released += 1;
       await Coupon.updateOne(
         { _id: redemption.couponId, usedCount: { $gt: 0 } },
         { $inc: { usedCount: -1 } },
+        { session },
       );
     }
     return released;

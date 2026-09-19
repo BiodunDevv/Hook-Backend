@@ -95,6 +95,20 @@ export type ErrorCode =
   | 'AVAILABILITY_CHECK_NOT_PENDING'
   | 'ITEMS_NOT_VERIFIED'
   | 'ITEMS_NOT_CONFIRMED'
+  | 'TOO_MANY_ATTEMPTS'
+  | 'ACCOUNT_DELETION_IN_PROGRESS'
+  | 'ACCOUNT_DELETION_BLOCKED'
+  | 'ACCOUNT_DELETION_SCHEDULED'
+  | 'PROVIDER_OUTCOME_UNKNOWN'
+  | 'DOWNSTREAM_FAILED'
+  | 'DEPENDENCY_UNAVAILABLE'
+  | 'OPERATION_IN_PROGRESS'
+  | 'IDEMPOTENCY_KEY_REQUIRED'
+
+/** True for a MongoDB duplicate-key (E11000) error, i.e. a unique index rejected the write. */
+export function isDuplicateKeyError(error: unknown): boolean {
+  return Boolean(error) && (error as { code?: number }).code === 11000;
+}
 
 export class HttpError extends Error {
   constructor(

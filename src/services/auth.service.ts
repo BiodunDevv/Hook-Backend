@@ -2,6 +2,7 @@ import type { MongoRepository as Repository } from '@lib/mongo-repository';
 import { createHash, randomBytes } from 'crypto';
 import { AccountStatus, AccountType, ScopeType, UserRole } from '@lib/constants';
 import { comparePassword, hashPassword } from '@lib/security';
+import { AccountDeletionService } from '@services/account-deletion.service';
 import { EmailService } from '@emails/email.service';
 import { Otp } from '@models/auth/otp.model';
 import { SignupSession } from '@models/auth/signup-session.model';
@@ -132,7 +133,7 @@ export class AuthService {
       throw new HttpError(403, 'Set your password from the email sent after checkout before signing in');
     }
     if (user.accountStatus && user.accountStatus !== AccountStatus.ACTIVE) {
-      throw new HttpError(403, 'This account is not available for sign in', undefined, 'ACCESS_DENIED');
+      await this.rejectUnavailable(user);
     }
 
     user.lastLoginAt = new Date();
@@ -163,7 +164,7 @@ export class AuthService {
       }
       user.accountType = AccountType.CUSTOMER;
       if (!user.isActive || (user.accountStatus && user.accountStatus !== AccountStatus.ACTIVE)) {
-        throw new HttpError(403, 'This account is not available for sign in', undefined, 'ACCESS_DENIED');
+        await this.rejectUnavailable(user);
       }
       user.googleId = user.googleId || payload.sub;
       user.email = user.email || email;
@@ -247,7 +248,7 @@ export class AuthService {
       }
       user.accountType = AccountType.CUSTOMER;
       if (!user.isActive || (user.accountStatus && user.accountStatus !== AccountStatus.ACTIVE)) {
-        throw new HttpError(403, 'This account is not available for sign in', undefined, 'ACCESS_DENIED');
+        await this.rejectUnavailable(user);
       }
       user.appleId = user.appleId || payload.sub;
       user.firstName = user.firstName || input.firstName || '';
@@ -541,6 +542,27 @@ export class AuthService {
     const user = await this.userRepo.findOne({ where: { id: userId } });
     if (!user) throw new HttpError(404, 'User not found');
     return presentAccountUser(user);
+  }
+
+  /**
+   * Called only after the caller has proven who they are. A customer whose own
+   * deletion request is in its cooling-off window is told so, with the date and
+   * a way back, instead of the generic denial that left them with no way to
+   * change their mind.
+   */
+  private async rejectUnavailable(user: { id?: string; _id?: unknown; accountStatus?: string }): Promise<never> {
+    if (user.accountStatus === AccountStatus.DELETION_REQUESTED) {
+      const scheduledFor = await new AccountDeletionService().scheduledFor(String(user.id || user._id));
+      if (scheduledFor) {
+        throw new HttpError(
+          403,
+          'Your account is scheduled for deletion. You can restore it until then.',
+          { scheduledFor: scheduledFor.toISOString() },
+          'ACCOUNT_DELETION_SCHEDULED',
+        );
+      }
+    }
+    throw new HttpError(403, 'This account is not available for sign in', undefined, 'ACCESS_DENIED');
   }
 
   private async createOtp(email: string, type: Otp['type']) {

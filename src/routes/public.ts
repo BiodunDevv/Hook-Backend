@@ -7,6 +7,23 @@ import { MarketAssociateMarketVendorController } from '@controllers/market-vendo
 import { PaymentLinkController } from '@controllers/payment-link.controller';
 import { paymentLinkInitializeSchema } from '@validations/commerce.schemas';
 import { AppReleasesController } from '@controllers/admin/app-releases.controller';
+import { AccountDeletionController } from '@controllers/account-deletion.controller';
+import { rateLimit } from '@middleware/security';
+import { sha256 } from '@services/account-deletion.service';
+import {
+  publicDeletionCancelSchema,
+  publicDeletionCodeSchema,
+  publicDeletionProofSchema,
+  publicDeletionRequestSchema,
+} from '@validations/common.schemas';
+
+// Deletion endpoints check passwords and are reachable without signing in, so
+// they are throttled twice: per target email (stops guessing one account from
+// many IPs) and per IP (stops sweeping many accounts from one).
+const targetEmail = (req: { body?: { email?: unknown } }) => `email:${sha256(String(req.body?.email || '').toLowerCase().trim()).slice(0, 24)}`;
+const deletionByEmail = rateLimit('deletion-email', { windowMs: 15 * 60_000, max: 8, key: targetEmail, message: 'Too many attempts for this account. Please try again in a few minutes.' });
+const deletionByIp = rateLimit('deletion-ip', { windowMs: 15 * 60_000, max: 30, message: 'Too many attempts. Please try again in a few minutes.' });
+const deletionCodeByEmail = rateLimit('deletion-code-email', { windowMs: 15 * 60_000, max: 3, key: targetEmail, message: 'A code was sent recently. Please check your email or wait a few minutes.' });
 
 export function createPublicRouter() {
   const router = Router();
@@ -16,6 +33,12 @@ export function createPublicRouter() {
   router.get('/public/app-release', asyncHandler(new AppReleasesController().publicPolicy));
 
   router.get('/public/legal/:type', asyncHandler(controller.getLegalContent));
+
+  const accountDeletion = new AccountDeletionController();
+  router.post('/public/account-deletion/code', deletionByIp, validateBody(publicDeletionCodeSchema), deletionCodeByEmail, asyncHandler(accountDeletion.sendCode));
+  router.post('/public/account-deletion/request', deletionByIp, validateBody(publicDeletionRequestSchema), deletionByEmail, asyncHandler(accountDeletion.request));
+  router.post('/public/account-deletion/status', deletionByIp, validateBody(publicDeletionProofSchema), deletionByEmail, asyncHandler(accountDeletion.status));
+  router.post('/public/account-deletion/cancel', deletionByIp, validateBody(publicDeletionCancelSchema), deletionByEmail, asyncHandler(accountDeletion.cancel));
 
   router.get('/public/payment-links/:token', asyncHandler(paymentLinks.detail));
   router.post('/public/payment-links/:token/initialize', validateBody(paymentLinkInitializeSchema), asyncHandler(paymentLinks.initialize));

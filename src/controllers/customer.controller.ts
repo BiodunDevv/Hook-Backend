@@ -424,29 +424,5 @@ export class CustomerController {
     sendCreated(res, request);
   };
 
-  requestDeletion = async (req: Request, res: Response) => {
-    if (!req.user?.sub)
-      throw new HttpError(401, "A registered account is required");
-    const repo = AppDataSource.getRepository(AccountDeletionRequest);
-    const existing = await repo.findOne({
-      where: {
-        userId: req.user.sub,
-        status: { $nin: ["anonymized", "cancelled"] },
-      },
-    });
-    if (existing) return sendSuccess(res, existing);
-    const request = await repo.save(
-      repo.create({
-        userId: req.user.sub,
-        reason: req.body.reason,
-        status: "requested",
-        coolingOffUntil: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-      }),
-    );
-    await AppDataSource.getRepository(User).update(req.user.sub, {
-      accountStatus: "deletion_requested",
-    });
-    sendCreated(res, request);
-  };
 
 }

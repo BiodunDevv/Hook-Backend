@@ -13,10 +13,10 @@ import { Payment } from "@models/payments/payment.model";
 import { User } from "@models/users/user.model";
 import { PaymentService } from "@services/payment.service";
 import { HttpError } from "@utils/http";
-import { isValidObjectId } from "mongoose";
+import mongoose, { isValidObjectId } from "mongoose";
 import { createCommerceNotification } from "@services/commerce-notification.service";
 import { restoreOrderIncentives } from "@services/order-restoration.service";
-import { appendTimeline, notifyStatus } from "@lib/order-timeline";
+import { appendTimeline, notifyStatus, timelineEntry } from "@lib/order-timeline";
 
 function orderIdentity(value: string) {
   return isValidObjectId(value)
@@ -108,6 +108,8 @@ export class PodService {
     const order = await Order.findOne(orderIdentity(orderId));
     if (!order || order.commercePaymentMethod !== "PAY_AT_HANDOVER")
       throw new HttpError(404, "Pay-at-Handover Order not found");
+    if (![CommerceOrderStatus.VERIFICATION_PENDING, CommerceOrderStatus.OPERATIONS_REVIEW].includes(order.commerceStatus as any))
+      throw new HttpError(409, "This Order was already decided", undefined, "INVALID_STATE_TRANSITION");
     const pod = (order.podReview as any) || {};
     if (decision === "APPROVE") {
       if (pod.callOutcome !== "CONFIRMED")
@@ -132,42 +134,62 @@ export class PodService {
           undefined,
           "POD_NOT_ELIGIBLE",
         );
-      order.commerceStatus = CommerceOrderStatus.APPROVED_FOR_FULFILMENT;
-      order.commercePaymentStatus = CommercePaymentStatus.DUE_AT_HANDOVER;
-      order.status = OrderStatus.APPROVED_FOR_FULFILMENT;
-      order.timeline = appendTimeline(order, CommerceOrderStatus.APPROVED_FOR_FULFILMENT, "POD_OPERATIONS", { actorId, reason });
-      await order.save();
-      await this.payments.approvePodPayment(order.id);
-      await this.payments.emitOrderApproved(order);
-    } else if (decision === "PREPAYMENT_REQUIRED") {
-      order.commercePaymentMethod = "PREPAID";
-      order.commercePaymentStatus = CommercePaymentStatus.PENDING;
-      order.commerceStatus = CommerceOrderStatus.AWAITING_PAYMENT;
-      order.status = OrderStatus.AWAITING_PAYMENT;
-      order.timeline = appendTimeline(order, "PREPAYMENT_REQUIRED", actorId, { reason });
-      await Payment.updateOne(
-        { orderId: order.id },
-        {
+      await this.transition(order, async (session, guard) => {
+        const moved = await Order.updateOne(guard, {
           $set: {
-            paymentMethod: "card",
-            gateway: "paystack",
-            commerceStatus: CommercePaymentStatus.PENDING,
+            commerceStatus: CommerceOrderStatus.APPROVED_FOR_FULFILMENT,
+            commercePaymentStatus: CommercePaymentStatus.DUE_AT_HANDOVER,
+            status: OrderStatus.APPROVED_FOR_FULFILMENT,
           },
-        },
-      );
-      await order.save();
+          $push: { timeline: timelineEntry(CommerceOrderStatus.APPROVED_FOR_FULFILMENT, "POD_OPERATIONS", { actorId, reason }) },
+        }, { session });
+        if (!moved.modifiedCount) return false;
+        const payment = await Payment.updateOne({ orderId: order.id }, { $set: { commerceStatus: CommercePaymentStatus.DUE_AT_HANDOVER } }, { session });
+        if (!payment.matchedCount) throw new HttpError(409, "Payment record is missing");
+        // Written with the approval, so an approved order can never be left
+        // without the event that starts fulfilment.
+        await this.payments.emitOrderApproved(order, session);
+        return true;
+      });
+    } else if (decision === "PREPAYMENT_REQUIRED") {
+      await this.transition(order, async (session, guard) => {
+        const moved = await Order.updateOne(guard, {
+          $set: {
+            commercePaymentMethod: "PREPAID",
+            commercePaymentStatus: CommercePaymentStatus.PENDING,
+            commerceStatus: CommerceOrderStatus.AWAITING_PAYMENT,
+            status: OrderStatus.AWAITING_PAYMENT,
+          },
+          $push: { timeline: timelineEntry("PREPAYMENT_REQUIRED", actorId, { reason }) },
+        }, { session });
+        if (!moved.modifiedCount) return false;
+        await Payment.updateOne(
+          { orderId: order.id },
+          { $set: { paymentMethod: "card", gateway: "paystack", commerceStatus: CommercePaymentStatus.PENDING } },
+          { session },
+        );
+        return true;
+      });
     } else {
-      order.commerceStatus = CommerceOrderStatus.CANCELLED;
-      order.status = OrderStatus.CANCELLED;
-      order.cancelledAt = new Date();
-      order.cancellationReason = reason;
-      order.timeline = appendTimeline(order, CommerceOrderStatus.CANCELLED, actorId, { reason });
-      await order.save();
-      // Same restoration as a customer-initiated cancellation.
-      await restoreOrderIncentives(String(order._id));
+      const cancelled = await this.transition(order, async (session, guard) => {
+        const moved = await Order.updateOne(guard, {
+          $set: {
+            commerceStatus: CommerceOrderStatus.CANCELLED,
+            status: OrderStatus.CANCELLED,
+            cancelledAt: new Date(),
+            cancellationReason: reason,
+          },
+          $push: { timeline: timelineEntry(CommerceOrderStatus.CANCELLED, actorId, { reason }) },
+        }, { session });
+        if (!moved.modifiedCount) return false;
+        // Same restoration as a customer-initiated cancellation, inside the
+        // same transaction so a failure cannot leave credits spent.
+        await restoreOrderIncentives(String(order._id), session);
+        return true;
+      });
       // A customer-initiated cancellation has its own dedicated email; an
       // operations rejection had none until now.
-      await notifyStatus(String(order._id), CommerceOrderStatus.CANCELLED);
+      if (cancelled) await notifyStatus(String(order._id), CommerceOrderStatus.CANCELLED);
     }
     if (order.userId) {
       const copy =
@@ -195,7 +217,31 @@ export class PodService {
         data: { orderId: order.publicId },
       }).catch(() => undefined);
     }
-    return order.toJSON();
+    const fresh = await Order.findById(order._id);
+    return (fresh || order).toJSON();
+  }
+
+  /**
+   * Runs one decision in a transaction, guarded on the status the decision was
+   * made against. Two operators (or a double click) deciding the same order
+   * cannot both succeed, and a decided order cannot be re-decided.
+   */
+  private async transition(
+    order: any,
+    apply: (session: mongoose.ClientSession, guard: Record<string, unknown>) => Promise<boolean>,
+  ) {
+    const guard = { _id: order._id, commerceStatus: order.commerceStatus, commercePaymentMethod: order.commercePaymentMethod };
+    const session = await mongoose.startSession();
+    let done = false;
+    try {
+      await session.withTransaction(async () => {
+        done = await apply(session, guard);
+      });
+    } finally {
+      await session.endSession();
+    }
+    if (!done) throw new HttpError(409, "This Order was already decided", undefined, "INVALID_STATE_TRANSITION");
+    return done;
   }
 
   async restoreCustomer(customerId: string, actorId: string, reason: string) {

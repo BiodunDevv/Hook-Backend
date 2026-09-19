@@ -20,10 +20,13 @@ export class FulfilmentController {
   marketAssociateAction = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.marketAssociateTransition(req.user!.sub, routeParam(req.params.id), routeParam(req.params.action), Number(req.body.version), req.body));
   marketAssociateIssue = async (req: Request, res: Response) => sendCreated(res, await fulfilmentService.marketAssociateIssue(req.user!.sub, routeParam(req.params.id), req.body));
   verifyItem = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.verifyItem(req.user!.sub, routeParam(req.params.id), routeParam(req.params.orderItemId), req.body));
+  marketAssociateItemIssue = async (req: Request, res: Response) => sendCreated(res, await fulfilmentService.marketAssociateItemIssue(req.user!.sub, routeParam(req.params.id), routeParam(req.params.orderItemId), req.body));
 
   controlTower = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.controlTower(actor(req), req.query as Record<string, unknown>));
   fulfilmentOrders = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.fulfilmentOrders(actor(req), req.query as Record<string, unknown>));
   adminTaskDetail = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.adminTaskDetail(actor(req), routeParam(req.params.id)));
+  proposeItemResolution = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.proposeItemResolution(actor(req), routeParam(req.params.id), req.body));
+  completeItemAdjustment = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.completeItemAdjustment(actor(req), routeParam(req.params.id), req.body));
   assignmentMarketAssociates = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.assignmentMarketAssociates(actor(req), req.query as Record<string, unknown>));
   assignmentHubs = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.assignmentHubs(actor(req), req.query as Record<string, unknown>));
   reassignTask = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.reassignTask(actor(req), routeParam(req.params.id), req.body));
@@ -45,6 +48,7 @@ export class FulfilmentController {
     const order = await fulfilmentService.customerOrderProgress(req.user!.sub, routeParam(req.params.id));
     sendSuccess(res, order);
   };
+  customerItemResolution = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.customerItemResolution(req.user!.sub, routeParam(req.params.orderId), routeParam(req.params.id), req.body));
   customerReturn = async (req: Request, res: Response) => sendCreated(res, await fulfilmentService.createReturn(actor(req), routeParam(req.params.id), req.body));
 
   adminReturnReview = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.reviewReturn(actor(req), routeParam(req.params.id), req.body));

@@ -61,6 +61,8 @@ export function assertSafeEnvironment() {
       }
     }
     requireEnv('PAYSTACK_SECRET_KEY');
+    const packageCredentialKey = requireEnv('PACKAGE_CREDENTIAL_ENCRYPTION_KEY');
+    if (packageCredentialKey.length < 32) throw new Error('PACKAGE_CREDENTIAL_ENCRYPTION_KEY must contain at least 32 characters');
     requireEnv('GOOGLE_WEB_CLIENT_ID');
   }
 }

@@ -122,11 +122,19 @@ export interface PaymentWebhookEvent extends BaseEntity {
   failureCode?: string;
 }
 
+export const OUTBOX_EVENT_TYPES = [
+  "ORDER_APPROVED_FOR_FULFILMENT",
+  "PAYMENT_CONFIRMED_EFFECTS",
+  "ORDER_CREATED_EFFECTS",
+  "REFUND_PROCESSED_EFFECTS",
+] as const;
+export type OutboxEventType = (typeof OUTBOX_EVENT_TYPES)[number];
+
 export interface CommerceOutboxEvent extends BaseEntity {
   publicId: string;
-  aggregateType: "order";
+  aggregateType: "order" | "payment" | "refund";
   aggregateId: string;
-  eventType: "ORDER_APPROVED_FOR_FULFILMENT";
+  eventType: OutboxEventType;
   eventVersion: number;
   payload: Record<string, unknown>;
   status: "pending" | "processing" | "published" | "dead_letter";
@@ -134,6 +142,7 @@ export interface CommerceOutboxEvent extends BaseEntity {
   availableAt: Date;
   processedAt?: Date;
   lastError?: string;
+  firstFailedAt?: Date;
   lockedUntil?: Date;
   lockToken?: string;
 }
@@ -331,11 +340,11 @@ const webhookSchema = createSchema<PaymentWebhookEvent>({
 webhookSchema.index({ provider: 1, providerEventId: 1 }, { unique: true });
 const outboxSchema = createSchema<CommerceOutboxEvent>({
   publicId: { type: String, required: true, unique: true, index: true },
-  aggregateType: { type: String, enum: ["order"], default: "order" },
+  aggregateType: { type: String, enum: ["order", "payment", "refund"], default: "order" },
   aggregateId: { type: String, required: true, index: true },
   eventType: {
     type: String,
-    enum: ["ORDER_APPROVED_FOR_FULFILMENT"],
+    enum: [...OUTBOX_EVENT_TYPES],
     required: true,
   },
   eventVersion: { type: Number, default: 1 },
@@ -350,6 +359,7 @@ const outboxSchema = createSchema<CommerceOutboxEvent>({
   availableAt: { type: Date, default: Date.now, index: true },
   processedAt: { type: Date },
   lastError: { type: String, maxlength: 1000 },
+  firstFailedAt: { type: Date },
   lockedUntil: { type: Date, index: true },
   lockToken: { type: String, index: true, sparse: true },
   deletedAt: { type: Date },
@@ -388,6 +398,12 @@ const exceptionSchema = createSchema<IntegrationException>({
   resolvedAt: { type: Date },
   deletedAt: { type: Date },
 });
+// One open exception per (provider, reference, type): a webhook Paystack keeps
+// retrying used to add a fresh row on every attempt. Resolved rows are exempt.
+exceptionSchema.index(
+  { provider: 1, reference: 1, type: 1 },
+  { unique: true, partialFilterExpression: { status: "open", reference: { $type: "string" } } },
+);
 const podCallSchema = createSchema<PodCallRecord>({
   orderId: { type: String, required: true, index: true },
   outcome: {

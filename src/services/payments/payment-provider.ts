@@ -27,7 +27,8 @@ export interface PaymentProvider {
     reference: string;
   }>;
   verify(reference: string): Promise<ProviderTransaction>;
-  refund(input: { reference: string; amountMinor: number; reason?: string }): Promise<{ providerReference: string }>;
+  refund(input: { reference: string; amountMinor: number; reason?: string; idempotencyKey?: string }): Promise<{ providerReference: string }>;
+  lookupRefund(input: { reference: string; amountMinor: number; idempotencyKey: string }): Promise<{ providerReference: string } | undefined>;
   parseWebhook(
     rawBody: Buffer,
     signature: string,

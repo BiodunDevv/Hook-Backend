@@ -1,3 +1,6 @@
+import mongoose from 'mongoose';
+import { CreditService } from '@services/credit.service';
+import { PaymentLink } from '@models/payments/payment-link.model';
 import type { MongoRepository as Repository } from '@lib/mongo-repository';
 import { AppDataSource } from '@config/data-source';
 import { AccountStatus, AccountType, DEFAULT_DELIVERY_FEE, DELIVERY_SLA_HOURS, OrderStatus, OrderType, PaymentMode, PaymentStatus, POD_PAUSED, ProductStatus, ScopeType } from '@lib/constants';
@@ -12,6 +15,7 @@ import { Product } from '@models/products/product.model';
 import { Payment } from '@models/payments/payment.model';
 import { OrderFulfilmentGroup } from '@models/orders/order-fulfilment-group.model';
 import { Shipment } from '@models/fulfilment/fulfilment.model';
+import { ItemResolution } from '@models/fulfilment/item-resolution.model';
 import { User } from '@models/users/user.model';
 import { CustomerOwner } from './cart.service';
 import { HttpError } from '@utils/http';
@@ -21,7 +25,7 @@ import { nextPublicId } from './public-id.service';
 import { publishRealtime } from './realtime.service';
 import { createCommerceNotification } from './commerce-notification.service';
 import { customerStatusLabel } from '@lib/order-status-labels';
-import { appendTimeline } from '@lib/order-timeline';
+import { appendTimeline, timelineEntry } from '@lib/order-timeline';
 import { restoreOrderIncentives } from './order-restoration.service';
 
 type CheckoutBody = Pick<Order, 'deliveryAddress' | 'deliveryNotes' | 'scheduledDeliveryAt' | 'guestEmail' | 'guestName' | 'paymentMode' | 'orderType' | 'giftRecipient'>;
@@ -311,11 +315,12 @@ export class OrderService {
     const identifier = id.match(/^[a-f\d]{24}$/i) ? { $or: [{ _id: id }, { publicId: id }, { orderCode: id }] } : { $or: [{ publicId: id }, { orderCode: id }] };
     const order = await Order.findOne({ ...identifier, ...this.ownerWhere(owner) }).lean({ virtuals: true });
     if (!order) throw new HttpError(404, 'Order not found');
-    const [items, payments, fulfilmentGroups, shipments] = await Promise.all([
+    const [items, payments, fulfilmentGroups, shipments, substitutions] = await Promise.all([
       OrderItem.find({ orderId: order.id }).lean({ virtuals: true }),
       Payment.find({ orderId: order.id }).select('-gatewayResponse -authorizationUrl -accessCode').lean({ virtuals: true }),
       OrderFulfilmentGroup.find({ orderId: order.id }).sort({ createdAt: 1 }).lean({ virtuals: true }),
       Shipment.find({ orderId: order.id }).sort({ createdAt: 1 }).lean({ virtuals: true }),
+      ItemResolution.find({ orderId: order.id, ...(order.userId ? { customerId: order.userId } : {}), status: { $in: ['CUSTOMER_APPROVAL_PENDING', 'PAYMENT_PENDING', 'REFUND_PENDING', 'DECLINED', 'RESOLVED'] } }).sort({ createdAt: -1 }).lean({ virtuals: true }),
     ]);
     const subtotalMinor = Number(order.subtotalMinor ?? Math.round(Number(order.subtotal || 0) * 100));
     const vatMinor = Number(order.vatMinor || 0);
@@ -412,6 +417,7 @@ export class OrderService {
       currency: order.currency || 'NGN',
       timeline: timelineFor(order, primaryShipment),
       deliveries,
+      substitutions: substitutions.map((entry: any) => ({ id: entry.publicId || entry.id, version: entry.version, status: entry.status, type: entry.type, summary: entry.summary, original: entry.originalSnapshot, proposal: entry.proposal, adjustmentMinor: entry.adjustmentMinor, adjustmentStatus: entry.adjustmentStatus, adjustmentAuthorizationUrl: entry.adjustmentAuthorizationUrl, customerDecision: entry.customerDecision })),
       canCancel: ['PENDING', 'AWAITING_PAYMENT'].includes(String(order.commerceStatus || order.status).toUpperCase())
         && !['CONFIRMED', 'PAID'].includes(String(order.commercePaymentStatus || order.paymentStatus).toUpperCase()),
     } as any;
@@ -421,16 +427,47 @@ export class OrderService {
     const order = await this.getCustomerOrder(owner, id);
     const stored = await Order.findOne({ $or: [{ publicId: order.id }, { orderCode: order.id }], userId: owner.userId });
     if (!stored || !order.canCancel) throw new HttpError(409, 'This order can no longer be cancelled', undefined, 'INVALID_STATE_TRANSITION');
-    stored.status = OrderStatus.CANCELLED;
-    stored.commerceStatus = 'CANCELLED';
-    stored.cancelledAt = new Date();
-    stored.cancellationReason = reason;
-    stored.timeline = appendTimeline(stored, 'CANCELLED', owner.userId, { actorType: 'customer' });
-    const saved = await stored.save();
-    // Hook Coin goes back to the wallet and the coupon use is freed up.
-    await restoreOrderIncentives(String(stored._id));
-    const { PaymentLink } = await import('@models/payments/payment-link.model');
-    await PaymentLink.updateMany({ orderId: stored.id, status: { $in: ['active', 'processing'] } }, { $set: { status: 'cancelled', cancelledAt: new Date() } });
+    // One transaction: the guarded status flip, released payment links and
+    // restored Hook Coin / coupon either all happen or none do. The guard
+    // means a payment that confirms while this request runs wins, instead of
+    // the cancel overwriting a paid order.
+    const session = await mongoose.startSession();
+    let saved: any;
+    try {
+      await session.withTransaction(async () => {
+        saved = await Order.findOneAndUpdate(
+          {
+            _id: stored._id,
+            userId: owner.userId,
+            commerceStatus: { $in: ['PENDING', 'AWAITING_PAYMENT'] },
+            commercePaymentStatus: { $nin: ['CONFIRMED', 'PAID'] },
+          } as any,
+          {
+            $set: {
+              status: OrderStatus.CANCELLED,
+              commerceStatus: 'CANCELLED',
+              cancelledAt: new Date(),
+              cancellationReason: reason,
+            },
+            $push: { timeline: timelineEntry('CANCELLED', owner.userId, { actorType: 'customer' }) },
+          },
+          { returnDocument: 'after', session },
+        ).lean({ virtuals: true });
+        if (!saved) return;
+        await restoreOrderIncentives(String(stored._id), session);
+        await PaymentLink.updateMany(
+          { orderId: stored.id, status: { $in: ['active', 'processing'] } },
+          { $set: { status: 'cancelled', cancelledAt: new Date() } },
+          { session },
+        );
+      });
+    } finally {
+      await session.endSession();
+    }
+    if (!saved) throw new HttpError(409, 'This order can no longer be cancelled', undefined, 'INVALID_STATE_TRANSITION');
+    if (owner.userId && Number(saved.creditsAppliedMinor || 0) > 0) {
+      await new CreditService().announceRefund(owner.userId, String(stored._id), Number(saved.creditsAppliedMinor)).catch(() => undefined);
+    }
     publishRealtime({ type: 'order.updated', entityId: saved.publicId || saved.id, version: Number(saved.__v || 1) }, { accountId: owner.userId, admin: true });
     if (owner.userId) {
       await createCommerceNotification({

@@ -79,20 +79,37 @@ export class PaystackProvider implements PaymentProvider {
     };
   }
 
-  async refund(input: { reference: string; amountMinor: number; reason?: string }) {
+  async refund(input: { reference: string; amountMinor: number; reason?: string; idempotencyKey?: string }) {
     const response = await this.request('/refund', {
       method: 'POST',
       body: JSON.stringify({
         transaction: input.reference,
         amount: String(input.amountMinor),
         customer_note: input.reason,
-        merchant_note: 'Hook fulfilment refund',
+        // Paystack has no idempotency header for refunds, so the key travels
+        // in the merchant note. lookupRefund() matches on it to find out
+        // whether a refund whose response was lost actually went through.
+        merchant_note: input.idempotencyKey ? `hook-refund:${input.idempotencyKey}` : 'Hook fulfilment refund',
       }),
     });
     const data = response.data as Record<string, any>;
     const providerReference = String(data?.id || data?.transaction || input.reference);
     if (!providerReference) throw new HttpError(502, 'Payment provider returned an invalid refund response', undefined, 'PAYMENT_PROVIDER_ERROR');
     return { providerReference };
+  }
+
+  /** Finds a refund previously created for this key, or undefined if none exists. */
+  async lookupRefund(input: { reference: string; amountMinor: number; idempotencyKey: string }) {
+    const response = await this.request(`/refund?reference=${encodeURIComponent(input.reference)}`, { method: 'GET' });
+    const rows = Array.isArray(response.data) ? (response.data as Array<Record<string, any>>) : [];
+    const note = `hook-refund:${input.idempotencyKey}`;
+    const match = rows.find(
+      (row) =>
+        String(row?.merchant_note || '') === note &&
+        Number(row?.amount) === input.amountMinor &&
+        !['failed', 'reversed'].includes(String(row?.status || '').toLowerCase()),
+    );
+    return match ? { providerReference: String(match.id || input.reference) } : undefined;
   }
 
   parseWebhook(rawBody: Buffer, signature: string) {
@@ -158,7 +175,7 @@ export class PaystackProvider implements PaymentProvider {
       throw new HttpError(
         502,
         "Payment provider could not process the request",
-        undefined,
+        { httpStatus: response.status },
         "PAYMENT_PROVIDER_ERROR",
       );
     return body;

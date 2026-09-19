@@ -4,6 +4,7 @@ import { AccountType, ProductAvailabilityStatus } from "@lib/constants";
 import { routeParam } from "@lib/api-utils";
 import { requireAccountType, requireAuth } from "@middleware/auth";
 import { validateBody } from "@middleware/validate";
+import { withIdempotency } from '@middleware/idempotency';
 import {
   HookPartner,
   MarketAssociateMarketAssignment,
@@ -28,7 +29,7 @@ import {
 } from "@validations/commerce.schemas";
 import { MarketAssociateMarketVendorController } from '@controllers/market-vendor.controller';
 import { availabilityConfirmSchema, availabilityReportSchema, marketVendorSchema, marketVendorUpdateSchema, vendorCollectionSchema } from '@validations/vendor.schemas';
-import { itemVerifySchema } from '@validations/fulfilment.schemas';
+import { itemIssueSchema, itemVerifySchema } from '@validations/fulfilment.schemas';
 import { Product } from '@models/products/product.model';
 import { CatalogAvailabilityService } from '@services/catalog-availability.service';
 import { AppDataSource } from '@config/data-source';
@@ -181,6 +182,16 @@ export function createMarketAssociateRouter() {
     "/fulfilments/:id/items/:orderItemId/verify",
     validateBody(itemVerifySchema),
     asyncHandler(fulfilment.verifyItem),
+  );
+  router.put(
+    "/fulfilments/:id/items/:orderItemId",
+    validateBody(itemVerifySchema),
+    asyncHandler(fulfilment.verifyItem),
+  );
+  router.post(
+    "/fulfilments/:id/items/:orderItemId/issues",
+    validateBody(itemIssueSchema),
+    asyncHandler(fulfilment.marketAssociateItemIssue),
   );
   router.post(
     "/fulfilments/:id/:action",
@@ -350,8 +361,8 @@ export function createPartnerRouter() {
   router.get("/orders", asyncHandler(commerce.orders));
   router.get("/fulfilment/custody", asyncHandler(fulfilment.partnerCustodyList));
   router.get("/fulfilment/custody/:orderId", asyncHandler(fulfilment.partnerCustody));
-  router.post("/fulfilment/custody/:id/receive", validateBody(z.object({ idempotencyKey: z.string().min(8).optional() }).strict()), asyncHandler(fulfilment.receiveCustody));
-  router.post("/fulfilment/custody/:id/release", validateBody(z.object({ code: z.string().regex(/^\d{6}$/), idempotencyKey: z.string().min(8).optional() }).strict()), asyncHandler(fulfilment.releaseCustody));
+  router.post("/fulfilment/custody/:id/receive", validateBody(z.object({ idempotencyKey: z.string().min(8).optional() }).strict()), withIdempotency({ operation: 'POST /fulfilment/custody/:id/receive', tier: 'financial' }), asyncHandler(fulfilment.receiveCustody));
+  router.post("/fulfilment/custody/:id/release", validateBody(z.object({ code: z.string().regex(/^\d{6}$/), idempotencyKey: z.string().min(8).optional() }).strict()), withIdempotency({ operation: 'POST /fulfilment/custody/:id/release', tier: 'financial' }), asyncHandler(fulfilment.releaseCustody));
   router.get("/commerce/config", asyncHandler(commerce.commerceConfig));
   router.post(
     "/orders/:orderId/payment-instructions",

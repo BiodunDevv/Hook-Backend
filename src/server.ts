@@ -1,17 +1,14 @@
 import dotenv from 'dotenv';
-import cron, { type ScheduledTask } from 'node-cron';
 import type { Server } from 'http';
 import mongoose from 'mongoose';
 import { createApp } from './app';
 import { assertSafeEnvironment } from './config/env';
 import { disconnectDatabase, initializeDatabase } from './config/data-source';
 import { ensurePlatformAccessCatalog } from './services/platform-bootstrap.service';
-import { expireNegotiationsAndQuotes } from './services/negotiation.service';
-import { startFulfilmentWorker, stopFulfilmentWorker } from './services/fulfilment-worker.service';
+import { startInProcessJobs, stopInProcessJobs } from './jobs/in-process';
+import { assertRedisConfig, closeRedis, connectRedis, describeRedis, type RedisStatus } from './config/redis';
+import { closeWakeQueue } from './jobs/wake';
 import { realtime } from './services/realtime.service';
-import { escalateOverdueAvailabilityChecks } from './services/catalog-availability.service';
-import { sendDailyAvailabilityDigests } from './services/availability-digest.service';
-import { deliverNegotiationStartNotifications } from './services/negotiation-notifications.service';
 
 dotenv.config({ quiet: true });
 
@@ -27,6 +24,8 @@ function printRuntimeServices() {
     : '📧 Email Service initialized (console fallback)');
 }
 
+let redisStatus: RedisStatus = { state: 'not_configured' };
+
 function printReady(port: number, apiPrefix: string) {
   const env = process.env.NODE_ENV || 'development';
   const serverUrl = env === 'production' && process.env.APP_URL?.startsWith('http')
@@ -40,8 +39,10 @@ function printReady(port: number, apiPrefix: string) {
     ['Docs', docsUrl],
     ['Env', env],
     ['DB', `MongoDB · ${mongoose.connection.name}`],
+    ['Cache', describeRedis(redisStatus)],
   ] as const;
-  const width = Math.max(46, ...rows.map(([label, value]) => label.length + value.length + 5));
+  // Each row renders as the label padded to 8 columns, then the value, inside 2+2 columns of margin.
+  const width = Math.max(46, ...rows.map(([, value]) => 8 + value.length + 6));
   const line = (value: string) => `║  ${value.padEnd(width - 4)}║`;
 
   console.log(`
@@ -62,25 +63,21 @@ ${rows.map(([label, value]) => line(`${label.padEnd(8)}${value}`)).join('\n')}
 }
 
 let server: Server | undefined;
-let expiryTimer: NodeJS.Timeout | undefined;
-let negotiationNotificationTimer: NodeJS.Timeout | undefined;
-let availabilityDigestTask: ScheduledTask | undefined;
 let shuttingDown = false;
 
 async function shutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`\n🛑 ${signal} received. Shutting down Hook API...`);
-  if (expiryTimer) clearInterval(expiryTimer);
-  if (negotiationNotificationTimer) clearInterval(negotiationNotificationTimer);
-  availabilityDigestTask?.stop();
-  stopFulfilmentWorker();
+  stopInProcessJobs();
   realtime.close();
 
   await new Promise<void>((resolve) => {
     if (!server) return resolve();
     server.close(() => resolve());
   });
+  await closeWakeQueue();
+  await closeRedis();
   await disconnectDatabase();
   console.log('✅ Hook API stopped cleanly');
   process.exit(0);
@@ -91,29 +88,27 @@ process.once('SIGTERM', () => { void shutdown('SIGTERM'); });
 
 async function bootstrap() {
   assertSafeEnvironment();
+  assertRedisConfig({ required: false });
+  redisStatus = await connectRedis();
+  if (redisStatus.state === 'connected') console.log(`✅ Redis Connected: ${redisStatus.target}`);
+  else if (redisStatus.state === 'unreachable') console.warn(`⚠️ Redis unreachable at ${redisStatus.target}: caching, shared rate limits and queues are off; MongoDB is used instead`);
+  else console.log('ℹ️ Redis not configured: caching, shared rate limits and queues are off');
   printRuntimeServices();
   await initializeDatabase();
   await ensurePlatformAccessCatalog();
-  negotiationNotificationTimer = setInterval(() => { void deliverNegotiationStartNotifications().catch(() => console.warn('[negotiation-notifications] Delivery will retry')); }, 5_000);
-  negotiationNotificationTimer.unref();
-  expiryTimer = setInterval(() => {
-    void Promise.all([expireNegotiationsAndQuotes(), escalateOverdueAvailabilityChecks()]).catch((error) => {
-      console.error('[catalog-expiry] Failed to process catalog deadlines', error);
-    });
-  }, 60_000);
-  expiryTimer.unref();
-  availabilityDigestTask = cron.schedule('0 7 * * *', () => {
-    void sendDailyAvailabilityDigests().catch((error) => {
-      console.error('[availability-digest] Failed to send daily digest emails', error);
-    });
-  });
-  startFulfilmentWorker();
-  console.log('🕒 Catalog expiry scheduler started');
-  console.log('   Checking negotiation, quote, and availability deadlines every 60 seconds');
-  console.log('📬 Availability digest scheduler started');
-  console.log('   Sending daily Market Associate availability-check emails at 07:00');
-  console.log('⚙️ Fulfilment worker started');
-  console.log('   Polling the durable outbox every 5 seconds');
+  // Schedulers and the outbox drain belong to the worker process
+  // (`npm run worker`) so N API instances do not run N copies of every job.
+  // In-process jobs stay on by default outside production for one-command dev;
+  // set WORKER_IN_PROCESS=true to force them on, false to force them off.
+  const inProcess = process.env.WORKER_IN_PROCESS
+    ? process.env.WORKER_IN_PROCESS === 'true'
+    : process.env.NODE_ENV !== 'production';
+  if (inProcess) {
+    startInProcessJobs();
+    console.log('⚙️ Background jobs running in-process (use `npm run worker` in production)');
+  } else {
+    console.log('⚙️ Background jobs are handled by the worker process');
+  }
 
   const app = createApp();
   const port = Number(process.env.PORT || 4000);

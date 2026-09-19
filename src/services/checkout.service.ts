@@ -44,7 +44,9 @@ import { EmailService } from "@emails/email.service";
 import { CouponService } from "@services/coupon.service";
 import { CreditService } from "@services/credit.service";
 import { LogisticsProviderService } from "@services/logistics-provider.service";
-import { HttpError } from "@utils/http";
+import { HttpError, isDuplicateKeyError } from "@utils/http";
+import { emitOutbox } from "@services/outbox.service";
+import { wakeOutbox } from "../jobs/wake";
 import { timelineEntry } from "@lib/order-timeline";
 
 type PreviewInput = {
@@ -893,60 +895,89 @@ export class CheckoutService {
           { $set: { consumedAt: new Date(), orderId: order.id } },
           { session },
         );
+        // Coupon use, Hook Coin debit and the follow-up notification commit
+        // with the order. They used to run after the commit with errors
+        // swallowed, so a failure silently gave a discount that was never
+        // booked. Now any failure rolls the whole checkout back. Both are
+        // keyed on the caller's idempotencyKey, so a retried confirm is a no-op.
+        if (preview.couponId && Number(preview.couponDiscountMinor || 0) > 0) {
+          await this.coupons.redeem({
+            couponId: String(preview.couponId),
+            couponCode: String(preview.couponCode),
+            userId: actor.customerId,
+            orderId,
+            discountMinor: Number(preview.couponDiscountMinor),
+            idempotencyKey,
+          }, session);
+        }
+        if (Number(preview.creditsAppliedMinor || 0) > 0) {
+          await this.credits.spend({
+            userId: actor.customerId,
+            amountMinor: Number(preview.creditsAppliedMinor),
+            orderId,
+            idempotencyKey,
+          }, session);
+        }
+        await emitOutbox([{
+          aggregateType: "order",
+          aggregateId: order.id,
+          eventType: "ORDER_CREATED_EFFECTS",
+          payload: {
+            orderId: ids.order,
+            customerId: actor.customerId,
+            paymentMethod: preview.paymentMethod,
+            stateId: preview.stateId,
+          },
+        }], session);
       });
+    } catch (error) {
+      // A concurrent confirm with the same key lost the unique-index race (or
+      // hit a write conflict). Return the winner's order instead of an error.
+      if (isDuplicateKeyError(error) || (error as any)?.hasErrorLabel?.("TransientTransactionError")) {
+        const winner = await Order.findOne({ idempotencyKey }).lean({ virtuals: true });
+        if (winner && winner.userId === actor.customerId) return this.orderResult(winner.id);
+      }
+      throw error;
     } finally {
       await session.endSession();
     }
 
-    // Booked only after the order transaction commits, so a rolled-back
-    // checkout never burns a coupon use or debits credits. Both are keyed on
-    // the caller's idempotencyKey, so a retried confirm is a no-op.
-    if (preview.couponId && Number(preview.couponDiscountMinor || 0) > 0) {
-      await this.coupons.redeem({
-        couponId: String(preview.couponId),
-        couponCode: String(preview.couponCode),
-        userId: actor.customerId,
-        orderId,
-        discountMinor: Number(preview.couponDiscountMinor),
-        idempotencyKey,
-      }).catch((error) => console.error("[checkout] coupon redeem failed", error));
-    }
-    if (Number(preview.creditsAppliedMinor || 0) > 0) {
-      await this.credits.spend({
-        userId: actor.customerId,
-        amountMinor: Number(preview.creditsAppliedMinor),
-        orderId,
-        idempotencyKey,
-      }).catch((error) => console.error("[checkout] credit spend failed", error));
-    }
+    wakeOutbox();
     const result = await this.orderResult(orderId);
-    await createCommerceNotification({
-      eventKey: `order:${result.publicId || result.id}:created`,
-      userId: actor.customerId,
-      title:
-        preview.paymentMethod === CommercePaymentMethod.PREPAID
-          ? "Complete your payment"
-          : "Order under review",
-      body:
-        preview.paymentMethod === CommercePaymentMethod.PREPAID
-          ? "Your State Order is ready for secure Paystack payment."
-          : "Hook Operations will review your Pay-at-Handover request.",
-      type: "order_created",
-      data: { orderId: result.publicId || result.id, stateId: preview.stateId },
-    }).catch(() => undefined);
-    if (actor.customerId) {
-      const customer = await User.findById(actor.customerId).select('email firstName').lean() as any;
-      if (customer?.email) {
-        await this.email.sendOrderConfirmation({
-          to: customer.email,
-          name: customer.firstName,
-          orderCode: result.publicId || String(result.id || ''),
-          amount: Number((result as any).totalMinor || 0) / 100,
-          itemCount: result.items?.length || 0,
-        }).catch(() => undefined);
-      }
-    }
     return result;
+  }
+
+  /**
+   * Outbox consumer for ORDER_CREATED_EFFECTS. Runs after the checkout
+   * transaction commits; the notification is keyed on the order, so a replay
+   * cannot notify twice, and a failure retries instead of being swallowed.
+   */
+  async deliverOrderCreatedEffects(event: { payload: Record<string, any> }) {
+    const { orderId, customerId, paymentMethod, stateId } = event.payload;
+    if (!customerId) return;
+    const prepaid = paymentMethod === CommercePaymentMethod.PREPAID;
+    await createCommerceNotification({
+      eventKey: `order:${orderId}:created`,
+      userId: customerId,
+      title: prepaid ? "Complete your payment" : "Order under review",
+      body: prepaid
+        ? "Your State Order is ready for secure Paystack payment."
+        : "Hook Operations will review your Pay-at-Handover request.",
+      type: "order_created",
+      data: { orderId, stateId },
+    });
+    const order = await Order.findOne({ publicId: orderId }).lean({ virtuals: true }) as any;
+    const customer = await User.findById(customerId).select("email firstName").lean() as any;
+    if (order && customer?.email) {
+      const itemCount = await OrderItem.countDocuments({ orderId: String(order._id) });
+      await this.email.sendOrderConfirmation({
+        to: customer.email,
+        name: customer.firstName,
+        orderCode: orderId,
+        amount: Number(order.totalMinor || 0) / 100,
+        itemCount,
+      });
+    }
   }
 
   private async revalidateLines(customerId: string, items: any[]) {

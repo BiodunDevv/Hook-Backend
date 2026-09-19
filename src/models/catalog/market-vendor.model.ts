@@ -117,8 +117,12 @@ const vendorSchema = createSchema<MarketVendor>({
   notes: { type: String, maxlength: 1000 },
   deletedAt: { type: Date },
 });
-vendorSchema.index({ marketId: 1, normalizedPhone: 1 }, { unique: true, partialFilterExpression: { deletedAt: { $exists: false } } });
-vendorSchema.index({ marketId: 1, email: 1 }, { unique: true, sparse: true, partialFilterExpression: { deletedAt: { $exists: false } } });
+// MongoDB rejects `$exists: false` in a partial filter and refuses `sparse` combined
+// with one, so these two indexes could never be built and vendor uniqueness was
+// never enforced by the database. `deletedAt: null` matches a missing field, which
+// is exactly "not soft-deleted", and the email condition replaces `sparse`.
+vendorSchema.index({ marketId: 1, normalizedPhone: 1 }, { unique: true, partialFilterExpression: { deletedAt: null } });
+vendorSchema.index({ marketId: 1, email: 1 }, { unique: true, partialFilterExpression: { deletedAt: null, email: { $type: 'string' } } });
 vendorSchema.index({ marketId: 1, status: 1, updatedAt: -1 });
 
 const invitationSchema = createSchema<VendorInvitation>({

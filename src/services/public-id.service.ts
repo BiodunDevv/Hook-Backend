@@ -47,6 +47,7 @@ export const PUBLIC_ID_PREFIXES = {
   coupon: 'CPN',
   couponRedemption: 'CRD',
   referral: 'REF',
+  itemResolution: 'IRS',
 } as const;
 
 export type PublicIdDomain = keyof typeof PUBLIC_ID_PREFIXES;

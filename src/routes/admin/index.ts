@@ -24,6 +24,7 @@ import { platformContext } from "@middleware/platform-context";
 import { requireAdmin, requireSuperAdmin } from "@middleware/roles";
 import { requireAnyPermission, requirePermission } from "@middleware/permissions";
 import { validateBody } from "@middleware/validate";
+import { withIdempotency } from '@middleware/idempotency';
 import {
   adminUserSchema,
   categoryCreateSchema,
@@ -510,6 +511,16 @@ export function createAdminRouter() {
     asyncHandler(commerce.outbox),
   );
   router.get(
+    "/commerce/outbox/dead-letters",
+    requirePermission("commerce.outbox.view"),
+    asyncHandler(commerce.deadLetters),
+  );
+  router.post(
+    "/commerce/outbox/dead-letters/:id/replay",
+    requirePermission("commerce.outbox.replay"),
+    asyncHandler(commerce.replayDeadLetter),
+  );
+  router.get(
     "/commerce/settings",
     requireSuperAdmin,
     asyncHandler(commerce.podSettings),
@@ -577,25 +588,27 @@ export function createAdminRouter() {
   router.get('/fulfilment/control-tower', requirePermission('fulfilment.view'), asyncHandler(fulfilment.controlTower));
   router.get('/fulfilment/orders', requirePermission('fulfilment.view'), asyncHandler(fulfilment.fulfilmentOrders));
   router.get('/fulfilment/tasks/:id', requirePermission('fulfilment.view'), asyncHandler(fulfilment.adminTaskDetail));
+  router.post('/fulfilment/issues/:id/proposals', requirePermission('fulfilment.assign'), validateBody(z.object({ version: z.coerce.number().int().positive(), productId: z.string().min(1).optional(), productTitle: z.string().min(1).max(200), productImage: z.string().url().optional(), color: z.string().min(1).max(80), size: z.string().min(1).max(80), quantity: z.coerce.number().int().positive(), unitPriceMinor: z.coerce.number().int().nonnegative(), reason: z.string().min(3).max(1000) }).strict()), asyncHandler(fulfilment.proposeItemResolution));
+  router.post('/fulfilment/issues/:id/adjustment-complete', requirePermission('finance.refunds.process'), validateBody(z.object({ providerReference: z.string().min(3).max(200) }).strict()), asyncHandler(fulfilment.completeItemAdjustment));
   router.get('/fulfilment/market-associates', requirePermission('fulfilment.assign'), asyncHandler(fulfilment.assignmentMarketAssociates));
   router.get('/fulfilment/hubs', requireAnyPermission('fulfilment.hub.view', 'fulfilment.assign'), asyncHandler(fulfilment.assignmentHubs));
   router.post('/fulfilment/tasks/:id/reassign', requirePermission('fulfilment.assign'), validateBody(z.object({ marketAssociateId: z.string().min(1), hubId: z.string().min(1), version: z.coerce.number().int().positive(), reason: z.string().min(3).max(1000) }).strict()), asyncHandler(fulfilment.reassignTask));
   router.post('/fulfilment/tasks/:id/unblock', requirePermission('fulfilment.assign'), validateBody(z.object({ reason: z.string().trim().min(3).max(500) }).strict()), asyncHandler(fulfilment.unblockTask));
   router.get('/fulfilment/hub', requirePermission('fulfilment.hub.view'), asyncHandler(fulfilment.hubDashboard));
   router.get('/fulfilment/consolidations', requirePermission('fulfilment.hub.view'), asyncHandler(fulfilment.adminConsolidations));
-  router.post('/fulfilment/packages/:id/receive', requirePermission('fulfilment.hub.receive'), validateBody(z.object({ hubId: z.string().min(1), scanCredential: z.string().regex(/^\d{6}$/), idempotencyKey: z.string().min(8), stateId: z.string().optional(), evidence: z.array(z.object({ type: z.string().min(1), url: z.string().url().optional(), assetId: z.string().optional(), note: z.string().max(500).optional() })).optional() }).strict()), asyncHandler(fulfilment.receivePackage));
+  router.post('/fulfilment/packages/:id/receive', requirePermission('fulfilment.hub.receive'), validateBody(z.object({ hubId: z.string().min(1), scanCredential: z.string().regex(/^\d{4}$/), idempotencyKey: z.string().min(8), stateId: z.string().optional(), evidence: z.array(z.object({ type: z.string().min(1), url: z.string().url().optional(), assetId: z.string().optional(), note: z.string().max(500).optional() })).optional() }).strict()), asyncHandler(fulfilment.receivePackage));
   router.post('/fulfilment/packages/:id/qc', requirePermission('fulfilment.hub.qc'), validateBody(z.object({ version: z.coerce.number().int().positive().optional(), passed: z.boolean(), checks: z.array(z.record(z.string(), z.unknown())).default([]) }).strict()), asyncHandler(fulfilment.qualityCheck));
   router.post('/fulfilment/orders/:id/consolidate', requirePermission('fulfilment.consolidate'), validateBody(z.object({ hubId: z.string().min(1) }).strict()), asyncHandler(fulfilment.consolidate));
   router.post('/fulfilment/consolidations/:id/seal', requirePermission('fulfilment.consolidate'), validateBody(z.object({ version: z.coerce.number().int().positive().optional(), weightGrams: z.number().positive().optional(), dimensions: z.object({ lengthCm: z.number().positive(), widthCm: z.number().positive(), heightCm: z.number().positive() }).optional(), sealReference: z.string().max(100).optional() }).strict()), asyncHandler(fulfilment.sealConsolidation));
   router.get('/fulfilment/shipments', requirePermission('logistics.view'), asyncHandler(fulfilment.adminShipments));
   router.get('/fulfilment/logistics/readiness', requirePermission('logistics.view'), asyncHandler(fulfilment.logisticsReadiness));
-  router.post('/fulfilment/orders/:id/shipments', requirePermission('logistics.book'), validateBody(z.object({ provider: z.enum(['manual', 'simulated', 'gig', 'fez', 'other']), hubId: z.string().min(1), courierCode: z.string().trim().max(40).optional(), substitutionReason: z.string().trim().min(3).max(500).optional(), serviceName: z.string().max(100).optional(), externalReference: z.string().max(160).optional(), trackingNumber: z.string().max(160).optional(), estimatedDeliveryAt: z.string().datetime().optional(), providerCostMinor: z.number().int().nonnegative().optional(), providerQuoteMinor: z.number().int().nonnegative().optional(), idempotencyKey: z.string().min(8), evidence: z.array(z.object({ type: z.string().min(1), url: z.string().url().optional(), assetId: z.string().optional(), note: z.string().max(500).optional() })).optional() }).strict()), asyncHandler(fulfilment.createShipment));
+  router.post('/fulfilment/orders/:id/shipments', requirePermission('logistics.book'), validateBody(z.object({ provider: z.enum(['manual', 'simulated', 'gig', 'fez', 'other']), hubId: z.string().min(1), courierCode: z.string().trim().max(40).optional(), substitutionReason: z.string().trim().min(3).max(500).optional(), serviceName: z.string().max(100).optional(), externalReference: z.string().max(160).optional(), trackingNumber: z.string().max(160).optional(), estimatedDeliveryAt: z.string().datetime().optional(), providerCostMinor: z.number().int().nonnegative().optional(), providerQuoteMinor: z.number().int().nonnegative().optional(), idempotencyKey: z.string().min(8), evidence: z.array(z.object({ type: z.string().min(1), url: z.string().url().optional(), assetId: z.string().optional(), note: z.string().max(500).optional() })).optional() }).strict()), withIdempotency({ operation: 'POST /admin/fulfilment/orders/:id/shipments', tier: 'financial' }), asyncHandler(fulfilment.createShipment));
   router.patch('/fulfilment/shipments/:id', requirePermission('logistics.manage'), validateBody(z.object({ status: z.string().min(1), version: z.coerce.number().int().positive().optional(), note: z.string().max(500).optional() }).strict()), asyncHandler(fulfilment.updateShipment));
   router.get('/fulfilment/returns', requirePermission('returns.view'), asyncHandler(fulfilment.adminReturns));
   router.patch('/fulfilment/returns/:id/review', requirePermission('returns.review'), validateBody(z.object({ decision: z.enum(['APPROVED', 'REJECTED']), reason: z.string().min(3).max(1000) }).strict()), asyncHandler(fulfilment.adminReturnReview));
   router.get('/fulfilment/refunds', requirePermission('refunds.view'), asyncHandler(fulfilment.adminRefunds));
-  router.post('/fulfilment/refunds', requirePermission('refunds.manage'), validateBody(z.object({ orderId: z.string().min(1), returnRequestId: z.string().optional(), amountMinor: z.number().int().positive(), reason: z.string().min(3).max(1000), idempotencyKey: z.string().min(8) }).strict()), asyncHandler(fulfilment.adminRefund));
-  router.post('/fulfilment/refunds/:id/process', requirePermission('finance.refunds.process'), validateBody(z.object({ idempotencyKey: z.string().min(8).optional(), reason: z.string().max(1000).optional() }).strict()), asyncHandler(fulfilment.adminRefundProcess));
+  router.post('/fulfilment/refunds', requirePermission('refunds.manage'), validateBody(z.object({ orderId: z.string().min(1), returnRequestId: z.string().optional(), amountMinor: z.number().int().positive(), reason: z.string().min(3).max(1000), idempotencyKey: z.string().min(8) }).strict()), withIdempotency({ operation: 'POST /admin/fulfilment/refunds', tier: 'financial' }), asyncHandler(fulfilment.adminRefund));
+  router.post('/fulfilment/refunds/:id/process', requirePermission('finance.refunds.process'), validateBody(z.object({ idempotencyKey: z.string().min(8).optional(), reason: z.string().max(1000).optional() }).strict()), withIdempotency({ operation: 'POST /admin/fulfilment/refunds/:id/process', tier: 'financial' }), asyncHandler(fulfilment.adminRefundProcess));
   // ── Support operations ───────────────────────────────────────────────
   router.get(
     "/support/deletion-requests",

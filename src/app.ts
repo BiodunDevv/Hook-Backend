@@ -1,3 +1,5 @@
+import { redisHealth } from '@config/redis';
+import { sharedCache } from '@services/cache.service';
 import cors from 'cors';
 import express, { NextFunction, Request, Response } from 'express';
 import helmet from 'helmet';
@@ -81,8 +83,9 @@ export function createApp() {
   app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
   app.use('/uploads', express.static(join(process.cwd(), 'uploads')));
 
-  app.get('/health', (_req, res) => {
-    sendSuccess(res, { status: 'ok', uptime: process.uptime() });
+  app.get('/health', async (_req, res) => {
+    // Redis is optional: report it, but a Redis outage is not an API outage.
+    sendSuccess(res, { status: 'ok', uptime: process.uptime(), redis: await redisHealth(), cache: sharedCache.stats() });
   });
 
   app.get('/docs-json', (_req, res) => {

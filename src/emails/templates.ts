@@ -4,6 +4,7 @@ import {
   AccountActivatedEmailPayload,
   AccountInvitationEmailPayload,
   AvailabilityDigestEmailPayload,
+  AccountDeletionEmailPayload,
   CustomerAccountSetupEmailPayload,
   NegotiationAcceptedEmailPayload,
   NegotiationOfferEmailPayload,
@@ -428,5 +429,81 @@ export function availabilityDigestEmailTemplate(payload: AvailabilityDigestEmail
       productRows: availabilityProductRowsHtml(payload.products),
     })),
     text: `${payload.products.length} product(s) need an availability check: ${payload.products.map((product) => `${product.title} (${product.marketName})`).join(', ')}`,
+  };
+}
+
+/**
+ * One layout, five moods. Every value is escaped by renderTemplate except the
+ * two triple-brace blocks below, which are built here from escaped parts.
+ */
+export function accountDeletionEmailTemplate(payload: AccountDeletionEmailPayload) {
+  const date = payload.scheduledFor || 'the scheduled date';
+  const cancelButton = payload.cancelUrl
+    ? `<p style="text-align: center"><a class="button" href="${escapeHtml(payload.cancelUrl)}">Keep my account</a></p>`
+    : '';
+  const copy = {
+    code: {
+      subject: 'Your Hook account deletion code',
+      title: 'Confirm account deletion',
+      intro: 'Use this code to confirm you want to delete your Hook account. If this was not you, ignore this email and nothing will change.',
+      detail: `The code expires in ${payload.expiresInMinutes || 10} minutes.`,
+      safety: 'Never share this code. Hook will never ask you for it.',
+      codeBlock: payload.code ? `<div class="code">${escapeHtml(payload.code)}</div>` : '',
+      button: '',
+      text: `Your Hook account deletion code is ${payload.code}. It expires in ${payload.expiresInMinutes || 10} minutes. If this was not you, ignore this email.`,
+    },
+    scheduled: {
+      subject: 'Your Hook account is scheduled for deletion',
+      title: 'Account deletion scheduled',
+      intro: `We received a request to delete your Hook account. It will be permanently deleted on ${date}.`,
+      detail: 'You can change your mind at any time before then. Just choose the button below, or sign in to the app and restore your account.',
+      safety: 'If you did not make this request, choose "Keep my account" straight away and change your password.',
+      codeBlock: '',
+      button: cancelButton,
+      text: `Your Hook account will be permanently deleted on ${date}. To keep it, open ${payload.cancelUrl || 'the Hook app and restore your account'}.`,
+    },
+    reminder: {
+      subject: 'Your Hook account will be deleted soon',
+      title: 'Deletion is coming up',
+      intro: `Your Hook account is due to be permanently deleted on ${date}.`,
+      detail: 'This is your last reminder. After that date your account, saved addresses and Hook Coin balance cannot be recovered.',
+      safety: 'If you still want to delete your account you do not need to do anything.',
+      codeBlock: '',
+      button: cancelButton,
+      text: `Your Hook account will be permanently deleted on ${date}. To keep it, open ${payload.cancelUrl || 'the Hook app and restore your account'}.`,
+    },
+    deleted: {
+      subject: 'Your Hook account has been deleted',
+      title: 'Account deleted',
+      intro: 'Your Hook account and personal data have been permanently deleted.',
+      detail: 'We keep only the order and payment records the law requires us to hold, with your identity removed. Thank you for having shopped with Hook.',
+      safety: 'This is the last email we will send to this address about your account.',
+      codeBlock: '',
+      button: '',
+      text: 'Your Hook account and personal data have been permanently deleted.',
+    },
+    restored: {
+      subject: 'Your Hook account has been restored',
+      title: 'Welcome back',
+      intro: 'Your deletion request was cancelled and your Hook account is active again.',
+      detail: 'Nothing was removed. You can sign in to the app as usual.',
+      safety: 'If you did not do this, change your password right away.',
+      codeBlock: '',
+      button: '',
+      text: 'Your deletion request was cancelled and your Hook account is active again.',
+    },
+  }[payload.kind];
+  return {
+    subject: copy.subject,
+    html: renderTemplate('account-deletion.html', baseValues({
+      name: payload.name || 'there',
+      title: copy.title,
+      intro: copy.intro,
+      detail: copy.detail,
+      safety: copy.safety,
+      codeBlock: copy.codeBlock,
+      button: copy.button,
+    })),
+    text: copy.text,
   };
 }

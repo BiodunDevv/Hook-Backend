@@ -36,12 +36,26 @@ function wait(milliseconds: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 }
 
+/**
+ * Checkout, payment confirmation and refunds rely on multi-document
+ * transactions, which MongoDB only offers on a replica set or sharded
+ * cluster. Fail at boot rather than on the first customer payment.
+ */
+async function assertTransactionSupport() {
+  const hello = await mongoose.connection.db?.admin().command({ hello: 1 });
+  if (!hello?.setName && hello?.msg !== 'isdbgrid') {
+    const message = 'MongoDB is not a replica set: multi-document transactions are unavailable';
+    if (process.env.NODE_ENV === 'production') throw new Error(message);
+    console.warn(`⚠️ ${message}. Payment and checkout transactions will fail until you run a replica set.`);
+  }
+}
+
 export async function connectDatabase() {
   if (mongoose.connection.readyState === 1) return mongoose.connection;
 
   const uri = getMongoUri();
   const configuredRetries = Number(process.env.MONGODB_CONNECT_RETRIES);
-  const maxAttempts = Number.isInteger(configuredRetries) && configuredRetries > 0 ? configuredRetries : 1;
+  const maxAttempts = Number.isInteger(configuredRetries) && configuredRetries > 0 ? configuredRetries : 5;
   const serverSelectionTimeoutMS = Number(process.env.MONGODB_SERVER_SELECTION_TIMEOUT_MS)
     || (process.env.NODE_ENV === 'development' ? 5000 : 10000);
 
@@ -61,6 +75,7 @@ export async function connectDatabase() {
     }
   }
 
+  await assertTransactionSupport();
   console.log(`✅ MongoDB Connected: ${getMongoHost(uri)}`);
   console.log(`   Database: ${mongoose.connection.name}`);
 

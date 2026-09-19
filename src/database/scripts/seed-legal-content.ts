@@ -46,9 +46,9 @@ ${PLACEHOLDER_NOTICE}
 <h2>3. Sharing your information</h2>
 <p>We share the minimum necessary information with Market Associates and Hook Partners to fulfil your order, and with payment processors to complete transactions. We do not sell your personal information.</p>
 <h2>4. Data retention</h2>
-<p>We retain your information for as long as your account is active and as needed to comply with legal, tax, and accounting obligations.</p>
+<p>We retain your information for as long as your account is active. When you delete your account we permanently erase your personal data (name, email, phone number, saved addresses, device tokens, cart, notifications and sign-in records) after a 14-day cooling-off period during which you can cancel. We keep only the order, payment and refund records that legal, tax and accounting obligations require, with your identity removed. Any Hook Coin balance is forfeited when the account is deleted.</p>
 <h2>5. Your rights</h2>
-<p>You may request access to, correction of, or deletion of your personal information at any time through the app's account settings or by contacting support.</p>
+<p>You may request access to, correction of, or deletion of your personal information at any time. To delete your account, open Profile &gt; Delete account in the app, or visit <a href="/delete-account">the account deletion page</a> without signing in. You can cancel a deletion request at any time during the 14-day cooling-off period.</p>
 <h2>6. Security</h2>
 <p>We use industry-standard measures to protect your information, including encryption in transit and restricted access to sensitive data.</p>
 <h2>7. Changes to this policy</h2>

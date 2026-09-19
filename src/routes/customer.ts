@@ -1,9 +1,11 @@
 import { Router } from "express";
 import { z } from "zod";
 import { CustomerController } from "@controllers/customer.controller";
+import { AccountDeletionController } from "@controllers/account-deletion.controller";
 import { NegotiationController } from "@controllers/negotiation.controller";
 import { requireCustomerIdentity } from "@middleware/auth";
 import { validateBody } from "@middleware/validate";
+import { withIdempotency } from "@middleware/idempotency";
 import {
   cartQuantitySchema,
   customerRefundRequestSchema,
@@ -145,6 +147,7 @@ export function createCustomerRouter() {
     requireAuth,
     requireAccountType(AccountType.CUSTOMER),
     validateBody(checkoutConfirmSchema),
+    withIdempotency({ operation: "POST /checkout/confirm", tier: "financial", fingerprint: (req) => ({ params: req.params }) }),
     asyncHandler(controller.checkoutCombinedConfirm),
   );
   router.post(
@@ -159,6 +162,7 @@ export function createCustomerRouter() {
     requireAuth,
     requireAccountType(AccountType.CUSTOMER),
     validateBody(checkoutConfirmSchema),
+    withIdempotency({ operation: "POST /checkout/states/:stateId/confirm", tier: "financial", fingerprint: (req) => ({ params: req.params }) }),
     asyncHandler(controller.checkoutConfirm),
   );
   router.get("/orders", asyncHandler(controller.listOrders));
@@ -168,6 +172,14 @@ export function createCustomerRouter() {
     requireAuth,
     requireAccountType(AccountType.CUSTOMER),
     asyncHandler(fulfilment.customerFulfilment),
+  );
+  router.post(
+    "/orders/:orderId/substitutions/:id/respond",
+    requireAuth,
+    requireAccountType(AccountType.CUSTOMER),
+    validateBody(z.object({ decision: z.enum(['ACCEPT', 'DECLINE']), version: z.coerce.number().int().positive() }).strict()),
+    withIdempotency({ operation: 'POST /orders/:orderId/substitutions/:id/respond', tier: 'financial', fingerprint: (req) => ({ params: req.params }) }),
+    asyncHandler(fulfilment.customerItemResolution),
   );
   router.post(
     "/orders/:id/returns",
@@ -194,11 +206,13 @@ export function createCustomerRouter() {
   router.post(
     "/orders/:id/cancel",
     validateBody(z.object({ reason: z.string().optional() })),
+    withIdempotency({ operation: "POST /orders/:id/cancel", tier: "consequential" }),
     asyncHandler(controller.cancelOrder),
   );
   router.post(
     "/orders/:id/refunds",
     validateBody(customerRefundRequestSchema),
+    withIdempotency({ operation: "POST /orders/:id/refunds", tier: "financial" }),
     asyncHandler(controller.requestRefund),
   );
 
@@ -225,6 +239,7 @@ export function createCustomerRouter() {
     requireAuth,
     requireAccountType(AccountType.CUSTOMER),
     validateBody(paymentInitializeV4Schema),
+    withIdempotency({ operation: "POST /payments/initialize", tier: "financial" }),
     asyncHandler(controller.initializePayment),
   );
   router.post(
@@ -232,6 +247,7 @@ export function createCustomerRouter() {
     requireAuth,
     requireAccountType(AccountType.CUSTOMER),
     validateBody(paymentLinkCreateSchema),
+    withIdempotency({ operation: "POST /payments/links", tier: "financial" }),
     asyncHandler(paymentLinks.create),
   );
   router.post(
@@ -250,10 +266,13 @@ export function createCustomerRouter() {
     "/payments/orders/:orderId/status",
     asyncHandler(controller.paymentStatus),
   );
+  const accountDeletion = new AccountDeletionController();
+  router.get("/support/account-deletion", asyncHandler(accountDeletion.statusSignedIn));
+  router.post("/support/account-deletion/code", asyncHandler(accountDeletion.sendCodeSignedIn));
   router.post(
     "/support/account-deletion",
     validateBody(deletionRequestSchema),
-    asyncHandler(controller.requestDeletion),
+    asyncHandler(accountDeletion.requestSignedIn),
   );
 
   router.get("/notifications", asyncHandler(controller.listNotifications));

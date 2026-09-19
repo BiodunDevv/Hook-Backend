@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "crypto";
-import { isValidObjectId } from "mongoose";
+import mongoose, { isValidObjectId } from "mongoose";
 import { CommercePaymentStatus } from "@lib/constants";
 import { CommerceSettings } from "@models/commerce/commerce.model";
 import { OrderItem } from "@models/orders/order-item.model";
@@ -9,7 +9,7 @@ import { PaymentAttempt, PaymentLink } from "@models/payments/payment-link.model
 import { Payment } from "@models/payments/payment.model";
 import { nextPublicId } from "@services/public-id.service";
 import { paymentProvider, paymentProviderReadiness, type ProviderName } from "@services/payments/provider-registry";
-import { HttpError } from "@utils/http";
+import { HttpError, isDuplicateKeyError } from "@utils/http";
 import { PaymentService } from "@services/payment.service";
 
 const ACTIVE_ATTEMPT_STATUSES: Array<"initializing" | "processing"> = ["initializing", "processing"];
@@ -213,18 +213,27 @@ export class PaymentLinkService {
     const publicId = await nextPublicId("paymentAttempt");
     const reference = `HK-${publicId.replaceAll("-", "")}`;
     const requestHash = hash(`${link.publicId}:${providerName}:${link.amountMinor}:${idempotencyKey}`);
-    const attempt = await PaymentAttempt.create({
-      publicId,
-      paymentLinkId: String(link._id),
-      paymentId: String(payment._id),
-      orderId: String(order._id),
-      provider: providerName,
-      reference,
-      idempotencyKey,
-      requestHash,
-      status: "initializing",
-      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
-    });
+    let attempt;
+    try {
+      attempt = await PaymentAttempt.create({
+        publicId,
+        paymentLinkId: String(link._id),
+        paymentId: String(payment._id),
+        orderId: String(order._id),
+        provider: providerName,
+        reference,
+        idempotencyKey,
+        requestHash,
+        status: "initializing",
+        expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+      });
+    } catch (error) {
+      // A concurrent request with the same key won the unique index: return its attempt.
+      if (!isDuplicateKeyError(error)) throw error;
+      const winner = await PaymentAttempt.findOne({ paymentLinkId: String(link._id), idempotencyKey });
+      if (!winner) throw error;
+      return this.publicAttempt(winner);
+    }
     const returnUrl = new URL(`${paymentOrigin()}/payment/${token}/processing`);
     returnUrl.searchParams.set("provider", providerName);
     if (appReturn) returnUrl.searchParams.set("appReturn", "1");
@@ -237,26 +246,53 @@ export class PaymentLinkService {
         callbackUrl: returnUrl.toString(),
         metadata: { orderId: order.publicId, paymentId: payment.publicId, paymentLinkId: link.publicId },
       });
+      // All three records move together, and only forward: a webhook that
+      // confirmed the payment while the provider call was in flight must not be
+      // reverted to PROCESSING by these writes (the old code saved whole
+      // documents loaded before that call).
+      const session = await mongoose.startSession();
+      let moved = false;
+      try {
+        await session.withTransaction(async () => {
+          moved = (await Payment.updateOne(
+            { _id: payment._id, commerceStatus: { $ne: CommercePaymentStatus.CONFIRMED } },
+            {
+              $set: {
+                gateway: providerName,
+                transactionRef: reference,
+                authorizationUrl: initialized.authorizationUrl,
+                accessCode: initialized.accessCode,
+                activeAttemptId: attempt.publicId,
+                commerceStatus: CommercePaymentStatus.PROCESSING,
+              },
+            },
+            { session },
+          )).modifiedCount > 0;
+          await PaymentAttempt.updateOne(
+            { _id: attempt._id },
+            moved
+              ? { $set: { authorizationUrl: initialized.authorizationUrl, status: "processing" } }
+              : { $set: { status: "cancelled", completedAt: new Date() } },
+            { session },
+          );
+          if (moved) {
+            await PaymentLink.updateOne({ _id: link._id, status: { $in: ["active", "processing"] } }, { $set: { status: "processing" } }, { session });
+          }
+        });
+      } finally {
+        await session.endSession();
+      }
+      if (!moved) throw new HttpError(409, "This payment is already complete", undefined, "PAYMENT_ALREADY_CONFIRMED");
       attempt.authorizationUrl = initialized.authorizationUrl;
       attempt.status = "processing";
-      await attempt.save();
-      payment.gateway = providerName;
-      payment.transactionRef = reference;
-      payment.authorizationUrl = initialized.authorizationUrl;
-      payment.accessCode = initialized.accessCode;
-      payment.activeAttemptId = attempt.publicId;
-      payment.commerceStatus = CommercePaymentStatus.PROCESSING;
-      await payment.save();
-      link.status = "processing";
-      await link.save();
       return this.publicAttempt(attempt);
     } catch (error: any) {
-      attempt.status = "failed";
-      attempt.errorCode = error?.code || "PAYMENT_PROVIDER_ERROR";
-      attempt.completedAt = new Date();
-      await attempt.save();
-      link.status = "active";
-      await link.save();
+      if (error?.code === "PAYMENT_ALREADY_CONFIRMED") throw error;
+      await PaymentAttempt.updateOne(
+        { _id: attempt._id, status: "initializing" },
+        { $set: { status: "failed", errorCode: error?.code || "PAYMENT_PROVIDER_ERROR", completedAt: new Date() } },
+      );
+      await PaymentLink.updateOne({ _id: link._id, status: "processing" }, { $set: { status: "active" } });
       throw error;
     }
   }
@@ -291,8 +327,10 @@ export class PaymentLinkService {
     const link = await PaymentLink.findOne({ tokenHash: hash(token) }).select("+tokenHash");
     if (!link) throw new HttpError(404, "Payment link not found");
     if (link.expiresAt <= new Date() && ["active", "processing"].includes(link.status)) {
-      link.status = "expired";
-      await link.save();
+      // Guarded: a payment that just confirmed must stay "paid".
+      const expired = await PaymentLink.updateOne({ _id: link._id, status: { $in: ["active", "processing"] } }, { $set: { status: "expired" } });
+      if (expired.modifiedCount) link.status = "expired";
+      else return (await PaymentLink.findById(link._id).select("+tokenHash")) || link;
     }
     if (["expired", "revoked", "cancelled"].includes(link.status)) {
       throw new HttpError(410, "This payment link is no longer available", { status: link.status }, "PAYMENT_LINK_EXPIRED");

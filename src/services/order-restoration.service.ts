@@ -1,3 +1,4 @@
+import type { ClientSession } from 'mongoose';
 import { Order } from '@models/orders/order.model';
 import { CouponService } from '@services/coupon.service';
 import { CreditService } from '@services/credit.service';
@@ -16,15 +17,19 @@ const credits = new CreditService();
  * release only acts on redemptions still marked 'applied' — so cancelling
  * twice, or a retried call, never pays out twice.
  *
- * Never throws: a cancellation must still succeed even if restoring the
- * incentives fails, or the customer would be left unable to cancel at all.
+ * Without a session it never throws: a cancellation must still succeed even
+ * if restoring the incentives fails. Callers that run it inside the
+ * cancellation's own transaction pass the session instead; then any failure
+ * propagates and rolls the cancellation back, so an order can never end up
+ * cancelled with its credits still spent.
  */
-export async function restoreOrderIncentives(orderIdentifier: string) {
+export async function restoreOrderIncentives(orderIdentifier: string, session?: ClientSession) {
   try {
     const order = await Order.findOne({
       $or: [{ _id: orderIdentifier }, { publicId: orderIdentifier }, { orderCode: orderIdentifier }],
     })
       .select('_id publicId userId creditsAppliedMinor')
+      .session(session ?? null)
       .lean();
     if (!order) return { creditsReturnedMinor: 0, couponsReleased: 0 };
 
@@ -36,7 +41,7 @@ export async function restoreOrderIncentives(orderIdentifier: string) {
         userId: String(order.userId),
         amountMinor: creditsAppliedMinor,
         orderId,
-      });
+      }, session);
     }
 
     // Take back the coin the order earned. The earn is keyed on the order's
@@ -44,15 +49,16 @@ export async function restoreOrderIncentives(orderIdentifier: string) {
     // try both rather than assume which identifier recorded it.
     if (order.userId) {
       for (const identifier of [...new Set([orderId, String(order.publicId || '')].filter(Boolean))]) {
-        await credits.reverseEarn({ userId: String(order.userId), orderId: identifier });
+        await credits.reverseEarn({ userId: String(order.userId), orderId: identifier }, session);
       }
     }
 
     // Redemptions are stored against the order's _id at checkout time.
-    const couponsReleased = await coupons.release(orderId);
+    const couponsReleased = await coupons.release(orderId, session);
 
     return { creditsReturnedMinor: creditsAppliedMinor, couponsReleased };
   } catch (error) {
+    if (session) throw error;
     console.error('[order] restoring incentives failed', orderIdentifier, error);
     return { creditsReturnedMinor: 0, couponsReleased: 0 };
   }

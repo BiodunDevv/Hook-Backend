@@ -1,7 +1,11 @@
 import type { Server as HttpServer } from 'http';
 import jwt from 'jsonwebtoken';
 import { Server as SocketIOServer, Socket } from 'socket.io';
+import { sharedCache } from '@services/cache.service';
+import { createAdapter } from '@socket.io/redis-adapter';
+import { randomUUID } from 'crypto';
 import { parseOrigins, jwtSecret } from '@config/env';
+import { createBullConnection, redisConfigured, getRedis, redisKey } from '@config/redis';
 import { AccountType } from '@lib/constants';
 import { isActiveAccount } from '@lib/account-state';
 import { AccountSession } from '@models/platform/session.model';
@@ -119,8 +123,11 @@ async function authenticateSocket(socket: Socket): Promise<SocketIdentity> {
   return { kind: 'public' };
 }
 
+const NODE_ID = randomUUID();
+
 class RealtimeService {
   private io?: SocketIOServer;
+  private redisClients: Array<{ quit(): Promise<unknown>; disconnect(): void }> = [];
 
   attach(httpServer: HttpServer) {
     if (this.io) return this.io;
@@ -132,6 +139,7 @@ class RealtimeService {
       },
       transports: ['websocket', 'polling'],
     });
+    this.connectRedis(this.io);
 
     this.io.use(async (socket, next) => {
       try {
@@ -154,6 +162,7 @@ class RealtimeService {
       const accessToken = tokenFromSocket(socket);
       if (accessToken) {
         try { socket.data.sessionId = (jwt.decode(accessToken) as AccessTokenPayload | null)?.sid; } catch { /* authenticated above */ }
+        if (socket.data.sessionId) socket.join(room('session', String(socket.data.sessionId)));
       }
       socket.join('public');
       if (identity.accountId) {
@@ -210,24 +219,26 @@ class RealtimeService {
     return this.io;
   }
 
-  emit(event: Omit<RealtimeEvent, 'occurredAt'> & { occurredAt?: string }, targets: RealtimeTargets = {}) {
-    const payload: RealtimeEvent = {
-      ...event,
-      occurredAt: event.occurredAt || new Date().toISOString(),
-    };
-    if (payload.type === 'catalog.updated' || payload.type === 'home.updated') {
+  /**
+   * The read caches in this process are cleared whenever an event says the
+   * underlying data changed. With several API instances an event raised on one
+   * node must clear the caches on all of them, hence broadcastInvalidation().
+   */
+  private invalidateLocalCaches(type: string) {
+    if (type === 'catalog.updated' || type === 'home.updated') {
+      sharedCache.noteInvalidated('catalog');
       publicCatalogCache.clear();
       adminCatalogCache.clear();
       adminProductStatsCache.clear();
       adminCategoryCache.clear();
       adminReviewCache.clear();
     }
-    if (payload.type.startsWith('admin.') || payload.type === 'order.updated') {
+    if (type.startsWith('admin.') || type === 'order.updated') {
       adminDashboardCache.clear();
       adminFinancialCache.clear();
       adminOrderStatsCache.clear();
     }
-    if (payload.type.startsWith('admin.')) {
+    if (type.startsWith('admin.')) {
       adminCategoryManagersCache.clear();
       adminCategoryCache.clear();
       adminReviewCache.clear();
@@ -236,6 +247,55 @@ class RealtimeService {
       adminAccessCatalogCache.clear();
       adminDeliveryCache.clear();
     }
+  }
+
+  private broadcastInvalidation(type: string) {
+    const redis = getRedis();
+    if (!redis) return;
+    redis.publish(redisKey('cache-invalidate'), JSON.stringify({ node: NODE_ID, type })).catch(() => undefined);
+  }
+
+  /** Connects the Socket.IO adapter and the cross-node cache invalidation channel. */
+  private connectRedis(io: SocketIOServer) {
+    if (!redisConfigured()) return;
+    try {
+      const pub = createBullConnection();
+      const sub = pub.duplicate();
+      const invalidations = pub.duplicate();
+      for (const client of [pub, sub, invalidations]) client.on('error', () => undefined);
+      io.adapter(createAdapter(pub, sub, { key: redisKey('socket.io') }));
+      invalidations.subscribe(redisKey('cache-invalidate')).catch(() => undefined);
+      invalidations.on('message', (_channel, raw) => {
+        try {
+          const message = JSON.parse(raw) as { node?: string; type?: string };
+          if (message.node !== NODE_ID && message.type) this.invalidateLocalCaches(message.type);
+        } catch { /* ignore malformed messages */ }
+      });
+      this.redisClients = [pub, sub, invalidations];
+    } catch (error) {
+      console.warn('[realtime] Redis adapter unavailable; events reach this node only', error instanceof Error ? error.message : error);
+    }
+  }
+
+  /**
+   * For processes with no HTTP server (the worker): lets them publish events
+   * that reach sockets connected to the API nodes, through the Redis adapter.
+   */
+  attachEmitterOnly() {
+    if (this.io) return this.io;
+    this.io = new SocketIOServer();
+    this.connectRedis(this.io);
+    return this.io;
+  }
+
+  emit(event: Omit<RealtimeEvent, 'occurredAt'> & { occurredAt?: string }, targets: RealtimeTargets = {}) {
+    const payload: RealtimeEvent = {
+      ...event,
+      occurredAt: event.occurredAt || new Date().toISOString(),
+    };
+    this.invalidateLocalCaches(payload.type);
+    if (payload.type === 'catalog.updated' || payload.type === 'home.updated') void sharedCache.bumpVersion('catalog');
+    this.broadcastInvalidation(payload.type);
     if (!this.io) return;
     const rooms = new Set<string>();
     if (targets.public || event.type === 'home.updated' || event.type === 'catalog.updated') rooms.add('public');
@@ -258,15 +318,18 @@ class RealtimeService {
   }
 
   close() {
-    this.io?.close();
+    // The worker's emitter-only server has no HTTP engine, and close() on it throws.
+    // Socket.IO's close() is async and rejects here, so swallow both forms.
+    try { void Promise.resolve(this.io?.close()).catch(() => undefined); } catch { /* nothing to close */ }
     this.io = undefined;
+    for (const client of this.redisClients) client.quit().catch(() => client.disconnect());
+    this.redisClients = [];
   }
 
   disconnectSession(sessionId: string) {
     if (!this.io) return;
-    for (const socket of this.io.sockets.sockets.values()) {
-      if (socket.data.sessionId === sessionId) socket.disconnect(true);
-    }
+    // A room (not a local scan) so the disconnect reaches every API node.
+    this.io.in(room('session', sessionId)).disconnectSockets(true);
   }
 
   revokeSession(sessionId: string, reason: string) {

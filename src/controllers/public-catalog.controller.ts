@@ -10,7 +10,7 @@ import {
 } from "@services/commercial-catalog.service";
 import { routeParam } from "@lib/api-utils";
 import { HttpError, sendSuccess } from "@utils/http";
-import { publicCatalogCache } from "@lib/ttl-cache";
+import { sharedCache } from "@services/cache.service";
 
 const PUBLIC_PRODUCT_CARD_FIELDS = [
   "publicId",
@@ -146,9 +146,9 @@ export class PublicCatalogController {
 
   products = async (req: Request, res: Response) => {
     const cacheKey = `products:${queryKey(req.query as Record<string, unknown>)}`;
-    const cached = publicCatalogCache.get(cacheKey);
-    if (cached) {
-      sendSuccess(res, cached);
+    const lookup = await sharedCache.lookup<any>("catalog", cacheKey);
+    if (lookup.hit) {
+      sendSuccess(res, lookup.value);
       return;
     }
     const limit = Math.min(Math.max(Number(req.query.limit || 20), 1), 50);
@@ -244,16 +244,16 @@ export class PublicCatalogController {
           : null,
       hasMore,
     };
-    publicCatalogCache.set(cacheKey, response);
+    await lookup.store(response);
     sendSuccess(res, response);
   };
 
   product = async (req: Request, res: Response) => {
     const id = routeParam(req.params.id);
     const cacheKey = `product:${id}`;
-    const cached = publicCatalogCache.get(cacheKey);
-    if (cached) {
-      sendSuccess(res, cached);
+    const lookup = await sharedCache.lookup<any>("catalog", cacheKey);
+    if (lookup.hit) {
+      sendSuccess(res, lookup.value);
       return;
     }
     const identifier = /^[a-f\d]{24}$/i.test(id)
@@ -290,7 +290,7 @@ export class PublicCatalogController {
     if (!product)
       throw new HttpError(404, "Product not found", undefined, "NOT_FOUND");
     const response = await publicProductRepresentation(product);
-    publicCatalogCache.set(cacheKey, response, 30_000);
+    await lookup.store(response, 30_000);
     sendSuccess(res, response);
   };
 
@@ -322,9 +322,9 @@ export class PublicCatalogController {
 
   categories = async (_req: Request, res: Response) => {
     const cacheKey = "categories:active";
-    const cached = publicCatalogCache.get(cacheKey);
-    if (cached) {
-      sendSuccess(res, cached);
+    const lookup = await sharedCache.lookup<any>("catalog", cacheKey);
+    if (lookup.hit) {
+      sendSuccess(res, lookup.value);
       return;
     }
     const categories = await Category.find({
@@ -345,7 +345,7 @@ export class PublicCatalogController {
       sortOrder: item.sortOrder || 0,
       sizingGuide: item.attributeSchema?.sizingGuide || null,
     }));
-    publicCatalogCache.set(cacheKey, response);
+    await lookup.store(response);
     sendSuccess(res, response);
   };
 
@@ -392,9 +392,9 @@ export class PublicCatalogController {
     const stateIdentifier =
       String(req.query.stateId || req.query.stateCode || "") || undefined;
     const cacheKey = `home:${stateIdentifier || "all"}`;
-    const cached = publicCatalogCache.get(cacheKey);
-    if (cached) {
-      sendSuccess(res, cached);
+    const lookup = await sharedCache.lookup<any>("catalog", cacheKey);
+    if (lookup.hit) {
+      sendSuccess(res, lookup.value);
       return;
     }
     const stateId = await internalId(OperationState, stateIdentifier, ["code"]);
@@ -440,7 +440,7 @@ export class PublicCatalogController {
         displayPriority: item.displayPriority ?? 100,
       })),
     };
-    publicCatalogCache.set(cacheKey, response);
+    await lookup.store(response);
     sendSuccess(res, response);
   };
 }

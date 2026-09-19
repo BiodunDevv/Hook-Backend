@@ -12,7 +12,7 @@ import { createCommerceNotification } from '@services/commerce-notification.serv
 import { publishRealtime } from '@services/realtime.service';
 import { nextPublicId } from '@services/public-id.service';
 import { decryptVendorAccountNumber, encryptVendorAccountNumber } from '@lib/vendor-payment-crypto';
-import { HttpError } from '@utils/http';
+import { HttpError, isDuplicateKeyError } from '@utils/http';
 import { EmailService } from '@emails/email.service';
 
 const email = new EmailService();
@@ -249,6 +249,10 @@ export class MarketVendorService {
           expiresAt: invitationExpiresAt,
         }], { session });
       });
+    } catch (error) {
+      // Two simultaneous adds of the same vendor: the unique index decided, so answer as the pre-check does.
+      if (isDuplicateKeyError(error)) throw new HttpError(409, 'This vendor is already tracked in this Market', undefined, 'MARKET_VENDOR_DUPLICATE');
+      throw error;
     } finally {
       await session.endSession();
     }

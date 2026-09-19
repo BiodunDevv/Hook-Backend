@@ -23,13 +23,20 @@ export type ItemVerificationCheck = {
 
 export type ItemVerification = {
   orderItemId: string;
-  photoUrl: string;
-  photoAssetId?: string;
+  photoUrl?: string;
+  photos: Array<{ view: 'front' | 'side' | 'back'; url: string; assetId?: string }>;
+  actualColor: string;
+  actualSize: string;
+  actualQuantity: number;
+  unitCostMinor: number;
+  supplierReference?: string;
+  conditionNote: string;
   checks: ItemVerificationCheck;
   matched: boolean;
   reportedIssue?: { summary: string; note?: string; exceptionId?: string };
   verifiedAt: Date;
   verifiedBy: string;
+  revisions?: Array<Record<string, unknown>>;
 };
 
 export interface FulfilmentTask extends BaseEntity {
@@ -68,6 +75,11 @@ export interface RunnerPackage extends BaseEntity {
   status: RunnerPackageStatus;
   scanCredentialHash: string;
   scanCredentialHint: string;
+  scanCredentialCiphertext?: string;
+  credentialGeneratedAt?: Date;
+  credentialVerifiedAt?: Date;
+  credentialFailedAttempts: number;
+  credentialLockedAt?: Date;
   itemIds: string[];
   labelReference?: string;
   packedAt?: Date;
@@ -208,7 +220,7 @@ export interface FulfilmentRefund extends BaseEntity {
   amountMinor: number;
   currency: string;
   reason: string;
-  status: 'REQUESTED' | 'APPROVED' | 'PROVIDER_PENDING' | 'REFUNDED' | 'FAILED';
+  status: 'REQUESTED' | 'APPROVED' | 'PROVIDER_PENDING' | 'PROVIDER_UNKNOWN' | 'REFUNDED' | 'FAILED';
   providerReference?: string;
   idempotencyKey: string;
   approvedBy?: string;
@@ -226,6 +238,8 @@ export interface LogisticsWebhookEvent extends BaseEntity {
   status: 'RECEIVED' | 'PROCESSED' | 'IGNORED' | 'FAILED';
   receivedAt: Date;
   processedAt?: Date;
+  /** Lease held by the delivery currently handling this event. */
+  lockedUntil?: Date;
 }
 
 const evidence = { type: [Object], default: [] };
@@ -253,9 +267,13 @@ const runnerPackageSchema = createSchema<RunnerPackage>({
   publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, required: true, index: true },
   taskId: { type: String, required: true, unique: true, index: true }, marketAssociateId: { type: String, required: true, index: true }, hubId: { type: String, required: true, index: true },
   status: { type: String, enum: Object.values(RunnerPackageStatus), default: RunnerPackageStatus.READY_FOR_HUB, index: true },
-  scanCredentialHash: { type: String, required: true, select: false }, scanCredentialHint: { type: String, required: true }, itemIds: { type: [String], default: [] },
+  scanCredentialHash: { type: String, required: true, select: false }, scanCredentialHint: { type: String, required: true }, scanCredentialCiphertext: { type: String, select: false }, credentialGeneratedAt: { type: Date }, credentialVerifiedAt: { type: Date }, credentialFailedAttempts: { type: Number, default: 0, min: 0 }, credentialLockedAt: { type: Date }, itemIds: { type: [String], default: [] },
   labelReference: { type: String }, packedAt: { type: Date }, handedOverAt: { type: Date }, evidence, version: { type: Number, default: 1, min: 1 },
 });
+runnerPackageSchema.index(
+  { hubId: 1, scanCredentialHash: 1 },
+  { unique: true, partialFilterExpression: { status: RunnerPackageStatus.READY_FOR_HUB } },
+);
 
 const hubPackageSchema = createSchema<HubPackage>({
   publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, required: true, index: true }, taskId: { type: String, required: true, index: true }, runnerPackageId: { type: String, required: true, unique: true, index: true }, hubId: { type: String, required: true, index: true }, marketAssociateId: { type: String, required: true, index: true },
@@ -294,11 +312,11 @@ const returnSchema = createSchema<ReturnRequest>({
 });
 
 const refundSchema = createSchema<FulfilmentRefund>({
-  publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, required: true, index: true }, paymentId: { type: String, index: true }, returnRequestId: { type: String, index: true }, amountMinor: { type: Number, required: true, min: 1 }, currency: { type: String, default: 'NGN' }, reason: { type: String, required: true }, status: { type: String, enum: ['REQUESTED', 'APPROVED', 'PROVIDER_PENDING', 'REFUNDED', 'FAILED'], default: 'REQUESTED', index: true }, providerReference: { type: String }, idempotencyKey: { type: String, required: true, unique: true }, approvedBy: { type: String }, processedAt: { type: Date }, failureReason: { type: String },
+  publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, required: true, index: true }, paymentId: { type: String, index: true }, returnRequestId: { type: String, index: true }, amountMinor: { type: Number, required: true, min: 1 }, currency: { type: String, default: 'NGN' }, reason: { type: String, required: true }, status: { type: String, enum: ['REQUESTED', 'APPROVED', 'PROVIDER_PENDING', 'PROVIDER_UNKNOWN', 'REFUNDED', 'FAILED'], default: 'REQUESTED', index: true }, providerReference: { type: String }, idempotencyKey: { type: String, required: true, unique: true }, approvedBy: { type: String }, processedAt: { type: Date }, failureReason: { type: String },
 });
 
 const logisticsEventSchema = createSchema<LogisticsWebhookEvent>({
-  provider: { type: String, enum: ['manual', 'simulated', 'gig', 'fez', 'other'], required: true }, providerEventId: { type: String, required: true }, payloadHash: { type: String, required: true }, shipmentId: { type: String, index: true }, eventType: { type: String, required: true }, signatureVerified: { type: Boolean, default: false }, status: { type: String, enum: ['RECEIVED', 'PROCESSED', 'IGNORED', 'FAILED'], default: 'RECEIVED', index: true }, receivedAt: { type: Date, default: Date.now }, processedAt: { type: Date },
+  provider: { type: String, enum: ['manual', 'simulated', 'gig', 'fez', 'other'], required: true }, providerEventId: { type: String, required: true }, payloadHash: { type: String, required: true }, shipmentId: { type: String, index: true }, eventType: { type: String, required: true }, signatureVerified: { type: Boolean, default: false }, status: { type: String, enum: ['RECEIVED', 'PROCESSED', 'IGNORED', 'FAILED'], default: 'RECEIVED', index: true }, receivedAt: { type: Date, default: Date.now }, processedAt: { type: Date }, lockedUntil: { type: Date },
 });
 logisticsEventSchema.index({ provider: 1, providerEventId: 1 }, { unique: true });
 

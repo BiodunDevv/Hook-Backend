@@ -332,11 +332,43 @@ export const giftCreateSchema = z.object({
 });
 export const giftClaimSchema = z.object({ token: z.string().min(32) });
 export const boothInventorySchema = z.object({ productIds: z.array(idSchema).max(500) });
-export const deletionRequestSchema = z.object({ reason: z.string().trim().max(1000).optional() });
-export const deletionUpdateSchema = z.object({
-  status: z.enum(['identity_verified', 'cooling_off', 'approved', 'anonymized', 'cancelled']),
-  assignedTo: idSchema.optional(),
-});
+// Account deletion. Ownership is proven with a password, or with an emailed
+// code for accounts that signed in with Google/Apple and so have no password.
+const ownerProof = {
+  password: z.string().min(1).max(200).optional(),
+  code: z.string().regex(/^\d{6}$/, 'Enter the 6-digit code').optional(),
+};
+const exactlyOneProof = (value: { password?: string; code?: string }) => (value.password !== undefined) !== (value.code !== undefined);
+const proofMessage = { message: 'Provide either your password or the emailed code' };
+const emailField = z.string().trim().toLowerCase().email().max(254);
+export const deletionRequestSchema = z
+  .object({ ...ownerProof, reason: z.string().trim().max(1000).optional() })
+  .strict()
+  .refine(exactlyOneProof, proofMessage);
+export const publicDeletionRequestSchema = z
+  .object({ email: emailField, ...ownerProof, reason: z.string().trim().max(1000).optional() })
+  .strict()
+  .refine(exactlyOneProof, proofMessage);
+export const publicDeletionProofSchema = z
+  .object({ email: emailField, ...ownerProof })
+  .strict()
+  .refine(exactlyOneProof, proofMessage);
+export const publicDeletionCodeSchema = z.object({ email: emailField }).strict();
+export const publicDeletionCancelSchema = z.union([
+  z.object({ token: z.string().min(20).max(200) }).strict(),
+  publicDeletionProofSchema,
+]);
+export const deletionUpdateSchema = z
+  .object({
+    // Pause freezes automatic erasure; cancel restores the account; erase_now
+    // skips the remaining cooling-off (for a verified legal request) and still
+    // refuses while orders or refunds are in progress.
+    action: z.enum(['pause', 'resume', 'cancel', 'erase_now']).optional(),
+    // Older admin builds send a status instead of an action.
+    status: z.enum(['identity_verified', 'cooling_off', 'approved', 'anonymized', 'cancelled']).optional(),
+    assignedTo: idSchema.optional(),
+  })
+  .refine((value) => value.action !== undefined || value.status !== undefined, { message: 'An action is required' });
 export const logisticsStatusSchema = z.object({ status: z.nativeEnum(LogisticsStatus) });
 export const productReviewSchema = z.object({
   status: z.nativeEnum(ProductStatus),

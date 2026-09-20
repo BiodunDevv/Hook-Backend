@@ -250,7 +250,7 @@ export class AdminOrdersController {
 
   /**
    * Cancels an order on the customer's behalf and gives back everything it
-   * consumed — Hook Coin spent, the coupon use, and any coin the order earned
+   * consumed — Hook credit spent, the coupon use, and any coin the order earned
    * — via the same restoration path a customer cancellation uses.
    */
   cancel = async (req: Request, res: Response) => {
@@ -286,7 +286,7 @@ export class AdminOrdersController {
         eventKey: `order:${order.publicId}:cancelled-by-admin`,
         userId: String(order.userId),
         title: "Your order was cancelled",
-        body: `${reason} Any Hook Coin and coupon you used have been returned.`,
+        body: `${reason} Any Hook credit and coupon you used have been returned.`,
         type: "order_cancelled",
         data: { orderId: order.publicId },
       }).catch(() => undefined);

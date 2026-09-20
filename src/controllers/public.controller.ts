@@ -6,6 +6,7 @@ import { OperationState } from '@models/platform/geography.model';
 import { LegalContent } from '@models/platform/legal-content.model';
 import { Product } from '@models/products/product.model';
 import { sendSuccess } from '@utils/http';
+import { CommerceSettings } from '@models/commerce/commerce.model';
 import { publicProduct } from '@lib/public-resource';
 import { DEFAULT_RETURNS_POLICY_HTML } from '@lib/legal-defaults';
 
@@ -145,13 +146,29 @@ export class PublicController {
     sendSuccess(res, { featuredProducts: products.map(safeProduct), categories: categories.map((category: any) => safeProduct(category)) });
   };
 
+  /** What customers earn and are given in Hook credit, as the admin has set it. */
+  creditConfig = async (_req: Request, res: Response) => {
+    const settings = await CommerceSettings.findOne({ key: 'commerce' })
+      .select('orderEarnEnabled orderEarnPercent orderEarnMaxMinor creditSpendCapPercent welcomeBonusMinor referralSignupBonusMinor referralReferrerBonusMinor')
+      .lean();
+    sendSuccess(res, {
+      orderEarnEnabled: settings?.orderEarnEnabled ?? true,
+      orderEarnPercent: settings?.orderEarnPercent ?? 1,
+      orderEarnMaxMinor: settings?.orderEarnMaxMinor ?? 0,
+      creditSpendCapPercent: settings?.creditSpendCapPercent ?? 20,
+      welcomeBonusMinor: settings?.welcomeBonusMinor ?? 30000,
+      referralSignupBonusMinor: settings?.referralSignupBonusMinor ?? 30000,
+      referralReferrerBonusMinor: settings?.referralReferrerBonusMinor ?? 100000,
+    });
+  };
+
   getOperatingStates = async (_req: Request, res: Response) => {
     const states = await OperationState.find({
       countryCode: 'NG',
       status: 'active',
       operationsEnabled: true,
     })
-      .select('publicId code name capitalName operationsEnabled')
+      .select('publicId code name capitalName operationsEnabled deliveryEnabled deliveryFeeMinor deliveryPromiseHours')
       .sort({ name: 1 })
       .lean({ virtuals: true });
     sendSuccess(res, (states as any[]).map((state) => ({
@@ -160,6 +177,9 @@ export class PublicController {
       name: state.name,
       capitalName: state.capitalName,
       operationsEnabled: true,
+      deliveryEnabled: state.deliveryEnabled !== false,
+      deliveryFeeMinor: state.deliveryFeeMinor,
+      deliveryPromiseHours: state.deliveryPromiseHours,
     })));
   };
 

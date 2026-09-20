@@ -8,7 +8,7 @@ const execute = process.argv.includes('--execute');
 const credits = new CreditService();
 
 /**
- * Accounts credited by topup-customer-credits.ts received their Hook Coin
+ * Accounts credited by topup-customer-credits.ts received their Hook credit
  * before credit notifications existed, so they were never told about it.
  * This posts the missing notification for them.
  *

@@ -39,7 +39,8 @@ export type RealtimeEventType =
   | 'admin.dashboard.updated'
   | 'admin.operations.updated'
   | 'negotiation.updated' | 'negotiation.messages' | 'negotiation.processing'
-  | 'app-release.updated';
+  | 'app-release.updated'
+  | 'config.updated';
 
 export interface RealtimeEvent {
   data?: unknown;
@@ -347,6 +348,16 @@ class RealtimeService {
 }
 
 export const realtime = new RealtimeService();
+
+/**
+ * Something an admin configures that customers see (delivery prices and
+ * coverage, couriers, coupons, commerce settings, legal text) changed. Apps
+ * refetch the matching data straight away instead of waiting for a refresh.
+ */
+export type ConfigScope = 'delivery' | 'logistics' | 'commerce' | 'legal' | 'coupons';
+export function publishConfigChanged(scope: ConfigScope) {
+  realtime.emit({ type: 'config.updated', entityId: scope, data: { scope } }, { public: true, admin: true });
+}
 
 export function publishRealtime(event: Omit<RealtimeEvent, 'occurredAt'> & { occurredAt?: string }, targets?: RealtimeTargets) {
   realtime.emit(event, targets);

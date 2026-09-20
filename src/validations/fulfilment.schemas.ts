@@ -2,12 +2,16 @@ import { z } from 'zod';
 
 export const itemVerifySchema = z.object({
   photos: z.array(z.object({
-    view: z.enum(['front', 'side', 'back']),
+    view: z.enum(['front', 'side', 'back', 'extra1', 'extra2', 'extra3', 'extra4']),
     url: z.string().url(),
     assetId: z.string().trim().max(200).optional(),
-  }).strict()).length(3).superRefine((photos, ctx) => {
+  }).strict()).min(3).max(7).superRefine((photos, ctx) => {
+    // Front, side and back are compulsory; up to four extra detail photos are optional.
     const views = new Set(photos.map((photo) => photo.view));
-    if (views.size !== 3) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Front, side and back photos are required' });
+    if (views.size !== photos.length) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Each photo view can only be used once' });
+    for (const required of ['front', 'side', 'back']) {
+      if (!views.has(required as never)) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Front, side and back photos are required' });
+    }
   }),
   actualColor: z.string().trim().min(1).max(80),
   actualSize: z.string().trim().min(1).max(80),

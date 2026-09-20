@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "build": "tsc && tsc-alias",
+    "seed:delivery-fees": "ts-node -r tsconfig-paths/register src/database/scripts/seed-delivery-state-fees.ts",
     "test:reliability": "tsx --test tests/reliability-*.test.ts",
     "test:deletion": "tsx --test tests/deletion-*.test.ts",
     "test:negotiation": "tsx --test tests/negotiation-*.test.ts",

@@ -19,7 +19,8 @@ export const marketAssociateSubmissionDraftSchema = z.object({
   categorySuggestionId: publicOrInternalId,
   basicTitle: z.string().trim().min(2).max(180),
   notes: z.string().trim().max(2000).optional(),
-  mediaIds: z.array(publicOrInternalId).max(12).default([]),
+  // Front, side and back are compulsory; up to four extra photos are optional.
+  mediaIds: z.array(publicOrInternalId).max(7).default([]),
   mediaViews: z.object({
     front: publicOrInternalId.optional(),
     side: publicOrInternalId.optional(),

@@ -31,7 +31,7 @@ const EMAIL = process.argv.find((arg) => arg.includes('@')) || 'muhammedabiodun4
  * own Orders list, Admin order management, and the Market Associate fulfilment
  * queue (tasks, runner packages, hub packages).
  *
- * The account itself is kept. Hook Coin is preserved: only the ledger entries
+ * The account itself is kept. Hook credit is preserved: only the ledger entries
  * tied to the deleted orders are removed, and because a spend and its
  * cancellation refund cancel each other out, the balance is unchanged.
  */
@@ -79,9 +79,9 @@ async function main() {
     { label: 'Payment links', model: PaymentLink, filter: { orderId: { $in: orderRefs } } },
     { label: 'Payments', model: Payment, filter: { orderId: { $in: orderRefs } } },
     { label: 'Refund requests', model: RefundRequest, filter: { orderId: { $in: orderRefs } } },
-    // Hook Coin entries for these orders only — the welcome bonus has no
+    // Hook credit entries for these orders only — the welcome bonus has no
     // orderId, so it survives and the balance stays put.
-    { label: 'Hook Coin entries for these orders', model: CreditLedger, filter: { orderId: { $in: orderRefs } } },
+    { label: 'Hook credit entries for these orders', model: CreditLedger, filter: { orderId: { $in: orderRefs } } },
     { label: 'Coupon redemptions for these orders', model: CouponRedemption, filter: { orderId: { $in: orderRefs } } },
     // Order records themselves
     { label: 'Order fulfilment groups', model: OrderFulfilmentGroup, filter: { orderId: { $in: orderRefs } } },
@@ -107,7 +107,7 @@ async function main() {
     ? ledgerRows
     : ledgerRows.filter((row) => !row.orderId || !orderRefs.includes(String(row.orderId)));
   const balance = Math.max(0, surviving.reduce((sum, row) => sum + Number(row.amountMinor), 0));
-  console.log(`\nHook Coin balance ${execute ? 'is now' : 'will be'} ₦${(balance / 100).toLocaleString()} (account kept).`);
+  console.log(`\nHook credit balance ${execute ? 'is now' : 'will be'} ₦${(balance / 100).toLocaleString()} (account kept).`);
 
   if (!execute) console.log('\nNo data changed. Run with --execute to apply this cleanup.');
 }

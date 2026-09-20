@@ -85,7 +85,11 @@ export async function sendPushMessages(messages: PushMessage[]) {
       tickets.forEach((ticket, index) => {
         const token = batch[index]?.to;
         if (!token) return;
-        if (ticket.status === 'ok') accepted.push({ ticketId: ticket.id, expoPushToken: token });
+        if (ticket.status === 'ok') {
+          accepted.push({ ticketId: ticket.id, expoPushToken: token });
+          // Development only: proof that Expo accepted the push, since delivery itself is invisible here.
+          if (process.env.NODE_ENV !== 'production') console.info(`[push] accepted by Expo for ${token.slice(0, 26)}… (ticket ${ticket.id})`);
+        }
         else if (ticket.details?.error === 'DeviceNotRegistered') void deactivate(token);
         else noteError('send rejected', ticket.details?.error, ticket.message);
       });

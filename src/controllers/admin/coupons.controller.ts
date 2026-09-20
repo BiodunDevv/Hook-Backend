@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { publishConfigChanged } from '@services/realtime.service';
 import { CouponService } from '@services/coupon.service';
 import { User } from '@models/users/user.model';
 import { sendCreated, sendSuccess } from '@utils/http';
@@ -59,6 +60,7 @@ export class AdminCouponsController {
     const { reason, ...input } = req.body;
     const coupon: any = await this.coupons.create(input, req.user!.sub);
     await this.audit(req, 'coupon.create', String(coupon.publicId || coupon.id), reason || `Created coupon ${coupon.code}`);
+    publishConfigChanged('coupons');
     sendCreated(res, coupon);
   };
 
@@ -66,12 +68,14 @@ export class AdminCouponsController {
     const { reason, ...input } = req.body;
     const coupon: any = await this.coupons.update(routeParam(req.params.id), input);
     await this.audit(req, 'coupon.update', String(coupon?.publicId || coupon?.id), reason || `Updated coupon ${coupon?.code}`);
+    publishConfigChanged('coupons');
     sendSuccess(res, coupon);
   };
 
   remove = async (req: Request, res: Response) => {
     const result = await this.coupons.remove(routeParam(req.params.id));
     await this.audit(req, 'coupon.delete', result.id, `Removed coupon ${result.id}`);
+    publishConfigChanged('coupons');
     sendSuccess(res, result);
   };
 }

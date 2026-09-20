@@ -66,8 +66,8 @@ export class CreditService {
   async announceWelcomeBonus(userId: string, amountMinor: number) {
     if (amountMinor <= 0) return;
     await this.notify(userId, `credit:welcome:${userId}`, {
-      title: 'You have Hook Coin to spend',
-      body: `We added ${formatNaira(amountMinor)} Hook Coin to your account. Use it when you pay now.`,
+      title: 'You have Hook credit to spend',
+      body: `We added ${formatNaira(amountMinor)} Hook credit to your account. Use it when you pay now.`,
     });
   }
 
@@ -89,7 +89,7 @@ export class CreditService {
   }
 
   /**
-   * Returns a share of the order back as Hook Coin once payment is confirmed.
+   * Returns a share of the order back as Hook credit once payment is confirmed.
    *
    * Credited at payment rather than delivery so the success screen can show a
    * figure that is already true. Keyed on the order, so a replayed Paystack
@@ -129,8 +129,8 @@ export class CreditService {
   async announceEarn(userId: string, orderId: string, amountMinor: number) {
     if (amountMinor <= 0) return;
     await this.notify(userId, `credit:earn:${orderId}`, {
-      title: 'You earned Hook Coin',
-      body: `${formatNaira(amountMinor)} Hook Coin was added to your account for your order.`,
+      title: 'You earned Hook credit',
+      body: `${formatNaira(amountMinor)} Hook credit was added to your account for your order.`,
     });
   }
 
@@ -232,7 +232,7 @@ export class CreditService {
     if (already) return already;
     const balance = await this.balance(input.userId, session);
     if (balance < input.amountMinor) {
-      throw new HttpError(409, 'Your Hook Coin balance changed. Review checkout again.', undefined, 'CREDIT_BALANCE_CHANGED');
+      throw new HttpError(409, 'Your Hook credit balance changed. Review checkout again.', undefined, 'CREDIT_BALANCE_CHANGED');
     }
     return this.record({
       userId: input.userId,
@@ -262,8 +262,8 @@ export class CreditService {
   async announceRefund(userId: string, orderId: string, amountMinor: number) {
     if (amountMinor <= 0) return;
     await this.notify(userId, `credit:refund:${orderId}`, {
-      title: 'Hook Coin returned',
-      body: `${formatNaira(amountMinor)} Hook Coin is back in your account after your order was cancelled.`,
+      title: 'Hook credit returned',
+      body: `${formatNaira(amountMinor)} Hook credit is back in your account after your order was cancelled.`,
     });
   }
 }

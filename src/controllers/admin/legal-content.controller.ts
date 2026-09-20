@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { publishConfigChanged } from '@services/realtime.service';
 import mongoose from 'mongoose';
 import { LegalContent } from '@models/platform/legal-content.model';
 import { CommercePolicyVersion, CommerceSettings } from '@models/commerce/commerce.model';
@@ -109,6 +110,7 @@ export class AdminLegalContentController {
       after: snapshots.updated || undefined,
       reason: req.body.reason,
     });
+    publishConfigChanged('legal');
     sendSuccess(res, {
       type,
       title: snapshots.updated?.title,

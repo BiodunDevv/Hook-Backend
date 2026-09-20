@@ -466,7 +466,7 @@ export function accountDeletionEmailTemplate(payload: AccountDeletionEmailPayloa
       subject: 'Your Hook account will be deleted soon',
       title: 'Deletion is coming up',
       intro: `Your Hook account is due to be permanently deleted on ${date}.`,
-      detail: 'This is your last reminder. After that date your account, saved addresses and Hook Coin balance cannot be recovered.',
+      detail: 'This is your last reminder. After that date your account, saved addresses and Hook credit balance cannot be recovered.',
       safety: 'If you still want to delete your account you do not need to do anything.',
       codeBlock: '',
       button: cancelButton,

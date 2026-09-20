@@ -28,6 +28,19 @@ export async function calculateDeliveryPricing(input: {
   coordinates?: Coordinates;
   defaultFeeMinor?: number;
 }) {
+  // Each State carries its own delivery price. It is the source of truth; the
+  // older rule table is only a fallback for States that have none set yet.
+  if (input.state && Number.isFinite(Number(input.state.deliveryFeeMinor)) && input.state.deliveryFeeMinor !== null && input.state.deliveryFeeMinor !== undefined) {
+    return {
+      scope: 'state' as const,
+      mode: 'flat' as const,
+      distanceKm: undefined,
+      billableKm: undefined,
+      feeMinor: Math.max(0, Math.round(Number(input.state.deliveryFeeMinor))),
+      ruleVersion: `state-fee:${input.state.publicId || input.state.code}:${Math.round(Number(input.state.deliveryFeeMinor))}`,
+      originHubId: undefined,
+    };
+  }
   const now = new Date();
   const stateId = String(input.state?.id || input.state?._id || '');
   const selectedRule = await firstRule('state', [stateId, String(input.state.publicId || '')].filter(Boolean), now)

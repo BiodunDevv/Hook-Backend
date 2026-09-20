@@ -16,10 +16,14 @@ const completeItem = {
   checks: { productMatches: true, sizeMatches: true, colorMatches: true, quantityMatches: true },
 };
 
-test('item fulfilment requires exactly one front, side and back photo', () => {
+test('item fulfilment requires front, side and back photos and allows up to four extras', () => {
   assert.equal(itemVerifySchema.safeParse(completeItem).success, true);
   const duplicateFront = { ...completeItem, photos: [completeItem.photos[0], completeItem.photos[0], completeItem.photos[2]] };
   assert.equal(itemVerifySchema.safeParse(duplicateFront).success, false);
+  const extras = ['extra1', 'extra2', 'extra3', 'extra4'].map((view) => ({ view, url: completeItem.photos[0].url }));
+  assert.equal(itemVerifySchema.safeParse({ ...completeItem, photos: [...completeItem.photos, ...extras] }).success, true);
+  assert.equal(itemVerifySchema.safeParse({ ...completeItem, photos: [...completeItem.photos, ...extras, { view: 'extra4', url: completeItem.photos[0].url }] }).success, false);
+  assert.equal(itemVerifySchema.safeParse({ ...completeItem, photos: [completeItem.photos[0], completeItem.photos[1], extras[0]] }).success, false);
 });
 
 test('Hub handover credential can be redisplayed from encrypted storage without storing plaintext', () => {

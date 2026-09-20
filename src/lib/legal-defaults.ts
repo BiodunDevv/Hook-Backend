@@ -13,7 +13,7 @@ ${LEGAL_REVIEW_NOTICE}
 <h2>5. Verification and return process</h2>
 <p>Hook may request clear photographs, videos, packaging, order details, and other evidence. If approved, Hook will provide return or collection instructions. Do not send an item independently before receiving those instructions.</p>
 <h2>6. Refunds</h2>
-<p>Approved refunds are issued after the returned item is received and checked. Refunds are normally sent to the original payment method; processing times depend on the payment provider. Hook Coin used on the order is returned to the customer wallet where applicable.</p>
+<p>Approved refunds are issued after the returned item is received and checked. Refunds are normally sent to the original payment method; processing times depend on the payment provider. Hook credit used on the order is returned to the customer wallet where applicable.</p>
 <h2>7. Delivery costs</h2>
 <p>Hook covers reasonable return delivery costs for verified damaged, defective, materially misdescribed, or incorrect items. Other approved returns may have delivery costs deducted from the refund where permitted and disclosed in advance.</p>
 <h2>8. Damaged or incorrect orders</h2>

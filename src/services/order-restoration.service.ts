@@ -7,9 +7,9 @@ const coupons = new CouponService();
 const credits = new CreditService();
 
 /**
- * Gives back whatever a cancelled order consumed: Hook Coin returns to the
+ * Gives back whatever a cancelled order consumed: Hook credit returns to the
  * wallet, the coupon redemption is released so the code can be used again and
- * stops counting against its total-usage limit, and any Hook Coin the order
+ * stops counting against its total-usage limit, and any Hook credit the order
  * earned is clawed back — the reward was for an order that no longer stands.
  *
  * Called from every path that cancels an order. Both operations are

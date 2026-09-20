@@ -34,6 +34,7 @@ export function createPublicRouter() {
   router.get('/public/app-release', asyncHandler(new AppReleasesController().publicPolicy));
 
   router.get('/public/legal/:type', asyncHandler(controller.getLegalContent));
+  router.get('/public/credit-config', asyncHandler(controller.creditConfig));
   router.get('/public/parcels/:receipt', rateLimit('parcel-tracking', { windowMs: 60_000, max: 30, message: 'Too many lookups. Please wait a moment.' }), asyncHandler(new FulfilmentController().publicParcelTracking));
 
   const accountDeletion = new AccountDeletionController();

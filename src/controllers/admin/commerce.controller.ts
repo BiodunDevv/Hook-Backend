@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
 import { Request, Response } from 'express';
+import { publishConfigChanged } from '@services/realtime.service';
 import { PaymentService } from '@services/payment.service';
 import { AccountDeletionService } from '@services/account-deletion.service';
 import { AccountErasureService } from '@services/account-erasure.service';
@@ -408,7 +409,7 @@ export class AdminCommerceController {
 
   hookCoinSettings = async (_req: Request, res: Response) => {
     const settings = await CommerceSettings.findOne({ key: 'commerce' })
-      .select('orderEarnEnabled orderEarnPercent orderEarnMaxMinor creditSpendCapPercent welcomeBonusMinor updatedAt')
+      .select('orderEarnEnabled orderEarnPercent orderEarnMaxMinor creditSpendCapPercent welcomeBonusMinor referralSignupBonusMinor referralReferrerBonusMinor updatedAt')
       .lean();
     sendSuccess(res, {
       orderEarnEnabled: settings?.orderEarnEnabled ?? true,
@@ -416,6 +417,8 @@ export class AdminCommerceController {
       orderEarnMaxMinor: settings?.orderEarnMaxMinor ?? 0,
       creditSpendCapPercent: settings?.creditSpendCapPercent ?? 20,
       welcomeBonusMinor: settings?.welcomeBonusMinor ?? 30000,
+      referralSignupBonusMinor: settings?.referralSignupBonusMinor ?? 30000,
+      referralReferrerBonusMinor: settings?.referralReferrerBonusMinor ?? 100000,
       updatedAt: settings?.updatedAt,
     });
   };
@@ -436,12 +439,15 @@ export class AdminCommerceController {
       after: changes,
       reason: reason as string,
     });
+    publishConfigChanged('commerce');
     sendSuccess(res, {
       orderEarnEnabled: updated?.orderEarnEnabled,
       orderEarnPercent: updated?.orderEarnPercent,
       orderEarnMaxMinor: updated?.orderEarnMaxMinor,
       creditSpendCapPercent: updated?.creditSpendCapPercent,
       welcomeBonusMinor: updated?.welcomeBonusMinor,
+      referralSignupBonusMinor: updated?.referralSignupBonusMinor,
+      referralReferrerBonusMinor: updated?.referralReferrerBonusMinor,
     });
   };
 }

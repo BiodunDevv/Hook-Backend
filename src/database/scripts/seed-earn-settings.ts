@@ -4,7 +4,7 @@ import { CommerceSettings } from '@models/commerce/commerce.model';
 const execute = process.argv.includes('--execute');
 
 /**
- * The commerce settings document predates the Hook Coin earn fields, so they
+ * The commerce settings document predates the Hook credit earn fields, so they
  * are absent on disk and only exist as Mongoose schema defaults. That is fine
  * for reads but leaves the admin Settings screen with nothing to edit, so
  * write the defaults once. $setOnInsert-style semantics: existing values are
@@ -24,7 +24,7 @@ async function main() {
   };
   const missing = Object.entries(defaults).filter(([key]) => settings[key] === undefined);
   if (!missing.length) {
-    console.log('Hook Coin earn settings are already persisted. Nothing to do.');
+    console.log('Hook credit earn settings are already persisted. Nothing to do.');
     return;
   }
   console.log(`${execute ? 'Writing' : 'Would write'} ${missing.length} missing setting(s):`);

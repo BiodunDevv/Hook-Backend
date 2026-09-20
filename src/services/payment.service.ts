@@ -423,7 +423,7 @@ export class PaymentService {
 
   /**
    * The single place a payment becomes confirmed. Every DB write that must
-   * agree (payment, links, order, shipment, Hook Coin, outbox) commits in one
+   * agree (payment, links, order, shipment, Hook credit, outbox) commits in one
    * transaction; everything else (referral, notification, email, realtime)
    * is written to the outbox and delivered, with retries, after the commit.
    *
@@ -535,7 +535,7 @@ export class PaymentService {
         );
         if (!transitioned && !activate.modifiedCount) return;
         if (order.userId) {
-          // Hook Coin is pure DB work keyed on the order, so it commits with
+          // Hook credit is pure DB work keyed on the order, so it commits with
           // the payment and the success screen can show it immediately.
           await this.credits.earnOnOrder({
             userId: order.userId,

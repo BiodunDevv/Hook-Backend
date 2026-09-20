@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { publishConfigChanged } from '@services/realtime.service';
 import { CommerceSettings } from '@models/commerce/commerce.model';
 import { DeliveryPricingRule } from '@models/platform/delivery-pricing.model';
 import { OperationState } from '@models/platform/geography.model';
@@ -47,7 +48,7 @@ export class AdminDeliveryController {
     const [settings, stateRows, lgaCounts, rules] = await Promise.all([
       CommerceSettings.findOne({ key: 'commerce' }).lean({ virtuals: true }),
       OperationState.find({ countryCode: 'NG' })
-        .select('publicId name capitalName code status deliveryEnabled deliveryPricingRuleId')
+        .select('publicId name capitalName code status deliveryEnabled deliveryFeeMinor deliveryPricingRuleId')
         .sort({ name: 1 }).lean({ virtuals: true }),
       OperationLocalGovernment.aggregate([
         { $match: { status: 'active' } },
@@ -63,6 +64,7 @@ export class AdminDeliveryController {
       code: state.code,
       status: state.status,
       deliveryEnabled: state.deliveryEnabled !== false,
+      deliveryFeeMinor: state.deliveryFeeMinor,
       deliveryPricingRuleId: state.deliveryPricingRuleId,
       lgaCount: lgaCountByState.get(String(state.id || state._id)) || 0,
     }));
@@ -94,6 +96,7 @@ export class AdminDeliveryController {
       reason: req.body?.reason || 'Refreshed Nigerian State and LGA catalog',
     });
     adminDeliveryCache.clear();
+    publishConfigChanged('delivery');
     sendSuccess(res, result);
   };
 
@@ -106,6 +109,7 @@ export class AdminDeliveryController {
     ).lean({ virtuals: true });
     await recordAudit(req, { action: 'delivery.settings.update', entityType: 'commerce_settings', entityId: String(updated?.id || ''), before, after: updated, reason: req.body.reason });
     adminDeliveryCache.clear();
+    publishConfigChanged('delivery');
     sendSuccess(res, updated);
   };
 
@@ -138,6 +142,7 @@ export class AdminDeliveryController {
     });
     await recordAudit(req, { action: 'delivery.pricing.create', entityType: 'delivery_pricing_rule', entityId: rule.id, entityPublicId: rule.publicId, before: undefined, after: rule.toJSON(), reason: req.body.reason });
     adminDeliveryCache.clear();
+    publishConfigChanged('delivery');
     sendSuccess(res, cleanRule(rule.toJSON()));
   };
 
@@ -170,6 +175,7 @@ export class AdminDeliveryController {
     await rule.save();
     await recordAudit(req, { action: 'delivery.pricing.update', entityType: 'delivery_pricing_rule', entityId: rule.id, entityPublicId: rule.publicId, before, after: rule.toJSON(), reason: req.body.reason });
     adminDeliveryCache.clear();
+    publishConfigChanged('delivery');
     sendSuccess(res, cleanRule(rule.toJSON()));
   };
 
@@ -177,11 +183,14 @@ export class AdminDeliveryController {
     const state = await OperationState.findOne({ $or: identity(String(req.params.id)) });
     if (!state) throw new HttpError(404, 'Operation State not found');
     const before = state.toJSON();
-    state.deliveryEnabled = Boolean(req.body.deliveryEnabled);
+    if (req.body.deliveryEnabled !== undefined) state.deliveryEnabled = Boolean(req.body.deliveryEnabled);
+    // The customer's delivery price for this State. Checkout reads it directly.
+    if (req.body.deliveryFeeMinor !== undefined) state.deliveryFeeMinor = Number(req.body.deliveryFeeMinor);
     await state.save();
     await recordAudit(req, { action: 'delivery.coverage.update', entityType: 'operation_state', entityId: state.id, entityPublicId: state.publicId, stateId: state.id, before, after: state.toJSON(), reason: req.body.reason });
     adminDeliveryCache.clear();
-    sendSuccess(res, { publicId: state.publicId, name: state.name, code: state.code, status: state.status, deliveryEnabled: state.deliveryEnabled });
+    publishConfigChanged('delivery');
+    sendSuccess(res, { publicId: state.publicId, name: state.name, code: state.code, status: state.status, deliveryEnabled: state.deliveryEnabled, deliveryFeeMinor: state.deliveryFeeMinor });
   };
 
   preview = async (req: Request, res: Response) => {

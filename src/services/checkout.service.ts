@@ -155,7 +155,7 @@ export class CheckoutService {
     if (input.useCredits && !creditsEligible) {
       throw new HttpError(
         409,
-        "Hook Coin can only be used when you pay now",
+        "Hook credit can only be used when you pay now",
         undefined,
         "CREDITS_REQUIRE_PREPAYMENT",
       );
@@ -351,14 +351,7 @@ export class CheckoutService {
       : undefined;
     const deliveryPricing = input.deliveryMethod === DeliveryMethod.PARTNER_PICKUP
       ? { scope: "partner" as const, mode: "flat" as const, feeMinor: 0, ruleVersion: "partner-pickup-v1" }
-      : logisticsProvider
-        ? {
-            scope: "logistics" as const,
-            mode: "flat" as const,
-            feeMinor: Number(logisticsProvider.feeMinor),
-            ruleVersion: `logistics:${logisticsProvider.code}`,
-          }
-        : await calculateDeliveryPricing({
+      : await calculateDeliveryPricing({
             state: deliveryState,
             coordinates: addressSnapshot?.coordinates as { latitude: number; longitude: number } | undefined,
             defaultFeeMinor: settings.defaultDeliveryFeeMinor ?? DEFAULT_DELIVERY_FEE_MINOR,
@@ -440,7 +433,7 @@ export class CheckoutService {
       deliveryPricing,
       logisticsProviderId: logisticsProvider?.publicId,
       logisticsProviderSnapshot: logisticsProvider
-        ? { publicId: logisticsProvider.publicId, code: logisticsProvider.code, name: logisticsProvider.name, feeMinor: logisticsProvider.feeMinor }
+        ? { publicId: logisticsProvider.publicId, code: logisticsProvider.code, name: logisticsProvider.name }
         : undefined,
       couponId: coupon?.couponId,
       couponCode: coupon?.code,
@@ -476,7 +469,7 @@ export class CheckoutService {
       deliveryFeeMinor,
       deliveryPricing,
       logisticsProvider: logisticsProvider
-        ? { id: logisticsProvider.publicId, code: logisticsProvider.code, name: logisticsProvider.name, feeMinor: logisticsProvider.feeMinor }
+        ? { id: logisticsProvider.publicId, code: logisticsProvider.code, name: logisticsProvider.name }
         : undefined,
       coupon: coupon ? { code: coupon.code, type: coupon.type, discountMinor: coupon.discountMinor } : undefined,
       couponDiscountMinor,
@@ -597,13 +590,11 @@ export class CheckoutService {
       (preview.deliveryPricing as any)?.feeMinor ?? preview.deliveryFeeMinor,
     );
     if (preview.logisticsProviderId) {
-      // Re-resolve the courier: an admin may have withdrawn it or repriced it
-      // since the quote was issued.
-      const provider = await this.logisticsProviders.getSelectable(String(preview.logisticsProviderId));
-      currentGrossDeliveryFeeMinor = Number(provider.feeMinor);
-      if (`logistics:${provider.code}` !== (preview.deliveryPricing as any)?.ruleVersion)
-        throw new HttpError(409, "Delivery pricing changed. Review checkout again.", undefined, "CHECKOUT_REVALIDATION_REQUIRED");
-    } else if (preview.deliveryMethod === DeliveryMethod.HOME_DELIVERY) {
+      // Re-resolve the courier: an admin may have withdrawn it since the quote.
+      // The courier no longer sets the price; the delivery State does.
+      await this.logisticsProviders.getSelectable(String(preview.logisticsProviderId));
+    }
+    if (preview.deliveryMethod === DeliveryMethod.HOME_DELIVERY) {
       const address = await this.addresses.getOwned(actor.customerId, String(preview.addressId || ""));
       const deliveryState = await resolveDeliveryState(String(address.stateId));
       if (!deliveryState || deliveryState.deliveryEnabled === false)
@@ -895,7 +886,7 @@ export class CheckoutService {
           { $set: { consumedAt: new Date(), orderId: order.id } },
           { session },
         );
-        // Coupon use, Hook Coin debit and the follow-up notification commit
+        // Coupon use, Hook credit debit and the follow-up notification commit
         // with the order. They used to run after the commit with errors
         // swallowed, so a failure silently gave a discount that was never
         // booked. Now any failure rolls the whole checkout back. Both are

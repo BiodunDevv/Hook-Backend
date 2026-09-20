@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { publishConfigChanged } from '@services/realtime.service';
 import { LogisticsProviderService } from '@services/logistics-provider.service';
 import { sendCreated, sendSuccess } from '@utils/http';
 import { actor, adminRepos, routeParam } from './admin.helpers';
@@ -31,6 +32,7 @@ export class AdminLogisticsProvidersController {
     const { reason, ...input } = req.body;
     const provider: any = await this.providers.create(input, req.user!.sub);
     await this.audit(req, 'logistics_provider.create', String(provider.publicId || provider.id), reason || `Created logistics provider "${provider.name}"`);
+    publishConfigChanged('logistics');
     sendCreated(res, provider);
   };
 
@@ -38,12 +40,14 @@ export class AdminLogisticsProvidersController {
     const { reason, ...input } = req.body;
     const provider: any = await this.providers.update(routeParam(req.params.id), input);
     await this.audit(req, 'logistics_provider.update', String(provider?.publicId || provider?.id), reason || `Updated logistics provider "${provider?.name}"`);
+    publishConfigChanged('logistics');
     sendSuccess(res, provider);
   };
 
   remove = async (req: Request, res: Response) => {
     const result = await this.providers.remove(routeParam(req.params.id));
     await this.audit(req, 'logistics_provider.delete', result.id, `Removed logistics provider ${result.id}`);
+    publishConfigChanged('logistics');
     sendSuccess(res, result);
   };
 }

@@ -798,7 +798,8 @@ export class FulfilmentService {
       throw new HttpError(409, 'Accept this task before completing its products', { current: task.status }, 'INVALID_STATE_TRANSITION');
     }
     const photos = Array.isArray(body.photos) ? body.photos : [];
-    if (photos.length !== 3 || new Set(photos.map((photo: any) => photo.view)).size !== 3) throw new HttpError(400, 'Front, side and back photos are required', undefined, 'VALIDATION_ERROR');
+    const photoViews = new Set(photos.map((photo: any) => photo.view));
+    if (photos.length < 3 || photos.length > 7 || photoViews.size !== photos.length || !['front', 'side', 'back'].every((view) => photoViews.has(view))) throw new HttpError(400, 'Front, side and back photos are required (up to 7 photos in total)', undefined, 'VALIDATION_ERROR');
     const checks = {
       productMatches: Boolean(body.checks?.productMatches),
       sizeMatches: Boolean(body.checks?.sizeMatches),
@@ -1168,6 +1169,7 @@ export class FulfilmentService {
         order: names.order(record.orderId),
         chosenCourier: chosen ? { ...chosen, ...availability.describe(chosen.code) } : undefined,
         alternatives: availability.alternatives,
+        printCount: (record.receiptPrints || []).length,
       };
     });
   }

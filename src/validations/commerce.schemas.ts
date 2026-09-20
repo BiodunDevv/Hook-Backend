@@ -133,7 +133,7 @@ export const inventorySettingsSchema = z.object({
 }).strict();
 
 /**
- * Hook Coin economics. Every field optional so the admin screen can PATCH one
+ * Hook credit economics. Every field optional so the admin screen can PATCH one
  * value at a time; `.strict()` so a typo is rejected rather than silently
  * ignored. orderEarnMaxMinor 0 means "no cap", not "earn nothing".
  */
@@ -143,6 +143,10 @@ export const hookCoinSettingsSchema = z.object({
   orderEarnMaxMinor: z.coerce.number().int().min(0).optional(),
   creditSpendCapPercent: z.coerce.number().int().min(0).max(100).optional(),
   welcomeBonusMinor: z.coerce.number().int().min(0).optional(),
+  /** Credit a new customer gets for signing up through a referral. */
+  referralSignupBonusMinor: z.coerce.number().int().min(0).max(100_000_000).optional(),
+  /** Credit the referrer gets once that friend completes a first order. */
+  referralReferrerBonusMinor: z.coerce.number().int().min(0).max(100_000_000).optional(),
   reason: z.string().trim().min(5).max(500),
 }).strict();
 

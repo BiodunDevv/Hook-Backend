@@ -24,7 +24,8 @@ const schema = createSchema<LogisticsProvider>({
   name: { type: String, required: true, trim: true, maxlength: 80 },
   logoUrl: { type: String },
   description: { type: String, maxlength: 300 },
-  feeMinor: { type: Number, required: true, min: 0 },
+  // Deprecated: delivery is priced per State (OperationState.deliveryFeeMinor).
+  feeMinor: { type: Number, default: 0, min: 0 },
   status: { type: String, enum: ['active', 'inactive'], default: 'active', index: true },
   sortOrder: { type: Number, default: 0 },
   createdBy: { type: String },

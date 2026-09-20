@@ -3,6 +3,7 @@ import { AdminCategoriesController } from "@controllers/admin/categories.control
 import { AdminCouponsController } from "@controllers/admin/coupons.controller";
 import { AdminLogisticsProvidersController } from "@controllers/admin/logistics-providers.controller";
 import { AdminDashboardController } from "@controllers/admin/dashboard.controller";
+import { AdminOverviewController } from "@controllers/admin/overview.controller";
 import { AdminFinancialsController } from "@controllers/admin/financials.controller";
 import { AdminNegotiationsController } from "@controllers/admin/negotiations.controller";
 import { AdminOrdersController } from "@controllers/admin/orders.controller";
@@ -80,6 +81,7 @@ import { appReleaseSchema, versionAnnouncementSchema } from '@lib/app-release-po
 export function createAdminRouter() {
   const router = Router();
   const dashboard = new AdminDashboardController();
+  const overview = new AdminOverviewController();
   const users = new AdminUsersController();
   const products = new AdminProductsController();
   const orders = new AdminOrdersController();
@@ -142,6 +144,7 @@ export function createAdminRouter() {
   router.get("/search", asyncHandler(search.global));
 
   // ── Dashboard & analytics (all admin roles) ────────────────────────────
+  router.get("/overview", asyncHandler(overview.overview));
   router.get("/dashboard", asyncHandler(dashboard.dashboard));
   router.get("/analytics", asyncHandler(dashboard.analytics));
   router.get("/health", asyncHandler(dashboard.health));
@@ -783,10 +786,11 @@ export function createAdminRouter() {
     effectiveUntil: z.coerce.date().optional(),
     reason: z.string().trim().min(3).max(500).optional(),
   }).strict()), asyncHandler(delivery.updateRule));
-  router.patch('/delivery/states/:id', requirePermission('delivery.coverage.manage'), validateBody(z.object({
-    deliveryEnabled: z.boolean(),
+  router.patch('/delivery/states/:id', requireAnyPermission('delivery.coverage.manage', 'delivery.pricing.manage'), validateBody(z.object({
+    deliveryEnabled: z.boolean().optional(),
+    deliveryFeeMinor: z.number().int().nonnegative().max(100_000_000).optional(),
     reason: z.string().trim().min(3).max(500).optional(),
-  }).strict()), asyncHandler(delivery.toggleState));
+  }).strict().refine((body) => body.deliveryEnabled !== undefined || body.deliveryFeeMinor !== undefined, { message: 'Nothing to update' })), asyncHandler(delivery.toggleState));
   router.post('/delivery/locations/refresh', requirePermission('delivery.coverage.manage'), validateBody(z.object({
     reason: z.string().trim().min(3).max(500).optional(),
   }).strict()), asyncHandler(delivery.refreshLocations));

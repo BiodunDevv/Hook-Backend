@@ -128,8 +128,8 @@ export class ReferralService {
       await createCommerceNotification({
         eventKey: `credit:referral:${referral._id}`,
         userId: referral.referrerUserId,
-        title: 'You earned Hook Coin',
-        body: `A friend you referred completed their first order, so ${formatNaira(referral.referrerBonusMinor)} Hook Coin is now in your account.`,
+        title: 'You earned Hook credit',
+        body: `A friend you referred completed their first order, so ${formatNaira(referral.referrerBonusMinor)} Hook credit is now in your account.`,
         type: 'hook_coin',
         data: { section: 'credits', referralId: String(referral._id) },
       }).catch(() => undefined);

@@ -8,7 +8,7 @@ export const logisticsProviderCreateSchema = z.object({
   name: z.string().trim().min(2).max(80),
   logoUrl: z.string().url().optional(),
   description: z.string().trim().max(300).optional(),
-  feeMinor: moneyMinor,
+  feeMinor: moneyMinor.optional(),
   status: z.enum(['active', 'inactive']).default('active'),
   sortOrder: z.coerce.number().int().min(0).max(999).default(0),
   reason,

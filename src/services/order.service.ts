@@ -428,7 +428,7 @@ export class OrderService {
     const stored = await Order.findOne({ $or: [{ publicId: order.id }, { orderCode: order.id }], userId: owner.userId });
     if (!stored || !order.canCancel) throw new HttpError(409, 'This order can no longer be cancelled', undefined, 'INVALID_STATE_TRANSITION');
     // One transaction: the guarded status flip, released payment links and
-    // restored Hook Coin / coupon either all happen or none do. The guard
+    // restored Hook credit / coupon either all happen or none do. The guard
     // means a payment that confirms while this request runs wins, instead of
     // the cancel overwriting a paid order.
     const session = await mongoose.startSession();

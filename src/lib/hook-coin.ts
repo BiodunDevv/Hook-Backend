@@ -5,8 +5,8 @@ export type HookCoinEarnSettings = {
 };
 
 /**
- * Canonical Hook Coin order reward calculation. Product subtotal is used on
- * purpose: delivery, VAT, coupons and spent Hook Coin do not increase or
+ * Canonical Hook credit order reward calculation. Product subtotal is used on
+ * purpose: delivery, VAT, coupons and spent Hook credit do not increase or
  * reduce the reward earned for the purchased products.
  */
 export function calculateHookCoinEarnMinor(

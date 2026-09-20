@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { publishConfigChanged } from '@services/realtime.service';
 import { auditAdminAction } from '@lib/audit';
 import { sendSuccess } from '@utils/http';
 import { CommerceSettings } from '@models/commerce/commerce.model';
@@ -20,6 +21,7 @@ export class AdminSettingsController {
   update = async (req: Request, res: Response) => {
     settings = { ...settings, ...req.body };
     await auditAdminAction(req, 'settings.update', 'settings', 'platform', { fields: Object.keys(req.body) });
+    publishConfigChanged('commerce');
     sendSuccess(res, { ...settings, updatedAt: new Date().toISOString() });
   };
 

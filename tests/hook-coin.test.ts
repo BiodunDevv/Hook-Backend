@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { calculateHookCoinEarnMinor } from '../src/lib/hook-coin';
 
-test('calculates Hook Coin from the configured subtotal percentage', () => {
+test('calculates Hook credit from the configured subtotal percentage', () => {
   assert.equal(calculateHookCoinEarnMinor(38_500_00, { percent: 1 }), 38_500);
 });
 

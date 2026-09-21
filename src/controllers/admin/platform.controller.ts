@@ -26,7 +26,7 @@ import { issueAccountInvitation, revokeAccountInvitations } from '@services/acco
 import { presentHubRecords, presentMarketRecords, presentPlatformRecords } from '@services/platform-presentation.service';
 import { publishRealtime } from '@services/realtime.service';
 import { MarketVendorService } from '@services/market-vendor.service';
-import { HttpError, sendCreated, sendSuccess } from '@utils/http';
+import { isDuplicateKeyError, HttpError, sendCreated, sendSuccess } from '@utils/http';
 import { adminAccessCatalogCache, adminStaffCache } from '@lib/ttl-cache';
 
 async function byIdentifier<T>(model: Model<T>, identifier: string) {
@@ -1422,6 +1422,12 @@ export class PlatformController {
       email: req.body.email, phone: req.body.phone, password: req.body.password ? await hashPassword(req.body.password) : undefined,
       firstName: req.body.firstName, lastName: req.body.lastName, role: UserRole.MARKETASSOCIATE,
       isActive: true, isEmailVerified: false, isPhoneVerified: false, scopeType: ScopeType.SELF,
+    }).catch((error: unknown) => {
+      if (isDuplicateKeyError(error)) {
+        const field = /phone/i.test(JSON.stringify((error as { keyPattern?: unknown }).keyPattern || '')) ? 'phone' : 'email';
+        throw new HttpError(409, field === 'phone' ? 'An account with this phone number already exists' : 'An account with this email already exists', { field }, 'CONFLICT');
+      }
+      throw error;
     });
     let marketAssociate;
     try {

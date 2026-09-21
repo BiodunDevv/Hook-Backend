@@ -37,3 +37,13 @@ export async function getEmailSettings(): Promise<ResolvedEmailSettings> {
 export function clearEmailSettingsCache() {
   emailSettingsCache.clear();
 }
+
+/**
+ * The address links in emails (account activation, vendor invitations, deletion) point back to. The App URL set in
+ * Admin > Settings > Email wins; the ADMIN_APP_URL / APP_URL environment values are only the fallback.
+ */
+export async function adminAppBaseUrl(): Promise<string> {
+  const doc = await EmailSettings.findOne({ key: 'email' }).select('appUrl').lean();
+  const url = doc?.appUrl?.trim() || process.env.ADMIN_APP_URL || process.env.APP_URL || 'http://localhost:3000';
+  return url.replace(/\/+$/, '');
+}

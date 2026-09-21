@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'crypto';
+import { adminAppBaseUrl } from '@services/email-settings.service';
 import mongoose from 'mongoose';
 import { AccountStatus, AccountType, UserRole } from '@lib/constants';
 import { comparePassword, hashPassword } from '@lib/security';
@@ -268,7 +269,7 @@ export class AccountDeletionService {
       kind: 'scheduled',
       name: user.firstName,
       scheduledFor: formatDeletionDate(scheduledFor),
-      cancelUrl: this.cancelUrl(token),
+      cancelUrl: await this.cancelUrl(token),
     }).catch((error) => console.error('[account-deletion] confirmation email failed', error instanceof Error ? error.message : error));
     return this.present(created);
   }
@@ -366,8 +367,8 @@ export class AccountDeletionService {
     if (owner?.email) await this.email.sendAccountDeletion({ email: owner.email, kind: 'restored', name: owner.firstName }).catch(() => undefined);
   }
 
-  private cancelUrl(token: string) {
-    const base = (process.env.ADMIN_APP_URL || 'http://localhost:3000').replace(/\/$/, '');
+  private async cancelUrl(token: string) {
+    const base = await adminAppBaseUrl();
     return `${base}/delete-account/cancel?token=${encodeURIComponent(token)}`;
   }
 }

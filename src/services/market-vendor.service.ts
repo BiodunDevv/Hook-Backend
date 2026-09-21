@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { adminAppBaseUrl } from '@services/email-settings.service';
 import mongoose from 'mongoose';
 import { MarketVendor, VendorCollection, VendorInvitation, VendorPaymentRecord, type VendorPaymentProfile } from '@models/catalog/market-vendor.model';
 import { Product } from '@models/products/product.model';
@@ -257,7 +258,7 @@ export class MarketVendorService {
       await session.endSession();
     }
 
-    const baseUrl = (process.env.ADMIN_APP_URL || 'http://localhost:3000').replace(/\/$/, '');
+    const baseUrl = (await adminAppBaseUrl());
     const inviteUrl = `${baseUrl}/vendor-invitations/accept?token=${encodeURIComponent(token)}`;
     let delivery = { delivered: false, provider: 'share_link' };
     if (emailAddress) {
@@ -387,7 +388,7 @@ export class MarketVendorService {
       status: 'pending',
       expiresAt,
     });
-    const inviteUrl = `${(process.env.ADMIN_APP_URL || 'http://localhost:3000').replace(/\/$/, '')}/vendor-invitations/accept?token=${encodeURIComponent(token)}`;
+    const inviteUrl = `${(await adminAppBaseUrl())}/vendor-invitations/accept?token=${encodeURIComponent(token)}`;
     if (vendor.email) {
       await email.send({ to: vendor.email, subject: `Hook supplier profile reminder for ${vendor.businessName}`, html: `<p>Review your Hook supplier profile here: <a href="${inviteUrl}">${inviteUrl}</a></p>`, text: inviteUrl }).then(() => VendorInvitation.updateOne({ _id: invitation._id }, { $set: { emailSentAt: new Date() } }));
     }

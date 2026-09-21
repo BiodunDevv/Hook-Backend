@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { adminAppBaseUrl } from '@services/email-settings.service';
 import { AccountStatus, AccountType } from '@lib/constants';
 import { hashPassword } from '@lib/security';
 import { AccountInvitation } from '@models/platform/account-invitation.model';
@@ -52,7 +53,7 @@ export async function issueAccountInvitation(input: {
     expiresAt,
     invitedBy: input.invitedBy,
   });
-  const baseUrl = (process.env.ADMIN_APP_URL || 'http://localhost:3000').replace(/\/$/, '');
+  const baseUrl = (await adminAppBaseUrl());
   const activationUrl = `${baseUrl}${activationPath(input.accountType)}?token=${encodeURIComponent(token)}`;
   const delivery = await email.sendAccountInvitation({
     email: input.email,
@@ -92,7 +93,7 @@ export async function issueCustomerAccountSetup(input: {
     expiresAt,
     invitedBy: input.accountId,
   });
-  const baseUrl = (process.env.ADMIN_APP_URL || 'http://localhost:3000').replace(/\/$/, '');
+  const baseUrl = (await adminAppBaseUrl());
   const activationUrl = `${baseUrl}${activationPath(AccountType.CUSTOMER)}?token=${encodeURIComponent(token)}`;
   const delivery = await email.sendCustomerAccountSetup({
     email: input.email,

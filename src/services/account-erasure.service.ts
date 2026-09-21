@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { adminAppBaseUrl } from '@services/email-settings.service';
 import mongoose from 'mongoose';
 import { AccountStatus, OrderStatus } from '@lib/constants';
 import { timelineEntry } from '@lib/order-timeline';
@@ -96,7 +97,7 @@ export class AccountErasureService {
       coolingOffUntil: { $gt: now, $lte: new Date(now.getTime() + REMINDER_WINDOW_MS) },
     }).limit(limit).lean();
     let sent = 0;
-    const base = (process.env.ADMIN_APP_URL || 'http://localhost:3000').replace(/\/$/, '');
+    const base = (await adminAppBaseUrl());
     for (const request of due) {
       const claimed = await AccountDeletionRequest.updateOne({ _id: request._id, reminderSentAt: { $exists: false } }, { $set: { reminderSentAt: now } });
       if (!claimed.modifiedCount) continue;

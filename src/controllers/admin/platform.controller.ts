@@ -1439,8 +1439,15 @@ export class PlatformController {
       await User.deleteOne({ _id: account._id });
       throw error;
     }
-    for (const [index, market] of startMarkets.entries()) {
-      await this.makeAssignment(req, context, marketAssociate.toObject(), market, { isPrimary: index === 0, priority: (index + 1) * 10, assignmentReason: 'Assigned when the account was created' });
+    try {
+      // The hydrated document is passed on purpose: toObject() strips _id, which the assignment rules need.
+      for (const [index, market] of startMarkets.entries()) {
+        await this.makeAssignment(req, context, marketAssociate, market, { isPrimary: index === 0, priority: (index + 1) * 10, assignmentReason: 'Assigned when the account was created' });
+      }
+    } catch (error) {
+      // No half-made account: if a starting Market cannot be assigned, the whole invitation is undone.
+      await purgeUnacceptedAccount(String(account._id)).catch(() => undefined);
+      throw error;
     }
     const invitation = await issueAccountInvitation({
       accountId: account.id,
@@ -1636,14 +1643,15 @@ export class PlatformController {
     if (!marketAssociate.stateIds.includes(market.stateId)) throw new HttpError(409, `This Market Associate does not work in ${market.name}'s state yet. Add the state to their profile first.`, undefined, 'CONFLICT');
     const preferredHub = options.preferredHubId ? await ensureHub(options.preferredHubId, market.stateId) : undefined;
     assertScope(context, market.stateId, preferredHub?._id.toString());
-    const duplicate = await MarketAssociateMarketAssignment.exists({ marketAssociateId: marketAssociate._id.toString(), marketId: market._id.toString(), status: { $in: ['active', 'paused'] } });
+    const associateId = String(marketAssociate._id ?? marketAssociate.id);
+    const duplicate = await MarketAssociateMarketAssignment.exists({ marketAssociateId: associateId, marketId: market._id.toString(), status: { $in: ['active', 'paused'] } });
     if (duplicate) throw new HttpError(409, 'This Market Associate is already assigned to this Market', undefined, 'CONFLICT');
     // Only one primary Market per person per state: making this one primary retires the previous flag.
     if (options.isPrimary) {
-      await MarketAssociateMarketAssignment.updateMany({ marketAssociateId: marketAssociate._id.toString(), stateId: market.stateId, isPrimary: true, status: 'active' }, { $set: { isPrimary: false } });
+      await MarketAssociateMarketAssignment.updateMany({ marketAssociateId: associateId, stateId: market.stateId, isPrimary: true, status: 'active' }, { $set: { isPrimary: false } });
     }
     const assignment = await MarketAssociateMarketAssignment.create({
-      marketAssociateId: marketAssociate._id.toString(),
+      marketAssociateId: associateId,
       marketId: market._id.toString(),
       stateId: market.stateId,
       priority: options.priority ?? 100,

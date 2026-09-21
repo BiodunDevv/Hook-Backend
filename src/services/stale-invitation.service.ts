@@ -7,7 +7,7 @@ import { revokeAccountInvitations } from '@services/account-invitation.service';
  * An invited account that was never accepted has nothing worth keeping: no sign-in, no work, no history. Removing it
  * frees the email and phone for reuse and keeps it out of every list.
  */
-export type StaleInvitation = { userId: string; email: string; kind: 'staff' | 'marketassociate'; reason: 'no-profile' | 'cancelled' | 'pending' };
+export type StaleInvitation = { userId: string; email: string; kind: 'staff' | 'marketassociate'; reason: 'no-profile' | 'cancelled' };
 
 const INVITED_TYPES = [AccountType.STAFF, AccountType.MARKETASSOCIATE];
 
@@ -30,17 +30,25 @@ export async function purgeUnacceptedAccount(userId: string): Promise<boolean> {
   return true;
 }
 
-/** Called before creating an account: clears a leftover, unaccepted account that holds the same email or phone. */
+/** Why an account counts as stale, or null when it must be kept (a pending invitation is never stale). */
+async function staleReason(user: any): Promise<StaleInvitation['reason'] | null> {
+  if (!neverUsed(user)) return null;
+  const id = String(user._id);
+  const [ma, staff] = await Promise.all([MarketAssociateProfile.findOne({ accountId: id }).select('status').lean(), StaffProfile.findOne({ accountId: id }).select('status').lean()]);
+  const profile: any = ma || staff;
+  if (!profile) return 'no-profile';
+  return String(profile.status).toLowerCase() === 'disabled' ? 'cancelled' : null;
+}
+
+/** Called before creating an account: clears a dead leftover (failed create or cancelled invitation) holding the same email or phone. */
 export async function clearStaleInvitationFor(email?: string, phone?: string): Promise<void> {
   const or: Array<Record<string, string>> = [];
   if (email) or.push({ email: String(email).trim().toLowerCase() });
   if (phone) or.push({ phone: String(phone).trim() });
   if (!or.length) return;
-  const found: any[] = await User.find({ $or: or, accountType: { $in: INVITED_TYPES } }).select('+password accountType lastLoginAt password accountStatus').lean();
+  const found: any[] = await User.find({ $or: or, accountType: { $in: INVITED_TYPES } } as any).select('+password accountType lastLoginAt password accountStatus').lean();
   for (const user of found) {
-    const pending = String(user.accountStatus).toLowerCase();
-    // Only an account still waiting on its invitation, or one whose invitation was cancelled, may be cleared.
-    if (['invited', 'disabled'].includes(pending) && neverUsed(user)) await purgeUnacceptedAccount(String(user._id));
+    if (await staleReason(user)) await purgeUnacceptedAccount(String(user._id));
   }
 }
 
@@ -50,13 +58,8 @@ export async function findStaleInvitations(): Promise<StaleInvitation[]> {
     .select('+password email accountType lastLoginAt password accountStatus').lean();
   const result: StaleInvitation[] = [];
   for (const user of users) {
-    if (!neverUsed(user)) continue;
-    const id = String(user._id);
-    const [ma, staff] = await Promise.all([MarketAssociateProfile.findOne({ accountId: id }).select('status').lean(), StaffProfile.findOne({ accountId: id }).select('status').lean()]);
-    const profile: any = ma || staff;
-    const kind = user.accountType === AccountType.STAFF ? 'staff' : 'marketassociate';
-    if (!profile) result.push({ userId: id, email: user.email, kind, reason: 'no-profile' });
-    else if (String(profile.status).toLowerCase() === 'disabled') result.push({ userId: id, email: user.email, kind, reason: 'cancelled' });
+    const reason = await staleReason(user);
+    if (reason) result.push({ userId: String(user._id), email: user.email, kind: user.accountType === AccountType.STAFF ? 'staff' : 'marketassociate', reason });
   }
   return result;
 }

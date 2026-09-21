@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { categoryService } from '@services/category.service';
 import { ProductAvailabilityStatus, ProductStatus } from "@lib/constants";
 import { Category } from "@models/categories/category.model";
 import { OperationState } from "@models/platform/geography.model";
@@ -103,7 +104,14 @@ function searchClause(value: unknown) {
 
 export class PublicCatalogController {
   discover = async (req: Request, res: Response) => {
+    const cacheKey = `discover:${queryKey(req.query as Record<string, unknown>)}`;
+    const lookup = await sharedCache.lookup<any>("catalog", cacheKey);
+    if (lookup.hit) {
+      sendSuccess(res, lookup.value);
+      return;
+    }
     const limit = Math.min(Math.max(Number(req.query.limit || 20), 1), 40);
+    const offset = Math.min(Math.max(Number(req.query.offset || 0), 0), 2000);
     const filter: Record<string, any> = baseFilter();
     const [stateId, marketId, categoryId] = await Promise.all([
       internalId(
@@ -116,7 +124,8 @@ export class PublicCatalogController {
     ]);
     if (stateId) filter.sourceStateId = stateId;
     if (marketId) filter.marketId = marketId;
-    if (categoryId) filter.categoryId = categoryId;
+    // A parent category covers all of its sub-categories.
+    if (categoryId) filter.categoryId = { $in: await categoryService.descendantIds(categoryId) };
     const search = searchClause(req.query.q);
     if (search) filter.$and = [search];
 
@@ -124,24 +133,29 @@ export class PublicCatalogController {
       Product.find(filter)
         .select(PUBLIC_PRODUCT_CARD_FIELDS)
         .sort({ publishedAt: -1, _id: -1 })
-        .limit(limit)
+        .skip(offset)
+        .limit(limit + 1)
         .lean({ virtuals: true }),
-      Category.find({ isActive: true, deletedAt: { $exists: false } })
+      // Top-level categories only; sub-categories come with /categories.
+      Category.find({ isActive: true, deletedAt: { $exists: false }, parentId: { $exists: false } })
         .select("publicId name slug iconUrl")
         .sort({ sortOrder: 1, name: 1 })
         .lean({ virtuals: true }),
     ]);
 
-    sendSuccess(res, {
+    const payload = {
       categories: categories.map((item: any) => ({
         publicId: item.publicId,
         name: item.name,
         slug: item.slug,
         iconUrl: item.iconUrl || null,
       })),
-      products: await publicProductRepresentations(products, { compact: true }),
-      resultCount: products.length,
-    });
+      products: await publicProductRepresentations(products.slice(0, limit), { compact: true }),
+      resultCount: Math.min(products.length, limit),
+      hasMore: products.length > limit,
+    };
+    await lookup.store(payload);
+    sendSuccess(res, payload);
   };
 
   products = async (req: Request, res: Response) => {
@@ -164,7 +178,8 @@ export class PublicCatalogController {
     ]);
     if (stateId) filter.sourceStateId = stateId;
     if (marketId) filter.marketId = marketId;
-    if (categoryId) filter.categoryId = categoryId;
+    // A parent category covers all of its sub-categories.
+    if (categoryId) filter.categoryId = { $in: await categoryService.descendantIds(categoryId) };
     if (req.query.minPriceMinor || req.query.maxPriceMinor) {
       filter.$expr = {
         $and: [
@@ -320,30 +335,44 @@ export class PublicCatalogController {
     );
   };
 
-  categories = async (_req: Request, res: Response) => {
-    const cacheKey = "categories:active";
+  categories = async (req: Request, res: Response) => {
+    // The customer app asks for withProducts=true so empty categories never appear.
+    // Market Associate and Partner forms need the full tree to file new products.
+    const withProducts = req.query.withProducts === "true";
+    const cacheKey = withProducts ? "categories:active:stocked" : "categories:active";
     const lookup = await sharedCache.lookup<any>("catalog", cacheKey);
     if (lookup.hit) {
       sendSuccess(res, lookup.value);
       return;
     }
-    const categories = await Category.find({
-      isActive: true,
-      deletedAt: { $exists: false },
-    })
-      .select(
-        "publicId name slug iconUrl description sortOrder attributeSchema",
-      )
-      .sort({ sortOrder: 1, name: 1 })
-      .lean({ virtuals: true });
-    const response = categories.map((item: any) => ({
-      publicId: item.publicId,
-      name: item.name,
-      slug: item.slug,
-      iconUrl: item.iconUrl || null,
-      description: item.description || "",
-      sortOrder: item.sortOrder || 0,
-      sizingGuide: item.attributeSchema?.sizingGuide || null,
+    // Top-level categories, each with its sub-categories and the details a
+    // product in it asks for. Children of an inactive parent are hidden.
+    const [tree, counts] = await Promise.all([
+      categoryService.tree(),
+      withProducts
+        ? Product.aggregate([{ $match: baseFilter() }, { $group: { _id: "$categoryId", count: { $sum: 1 } } }])
+        : Promise.resolve([]),
+    ]);
+    const countOf = new Map<string, number>(counts.map((item: any) => [String(item._id), Number(item.count)]));
+    const stocked = (node: any) => (countOf.get(node.internalId) || 0) + (node.children || []).reduce((sum: number, child: any) => sum + (countOf.get(child.internalId) || 0), 0);
+    const visibleTree = withProducts ? tree.filter((root: any) => stocked(root) > 0).map((root: any) => ({ ...root, children: (root.children || []).filter((child: any) => (countOf.get(child.internalId) || 0) > 0) })) : tree;
+    const present = (node: any) => ({
+      publicId: node.publicId,
+      name: node.name,
+      slug: node.slug,
+      iconUrl: node.iconUrl || null,
+      description: node.description || "",
+      sortOrder: 0,
+      level: node.level,
+      parentId: node.parentId || null,
+      attributes: node.attributes,
+      sizingGuide: node.sizingGuide || null,
+    });
+    const response = visibleTree.map((root: any, index: number) => ({
+      ...present(root),
+      sortOrder: index + 1,
+      ...(withProducts ? { productCount: stocked(root) } : {}),
+      children: (root.children || []).map((child: any, childIndex: number) => ({ ...present(child), sortOrder: childIndex + 1, ...(withProducts ? { productCount: countOf.get(child.internalId) || 0 } : {}) })),
     }));
     await lookup.store(response);
     sendSuccess(res, response);
@@ -406,7 +435,7 @@ export class PublicCatalogController {
         .sort({ publishedAt: -1, _id: -1 })
         .limit(12)
         .lean({ virtuals: true }),
-      Category.find({ isActive: true, deletedAt: { $exists: false } })
+      Category.find({ isActive: true, deletedAt: { $exists: false }, parentId: { $exists: false } })
         .select("publicId name slug iconUrl")
         .sort({ sortOrder: 1 })
         .limit(12)

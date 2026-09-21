@@ -152,6 +152,10 @@ export class PodService {
         return true;
       });
     } else if (decision === "PREPAYMENT_REQUIRED") {
+      // The delivery fee is already paid at this point, so the order cannot be turned into a fully prepaid one
+      // without splitting money the customer has already paid. Approve it or cancel it (the fee is refunded).
+      if ((order as any).podFeePaid)
+        throw new HttpError(409, "The delivery fee is already paid. Approve this order, or cancel it to refund the fee.", undefined, "INVALID_STATE_TRANSITION");
       await this.transition(order, async (session, guard) => {
         const moved = await Order.updateOne(guard, {
           $set: {
@@ -189,7 +193,11 @@ export class PodService {
       });
       // A customer-initiated cancellation has its own dedicated email; an
       // operations rejection had none until now.
-      if (cancelled) await notifyStatus(String(order._id), CommerceOrderStatus.CANCELLED);
+      if (cancelled) {
+        await notifyStatus(String(order._id), CommerceOrderStatus.CANCELLED);
+        // Cancelled before dispatch: the online delivery fee goes back to the customer.
+        await this.payments.refundDeliveryFee(String(order._id));
+      }
     }
     if (order.userId) {
       const copy =

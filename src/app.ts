@@ -1,3 +1,4 @@
+import compression from 'compression';
 import { redisHealth } from '@config/redis';
 import { sharedCache } from '@services/cache.service';
 import cors from 'cors';
@@ -33,6 +34,8 @@ export function createApp() {
   app.set('trust proxy', 1);
   app.use(requestContext);
   app.use(requestTiming);
+  // Smaller responses over slow mobile networks: catalogue payloads compress to a fraction of their size.
+  app.use(compression({ threshold: 1024 }));
   app.use(helmet({
     crossOriginResourcePolicy: { policy: 'cross-origin' },
   }));
@@ -141,6 +144,14 @@ export function createApp() {
   app.use(`${apiPrefix}/market-associate`, createMarketAssociateRouter());
   app.use(`${apiPrefix}/partner`, createPartnerRouter());
   app.use(`${apiPrefix}/catalog/media`, uploadLimiter, createCatalogMediaRouter());
+  // Public reads are revalidated on every request (cheap 304s via ETag), so an admin change reaches the app the moment
+  // the realtime refresh fires instead of waiting out a stale copy.
+  app.use(`${apiPrefix}/public`, (req: Request, res: Response, next: NextFunction) => {
+    if (req.method === 'GET' && /^\/(categories|markets|banners|operating-states)(\/|$|\?)/.test(req.url)) {
+      res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+    }
+    next();
+  });
   app.use(`${apiPrefix}/public`, createPublicGeographyRouter());
   app.use(`${apiPrefix}/upload`, uploadLimiter, createUploadRouter());
   app.use(`${apiPrefix}/webhooks`, createWebhookRouter());

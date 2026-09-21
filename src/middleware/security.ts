@@ -3,6 +3,8 @@ import { HttpError } from '@utils/http';
 import { getRedis, redisKey } from '@config/redis';
 
 type RateLimitOptions = {
+  /** Count in Redis so every API instance shares the limit. Defaults to true; false counts in-process. */
+  shared?: boolean;
   windowMs: number;
   max: number;
   message?: string;
@@ -51,8 +53,8 @@ function hitMemory(bucket: Map<string, Bucket>, key: string, windowMs: number): 
  * limiter degrades to a per-process counter instead of rejecting traffic:
  * a Redis outage must never lock customers out.
  */
-async function hit(name: string, bucket: Map<string, Bucket>, key: string, windowMs: number): Promise<Bucket> {
-  const redis = process.env.RATE_LIMIT_STORE === 'memory' ? undefined : getRedis();
+async function hit(name: string, bucket: Map<string, Bucket>, key: string, windowMs: number, shared: boolean): Promise<Bucket> {
+  const redis = !shared || process.env.RATE_LIMIT_STORE === 'memory' ? undefined : getRedis();
   if (redis) {
     try {
       const [count, ttl] = (await redis.eval(WINDOW_SCRIPT, 1, redisKey('rl', name, key), String(windowMs))) as [number, number];
@@ -69,7 +71,7 @@ export function rateLimit(name: string, options: RateLimitOptions) {
   stores.set(name, bucket);
 
   return (req: Request, res: Response, next: NextFunction) => {
-    hit(name, bucket, options.key ? options.key(req) : clientKey(req), options.windowMs).then((entry) => {
+    hit(name, bucket, options.key ? options.key(req) : clientKey(req), options.windowMs, options.shared !== false).then((entry) => {
       res.setHeader('X-RateLimit-Limit', String(options.max));
       res.setHeader('X-RateLimit-Remaining', String(Math.max(options.max - entry.count, 0)));
       res.setHeader('X-RateLimit-Reset', String(Math.ceil(entry.resetAt / 1000)));
@@ -115,7 +117,10 @@ export function sanitizeRequest(req: Request, _res: Response, next: NextFunction
   next();
 }
 
+// The general limiter runs on every request, so it counts in-process: a Redis round trip per request would add
+// a network hop to every response. Strict limiters (auth, uploads) stay shared across instances.
 export const generalLimiter = rateLimit('general', {
+  shared: process.env.GENERAL_RATE_LIMIT_SHARED === 'true',
   windowMs: Number(process.env.RATE_LIMIT_WINDOW_MS || 60_000),
   max: Number(process.env.RATE_LIMIT_MAX || 600),
 });

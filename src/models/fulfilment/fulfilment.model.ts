@@ -19,14 +19,18 @@ export type ItemVerificationCheck = {
   sizeMatches: boolean;
   colorMatches: boolean;
   quantityMatches: boolean;
+  /** Every other detail the category asks for (capacity, length, phone model...). True when the item has none. */
+  attributesMatch?: boolean;
 };
 
 export type ItemVerification = {
   orderItemId: string;
   photoUrl?: string;
   photos: Array<{ view: 'front' | 'side' | 'back'; url: string; assetId?: string }>;
-  actualColor: string;
-  actualSize: string;
+  actualColor?: string;
+  actualSize?: string;
+  /** What was found for each non-size, non-colour detail the order asked for. */
+  actualAttributes?: Record<string, string>;
   actualQuantity: number;
   unitCostMinor: number;
   supplierReference?: string;
@@ -189,6 +193,7 @@ export interface PartnerCustody extends BaseEntity {
   collectionCodeHash?: string;
   collectionCodeHint?: string;
   codeAttempts: number;
+  lastCodeAttemptAt?: Date;
   codeSentAt?: Date;
   receivedAt?: Date;
   releasedAt?: Date;
@@ -307,7 +312,7 @@ const manifestSchema = createSchema<PickupManifest>({
 
 
 const custodySchema = createSchema<PartnerCustody>({
-  publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, required: true, unique: true, index: true }, shipmentId: { type: String, required: true, index: true }, partnerId: { type: String, required: true, index: true }, status: { type: String, enum: ['AWAITING_RECEIPT', 'IN_CUSTODY', 'RELEASED', 'OVERDUE', 'RECOVERY'], default: 'AWAITING_RECEIPT', index: true }, collectionCodeHash: { type: String, select: false }, collectionCodeHint: { type: String }, codeAttempts: { type: Number, default: 0 }, codeSentAt: { type: Date }, receivedAt: { type: Date }, releasedAt: { type: Date }, expiresAt: { type: Date, required: true, index: true }, customerEmailSnapshot: { type: String, required: true }, idempotencyKey: { type: String, unique: true, sparse: true }, history: { type: [Object], default: [] },
+  publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, required: true, unique: true, index: true }, shipmentId: { type: String, required: true, index: true }, partnerId: { type: String, required: true, index: true }, status: { type: String, enum: ['AWAITING_RECEIPT', 'IN_CUSTODY', 'RELEASED', 'OVERDUE', 'RECOVERY'], default: 'AWAITING_RECEIPT', index: true }, collectionCodeHash: { type: String, select: false }, collectionCodeHint: { type: String }, codeAttempts: { type: Number, default: 0 }, lastCodeAttemptAt: { type: Date }, codeSentAt: { type: Date }, receivedAt: { type: Date }, releasedAt: { type: Date }, expiresAt: { type: Date, required: true, index: true }, customerEmailSnapshot: { type: String, required: true }, idempotencyKey: { type: String, unique: true, sparse: true }, history: { type: [Object], default: [] },
 });
 
 const returnSchema = createSchema<ReturnRequest>({

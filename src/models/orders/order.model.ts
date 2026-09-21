@@ -17,6 +17,7 @@ export interface Order extends BaseEntity {
   commercePaymentMethod?: "PREPAID" | "PAY_AT_HANDOVER";
   commerceStatus?:
     | "AWAITING_PAYMENT"
+    | "AWAITING_DELIVERY_FEE"
     | "VERIFICATION_PENDING"
     | "OPERATIONS_REVIEW"
     | "APPROVED_FOR_FULFILMENT"
@@ -64,6 +65,9 @@ export interface Order extends BaseEntity {
   checkoutPreviewId?: string;
   idempotencyKey?: string;
   podReview?: Record<string, unknown>;
+  /** Pay on Delivery: paid online up front (delivery fee plus surcharge), and whether it has been paid. */
+  podFeeDueNowMinor?: number;
+  podFeePaid?: boolean;
   orderCode: string;
   userId?: string;
   guestId?: string;
@@ -145,6 +149,7 @@ const OrderSchema = createSchema<Order>({
     type: String,
     enum: [
       "AWAITING_PAYMENT",
+      "AWAITING_DELIVERY_FEE",
       "VERIFICATION_PENDING",
       "OPERATIONS_REVIEW",
       "APPROVED_FOR_FULFILMENT",
@@ -200,6 +205,8 @@ const OrderSchema = createSchema<Order>({
   checkoutPreviewId: { type: String, unique: true, sparse: true, index: true },
   idempotencyKey: { type: String, unique: true, sparse: true },
   podReview: { type: Object },
+  podFeeDueNowMinor: { type: Number, default: 0 },
+  podFeePaid: { type: Boolean, default: false },
   orderCode: { type: String, required: true, unique: true, index: true },
   userId: { type: String, index: true },
   guestId: { type: String, index: true },
@@ -256,6 +263,9 @@ const OrderSchema = createSchema<Order>({
 });
 
 OrderSchema.index({ userId: 1, status: 1 });
+// Payment reminders and the unpaid-order expiry scan by status and age; customers list their orders newest first.
+OrderSchema.index({ commerceStatus: 1, createdAt: 1 });
+OrderSchema.index({ userId: 1, createdAt: -1 });
 OrderSchema.index({ guestId: 1, status: 1 });
 OrderSchema.index({ boothId: 1, createdAt: -1 });
 OrderSchema.index({ boothId: 1, paymentStatus: 1, status: 1 });

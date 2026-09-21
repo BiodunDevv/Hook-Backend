@@ -37,6 +37,10 @@ function headers() {
   };
 }
 
+const CHANNELS = new Set(['orders', 'account', 'credit', 'reminders', 'discovery']);
+/** Each notification group has its own Android channel; older app builds only know 'default'. */
+const channelFor = (message: PushMessage) => (CHANNELS.has(String(message.data?.group)) ? String(message.data?.group) : 'default');
+
 const chunk = <T>(items: T[], size: number) =>
   Array.from({ length: Math.ceil(items.length / size) }, (_, index) => items.slice(index * size, (index + 1) * size));
 
@@ -76,7 +80,7 @@ export async function sendPushMessages(messages: PushMessage[]) {
           sound: 'default',
           // Android: `default` is the channel the app creates at startup, and
           // high priority lets the banner appear while the phone is dozing.
-          channelId: 'default',
+          channelId: channelFor(message),
           priority: 'high',
         })),
       );

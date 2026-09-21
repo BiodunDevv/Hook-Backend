@@ -57,6 +57,7 @@ function timelineFor(order: any, shipment?: any) {
   const sequence = ['AWAITING_PAYMENT', 'OPERATIONS_REVIEW', 'IN_FULFILMENT', 'READY_FOR_CONSOLIDATION', 'READY_FOR_DISPATCH', 'IN_TRANSIT', 'DELIVERED'];
   const stageByStatus: Record<string, number> = {
     AWAITING_PAYMENT: 0,
+    AWAITING_DELIVERY_FEE: 0,
     VERIFICATION_PENDING: 1,
     OPERATIONS_REVIEW: 1,
     APPROVED_FOR_FULFILMENT: 2,
@@ -415,10 +416,14 @@ export class OrderService {
           : undefined,
       totalMinor: Number(order.totalMinor ?? Math.round(Number(order.total || 0) * 100)),
       currency: order.currency || 'NGN',
+      // Pay on Delivery: the online delivery fee and whether it has been paid.
+      awaitingDeliveryFee: String(order.commerceStatus || '').toUpperCase() === 'AWAITING_DELIVERY_FEE',
+      podFeeDueNowMinor: Number((order as any).podFeeDueNowMinor || 0),
+      podFeePaid: Boolean((order as any).podFeePaid),
       timeline: timelineFor(order, primaryShipment),
       deliveries,
       substitutions: substitutions.map((entry: any) => ({ id: entry.publicId || entry.id, version: entry.version, status: entry.status, type: entry.type, summary: entry.summary, original: entry.originalSnapshot, proposal: entry.proposal, adjustmentMinor: entry.adjustmentMinor, adjustmentStatus: entry.adjustmentStatus, adjustmentAuthorizationUrl: entry.adjustmentAuthorizationUrl, customerDecision: entry.customerDecision })),
-      canCancel: ['PENDING', 'AWAITING_PAYMENT'].includes(String(order.commerceStatus || order.status).toUpperCase())
+      canCancel: ['PENDING', 'AWAITING_PAYMENT', 'AWAITING_DELIVERY_FEE'].includes(String(order.commerceStatus || order.status).toUpperCase())
         && !['CONFIRMED', 'PAID'].includes(String(order.commercePaymentStatus || order.paymentStatus).toUpperCase()),
     } as any;
   }
@@ -439,7 +444,7 @@ export class OrderService {
           {
             _id: stored._id,
             userId: owner.userId,
-            commerceStatus: { $in: ['PENDING', 'AWAITING_PAYMENT'] },
+            commerceStatus: { $in: ['PENDING', 'AWAITING_PAYMENT', 'AWAITING_DELIVERY_FEE'] },
             commercePaymentStatus: { $nin: ['CONFIRMED', 'PAID'] },
           } as any,
           {
@@ -520,3 +525,54 @@ export class OrderService {
     return user;
   }
 }
+
+/**
+ * Cancels prepaid orders nobody paid for, so the credit and coupon they held are
+ * given back. An order still mid-payment (PROCESSING) is left alone. Idempotent:
+ * the status guard means a payment that lands meanwhile wins over the expiry.
+ */
+export async function expireUnpaidOrders(now = new Date()) {
+  const hours = Math.max(1, Number(process.env.UNPAID_ORDER_EXPIRY_HOURS || 24));
+  const cutoff = new Date(now.getTime() - hours * 3_600_000);
+  const stale = await Order.find({
+    commerceStatus: 'AWAITING_PAYMENT',
+    commercePaymentMethod: 'PREPAID',
+    commercePaymentStatus: { $nin: ['CONFIRMED', 'PROCESSING'] },
+    createdAt: { $lt: cutoff },
+  } as any).select('_id publicId userId').limit(200).lean();
+  let expired = 0;
+  for (const item of stale) {
+    const session = await mongoose.startSession();
+    try {
+      let flipped = false;
+      await session.withTransaction(async () => {
+        const saved = await Order.findOneAndUpdate(
+          { _id: item._id, commerceStatus: 'AWAITING_PAYMENT', commercePaymentStatus: { $nin: ['CONFIRMED', 'PROCESSING'] } } as any,
+          { $set: { status: OrderStatus.CANCELLED, commerceStatus: 'CANCELLED', cancelledAt: new Date(), cancellationReason: 'Not paid in time' }, $push: { timeline: timelineEntry('CANCELLED', 'SYSTEM', { actorType: 'system' }) } },
+          { session },
+        ).lean();
+        if (!saved) return;
+        flipped = true;
+        await restoreOrderIncentives(String(item._id), session);
+        await PaymentLink.updateMany({ orderId: String(item._id), status: { $in: ['active', 'processing'] } }, { $set: { status: 'cancelled', cancelledAt: new Date() } }, { session });
+      });
+      if (flipped) {
+        expired += 1;
+        if (item.userId) {
+          await createCommerceNotification({
+            eventKey: `order:${item.publicId}:expired`,
+            userId: String(item.userId),
+            title: 'Order cancelled',
+            body: `Order ${item.publicId} was cancelled because it was not paid in time. Any Hook credit and coupon you used have been returned.`,
+            type: 'order_cancelled',
+            data: { orderId: item.publicId },
+          }).catch(() => undefined);
+        }
+      }
+    } finally {
+      await session.endSession();
+    }
+  }
+  return { expired };
+}
+

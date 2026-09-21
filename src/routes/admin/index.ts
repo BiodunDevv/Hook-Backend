@@ -12,6 +12,7 @@ import { AdminSearchController } from "@controllers/admin/search.controller";
 import { AdminProductsController } from "@controllers/admin/products.controller";
 import { AdminReportsController } from "@controllers/admin/reports.controller";
 import { AdminSettingsController } from "@controllers/admin/settings.controller";
+import { AdminBannersController } from "@controllers/admin/banners.controller";
 import { AdminLegalContentController } from "@controllers/admin/legal-content.controller";
 import { AdminUsersController } from "@controllers/admin/users.controller";
 import { AdminCommerceController } from "@controllers/admin/commerce.controller";
@@ -60,6 +61,8 @@ import {
   commerceSettingsSchema,
   emailSettingsSchema,
   inventorySettingsSchema,
+  checkoutSettingsSchema,
+  podConfigSchema,
   hookCoinSettingsSchema,
   adminOrderUpdateSchema,
   adminOrderCancelSchema,
@@ -90,6 +93,7 @@ export function createAdminRouter() {
   const reports = new AdminReportsController();
   const settings = new AdminSettingsController();
   const legalContent = new AdminLegalContentController();
+  const banners = new AdminBannersController();
   const search = new AdminSearchController();
   const categories = new AdminCategoriesController();
   const coupons = new AdminCouponsController();
@@ -235,6 +239,17 @@ export function createAdminRouter() {
     validateBody(categoryUpdateSchema),
     asyncHandler(categories.update),
   );
+  router.get(
+    "/categories/:id/manager-options",
+    requirePermission("categories.view"),
+    asyncHandler(categories.managerOptions),
+  );
+  router.put(
+    "/categories/:id/managers",
+    requirePermission("categories.manage"),
+    validateBody(z.object({ userIds: z.array(z.string().min(3).max(80)).max(50) }).strict()),
+    asyncHandler(categories.setManagers),
+  );
   router.patch(
     "/categories/:id/toggle",
     requirePermission("categories.manage"),
@@ -364,6 +379,12 @@ export function createAdminRouter() {
     "/products",
     requirePermission("products.view"),
     asyncHandler(products.list),
+  );
+  router.post(
+    "/products/recategorise",
+    requirePermission("products.edit"),
+    validateBody(z.object({ productIds: z.array(z.string().min(3).max(80)).min(1).max(500), categoryId: z.string().min(3).max(80) }).strict()),
+    asyncHandler(products.recategorise),
   );
   router.post(
     "/products",
@@ -544,6 +565,28 @@ export function createAdminRouter() {
     requirePermission("commerce.settings.manage"),
     validateBody(paymentProviderSettingsSchema),
     asyncHandler(commerce.updatePaymentProviders),
+  );
+  router.get(
+    "/commerce/pod-config",
+    requirePermission("commerce.settings.view"),
+    asyncHandler(commerce.podConfig),
+  );
+  router.patch(
+    "/commerce/pod-config",
+    requirePermission("commerce.settings.manage"),
+    validateBody(podConfigSchema),
+    asyncHandler(commerce.updatePodConfig),
+  );
+  router.get(
+    "/commerce/checkout-settings",
+    requirePermission("commerce.settings.view"),
+    asyncHandler(commerce.checkoutSettings),
+  );
+  router.patch(
+    "/commerce/checkout-settings",
+    requirePermission("commerce.settings.manage"),
+    validateBody(checkoutSettingsSchema),
+    asyncHandler(commerce.updateCheckoutSettings),
   );
   router.get(
     "/commerce/inventory-settings",
@@ -743,6 +786,22 @@ export function createAdminRouter() {
   );
   router.get('/settings/catalog-availability', requirePermission('catalog.availability.view'), asyncHandler(settings.catalogAvailability));
   router.patch('/settings/catalog-availability', requirePermission('catalog.availability.manage'), validateBody(z.object({ catalogAvailabilityCheckDays: z.coerce.number().int().min(1).max(30), reason: z.string().trim().min(3).max(500) }).strict()), asyncHandler(settings.updateCatalogAvailability));
+  const bannerBody = z.object({
+    text: z.string().trim().min(3).max(140),
+    imageUrl: z.string().trim().url().max(500).or(z.literal('')).optional(),
+    linkType: z.enum(['category', 'product', 'market', 'none']).optional(),
+    linkTarget: z.string().trim().max(120).optional(),
+    placement: z.enum(['home', 'category', 'all']).optional(),
+    tone: z.enum(['gold', 'dark', 'green', 'red']).optional(),
+    isActive: z.boolean().optional(),
+    sortOrder: z.coerce.number().int().min(0).max(999).optional(),
+    startsAt: z.coerce.date().nullable().optional(),
+    endsAt: z.coerce.date().nullable().optional(),
+  }).strict();
+  router.get('/banners', requirePermission('settings.view'), asyncHandler(banners.list));
+  router.post('/banners', requirePermission('settings.manage'), validateBody(bannerBody), asyncHandler(banners.create));
+  router.patch('/banners/:id', requirePermission('settings.manage'), validateBody(bannerBody.partial()), asyncHandler(banners.update));
+  router.delete('/banners/:id', requirePermission('settings.manage'), asyncHandler(banners.remove));
   router.get('/legal/:type', requirePermission('settings.view'), asyncHandler(legalContent.get));
   router.patch('/legal/:type', requirePermission('settings.manage'), validateBody(z.object({ title: z.string().trim().min(1).max(200).optional(), bodyHtml: z.string().trim().min(1), effectiveDate: z.coerce.date().optional(), reason: z.string().trim().min(3).max(500) }).strict()), asyncHandler(legalContent.update));
 
@@ -789,8 +848,11 @@ export function createAdminRouter() {
   router.patch('/delivery/states/:id', requireAnyPermission('delivery.coverage.manage', 'delivery.pricing.manage'), validateBody(z.object({
     deliveryEnabled: z.boolean().optional(),
     deliveryFeeMinor: z.number().int().nonnegative().max(100_000_000).optional(),
+    podEnabled: z.boolean().optional(),
+    podLimitMinor: z.number().int().nonnegative().max(10_000_000_000).nullable().optional(),
+    podMinimumOrderMinor: z.number().int().nonnegative().max(10_000_000_000).nullable().optional(),
     reason: z.string().trim().min(3).max(500).optional(),
-  }).strict().refine((body) => body.deliveryEnabled !== undefined || body.deliveryFeeMinor !== undefined, { message: 'Nothing to update' })), asyncHandler(delivery.toggleState));
+  }).strict().refine((body) => body.deliveryEnabled !== undefined || body.deliveryFeeMinor !== undefined || body.podEnabled !== undefined || body.podLimitMinor !== undefined || body.podMinimumOrderMinor !== undefined, { message: 'Nothing to update' })), asyncHandler(delivery.toggleState));
   router.post('/delivery/locations/refresh', requirePermission('delivery.coverage.manage'), validateBody(z.object({
     reason: z.string().trim().min(3).max(500).optional(),
   }).strict()), asyncHandler(delivery.refreshLocations));

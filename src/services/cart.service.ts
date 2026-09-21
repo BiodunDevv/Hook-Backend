@@ -32,6 +32,20 @@ export type CustomerOwner = {
   guestId?: string;
 };
 
+/**
+ * What a customer sees for a chosen variant: colour and size as before, plus
+ * every other detail the category asks for (capacity, length, connector...).
+ */
+function variantSnapshot(variant: { colour?: string; size?: string; attributes?: Record<string, string> }) {
+  const snapshot: Record<string, string> = {};
+  if (variant.colour) snapshot.color = variant.colour;
+  if (variant.size) snapshot.size = variant.size;
+  for (const [key, value] of Object.entries(variant.attributes || {})) {
+    if (value && !(key in snapshot)) snapshot[key] = String(value);
+  }
+  return snapshot;
+}
+
 export class CartService {
   constructor(
     _carts?: Repository<Cart>,
@@ -90,7 +104,7 @@ export class CartService {
     owner: CustomerOwner,
     productIdentifier: string,
     quantity: number,
-    selectedVariants?: { color?: string; size?: string },
+    selectedVariants?: Record<string, string | undefined>,
     variantId?: string,
     quoteId?: string,
     options?: { deferRecalculation?: boolean },
@@ -165,11 +179,13 @@ export class CartService {
       quote = await NegotiatedQuote.findOne({
         ...identifierFilter(quoteId),
         productId,
-        customerId: owner.userId,
+        // A Partner shopping for a customer negotiates on that customer's behalf.
+        customerId: owner.userId ?? owner.assistedCustomerId,
         status: NegotiatedQuoteStatus.ACTIVE,
         quantity,
         expiresAt: { $gt: new Date() },
-        ...(variant ? { variantId: variant._id.toString() } : {}),
+        // A quote belongs to one variant: never let it attach to a different (or no) option.
+        ...(variant ? { variantId: variant._id.toString() } : { variantId: { $in: [null, ''] } as any }),
       }).lean({ virtuals: true });
       if (!quote)
         throw new HttpError(
@@ -226,7 +242,7 @@ export class CartService {
               unitPrice: unitPriceMinor / 100,
               productVersion: product.catalogVersion || 1,
               selectedVariants: variant
-                ? { color: variant.colour, size: variant.size }
+                ? variantSnapshot(variant)
                 : selectedVariants,
               variantKey,
             },
@@ -270,6 +286,10 @@ export class CartService {
           existing.unitPriceMinor = Number(
             product.sellingPriceMinor - Number(product.discountMinor || 0),
           );
+        } else {
+          // Adding again is also the way to heal a line whose price or product version went stale.
+          existing.unitPriceMinor = unitPriceMinor;
+          existing.productVersion = product.catalogVersion || 1;
         }
         existing.quantity = nextQuantity;
         existing.marketId = product.marketId;
@@ -299,7 +319,7 @@ export class CartService {
           productVersion: product.catalogVersion || 1,
           quoteVersion: quote?.version || undefined,
           selectedVariants: variant
-            ? { color: variant.colour, size: variant.size }
+            ? variantSnapshot(variant)
             : selectedVariants,
           variantKey,
         });
@@ -373,6 +393,7 @@ export class CartService {
         "PRODUCT_NOT_AVAILABLE",
       );
     let unitPriceMinor = Number(item.unitPriceMinor || 0);
+    let dropQuote = false;
     if (item.quoteId) {
       const quote = await NegotiatedQuote.findOne({
         _id: item.quoteId,
@@ -382,7 +403,7 @@ export class CartService {
         status: NegotiatedQuoteStatus.ACTIVE,
         expiresAt: { $gt: new Date() },
       })
-        .select("agreedPriceMinor")
+        .select("agreedPriceMinor quantity")
         .lean();
       if (!quote)
         throw new HttpError(
@@ -391,7 +412,13 @@ export class CartService {
           undefined,
           "NEGOTIATION_QUOTE_EXPIRED",
         );
-      unitPriceMinor = Number(quote.agreedPriceMinor);
+      if (Number(quote.quantity) === quantity) unitPriceMinor = Number(quote.agreedPriceMinor);
+      else {
+        // The agreed price was for a specific quantity. A different quantity goes back to the list price
+        // instead of quietly keeping the discount.
+        dropQuote = true;
+        unitPriceMinor = Number(product.sellingPriceMinor) - Number(product.discountMinor || 0);
+      }
     }
     const updated = await CartItem.findOneAndUpdate(
       { ...identifierFilter(itemId), cartId },
@@ -403,6 +430,7 @@ export class CartService {
           totalPriceMinor: quantity * unitPriceMinor,
           totalPrice: (quantity * unitPriceMinor) / 100,
         },
+        ...(dropQuote ? { $unset: { quoteId: 1, quoteVersion: 1 } } : {}),
       },
       { returnDocument: "after" },
     )
@@ -631,14 +659,20 @@ export class CartService {
     };
   }
 
-  private variantKey(selected?: { color?: string; size?: string }) {
-    const color = String(selected?.color || "")
-      .trim()
-      .toLowerCase();
-    const size = String(selected?.size || "")
-      .trim()
-      .toLowerCase();
-    return color || size ? `${color || "-"}::${size || "-"}` : "default";
+  /** Key for a line with no catalog variant: every chosen detail, in a stable order. */
+  private variantKey(selected?: Record<string, string | undefined>) {
+    const entries = Object.entries(selected || {})
+      .map(([key, value]) => [key.toLowerCase(), String(value ?? "").trim().toLowerCase()] as const)
+      .filter(([, value]) => value)
+      .sort(([a], [b]) => a.localeCompare(b));
+    if (!entries.length) return "default";
+    // Colour and size keep the historical `color::size` shape so existing lines still match.
+    const only = entries.every(([key]) => key === "color" || key === "size");
+    if (only) {
+      const lookup = Object.fromEntries(entries);
+      return `${lookup.color || "-"}::${lookup.size || "-"}`;
+    }
+    return entries.map(([key, value]) => `${key}=${value}`).join("|");
   }
 
   private async changedCart(owner: CustomerOwner, cartId: string) {

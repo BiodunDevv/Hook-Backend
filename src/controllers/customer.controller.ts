@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { getPreferences, updatePreferences } from "@services/notification-dispatch.service";
 import { AppDataSource } from "@config/data-source";
 import { CartItem } from "@models/cart/cart-item.model";
 import { Cart } from "@models/cart/cart.model";
@@ -20,7 +21,7 @@ import { HttpError } from "@utils/http";
 import { routeParam } from "@lib/api-utils";
 import { sendCreated, sendSuccess } from "@utils/http";
 import { RefundRequest } from "@models/orders/refund-request.model";
-import { OrderStatus, PaymentStatus, POD_PAUSED } from "@lib/constants";
+import { OrderStatus, PaymentStatus } from "@lib/constants";
 import { publicCart, publicOrder } from "@lib/public-resource";
 import { AddressService } from "@services/address.service";
 import { CheckoutService } from "@services/checkout.service";
@@ -213,12 +214,18 @@ export class CustomerController {
     const settings = await CommerceSettings.findOne({ key: "commerce" }).lean();
     sendSuccess(res, {
       currency: settings?.currency || "NGN",
-      podEnabled: POD_PAUSED ? false : settings?.podEnabled || false,
-      podPaused: POD_PAUSED,
+      // Pay on Delivery is an admin setting now (and per state): no code-level pause.
+      podEnabled: settings?.podEnabled || false,
+      podPaused: false,
+      podMinimumOrderMinor: settings?.podMinimumOrderMinor ?? 3000000,
+      podSurchargeType: settings?.podSurchargeType || "flat",
+      podSurchargeValue: settings?.podSurchargeValue ?? 0,
+      vatRatePercent: settings?.vatRatePercent ?? 7.5,
       policyVersions: settings?.activePolicyVersions || {},
       orderEarnEnabled: settings?.orderEarnEnabled ?? true,
       orderEarnPercent: settings?.orderEarnPercent ?? 1,
       orderEarnMaxMinor: settings?.orderEarnMaxMinor ?? 0,
+      minimumCheckoutMinor: settings?.minimumCheckoutMinor ?? 1800000,
     });
   };
 
@@ -251,13 +258,6 @@ export class CustomerController {
       discountMinor: result.discountMinor,
       appliesToDelivery: result.appliesToDelivery,
     });
-  };
-
-  checkout = async (req: Request, res: Response) => {
-    sendCreated(
-      res,
-      publicOrder(await this.orders.checkout(owner(req), req.body)),
-    );
   };
 
   listOrders = async (req: Request, res: Response) => {
@@ -314,6 +314,21 @@ export class CustomerController {
 
   paymentMethodCapability = async (_req: Request, res: Response) => {
     sendSuccess(res, this.payments.capability());
+  };
+
+  notificationPreferences = async (req: Request, res: Response) =>
+    sendSuccess(res, await getPreferences(req.user!.sub));
+
+  updateNotificationPreferences = async (req: Request, res: Response) =>
+    sendSuccess(res, await updatePreferences(req.user!.sub, req.body));
+
+  /** The customer tapped a push: record it so we know which notifications people act on. */
+  notificationOpened = async (req: Request, res: Response) => {
+    await Notification.updateOne(
+      { _id: routeParam(req.params.id), userId: req.user!.sub, openedAt: { $exists: false } },
+      { $set: { openedAt: new Date(), isRead: true, readAt: new Date() } },
+    ).catch(() => undefined);
+    sendSuccess(res, { opened: true });
   };
 
   listNotifications = async (req: Request, res: Response) => {

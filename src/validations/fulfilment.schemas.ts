@@ -13,16 +13,19 @@ export const itemVerifySchema = z.object({
       if (!views.has(required as never)) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Front, side and back photos are required' });
     }
   }),
-  actualColor: z.string().trim().min(1).max(80),
-  actualSize: z.string().trim().min(1).max(80),
+  // Only the details the ordered item actually has are required; the service checks that per item.
+  actualColor: z.string().trim().max(80).optional(),
+  actualSize: z.string().trim().max(80).optional(),
+  actualAttributes: z.record(z.string().min(1).max(40), z.string().trim().max(120)).optional(),
   actualQuantity: z.coerce.number().int().positive(),
   unitCostMinor: z.coerce.number().int().nonnegative(),
   supplierReference: z.string().trim().max(160).optional(),
   conditionNote: z.string().trim().min(3).max(500),
   checks: z.object({
     productMatches: z.boolean(),
-    sizeMatches: z.boolean(),
-    colorMatches: z.boolean(),
+    sizeMatches: z.boolean().optional(),
+    colorMatches: z.boolean().optional(),
+    attributesMatch: z.boolean().optional(),
     quantityMatches: z.boolean(),
   }),
 }).strict();

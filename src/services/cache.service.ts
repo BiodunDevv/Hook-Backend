@@ -52,6 +52,10 @@ export type CacheLookup<T> = {
 
 const inflight = new Map<string, Promise<unknown>>();
 
+// The namespace version is read on every lookup; remember it briefly so a hit costs one Redis round trip, not two.
+const versionMemo = new Map<string, { value: string; until: number }>();
+const VERSION_MEMO_MS = 3_000;
+
 export const sharedCache = {
   /**
    * Looks a key up in L1 then L2. On a miss the caller loads from MongoDB and
@@ -69,12 +73,17 @@ export const sharedCache = {
     const redis = getRedis();
     if (redis) {
       try {
-        version = (await redis.get(versionKey(ns))) || '0';
+        const memo = versionMemo.get(ns);
+        if (memo && memo.until > Date.now()) version = memo.value;
+        else {
+          version = (await redis.get(versionKey(ns))) || '0';
+          versionMemo.set(ns, { value: version, until: Date.now() + VERSION_MEMO_MS });
+        }
         const raw = await redis.get(dataKey(ns, version, key));
         if (raw) {
           const value = JSON.parse(raw) as T;
           stats.l2Hits += 1;
-          if (epoch(ns) === startEpoch) publicCatalogCache.set(key, value, Math.min(defaultTtlMs, 5_000));
+          if (epoch(ns) === startEpoch) publicCatalogCache.set(key, value, Math.min(defaultTtlMs, 15_000));
           return { hit: true, value, store: async () => undefined };
         }
       } catch (error) {
@@ -130,6 +139,7 @@ export const sharedCache = {
   /** Every node calls this when it learns a namespace changed: drop local state. */
   noteInvalidated(ns: string) {
     epochs.set(ns, epoch(ns) + 1);
+    versionMemo.delete(ns);
     inflight.clear();
   },
 
@@ -139,6 +149,7 @@ export const sharedCache = {
     if (!redis) return;
     try {
       await redis.incr(versionKey(ns));
+      versionMemo.delete(ns);
     } catch (error) {
       noteRedisError(error);
     }

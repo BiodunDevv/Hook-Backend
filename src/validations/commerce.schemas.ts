@@ -41,19 +41,23 @@ export const addressUpdateSchema = addressCreateSchema
     "At least one field is required",
   );
 
+/**
+ * What a customer picked for a product: colour and size as before, plus whatever
+ * else the category asks for (capacity, length, phone model...). Keys are the
+ * category's attribute keys, so this is an open map, not a fixed pair. The server
+ * takes the authoritative details from the chosen variant; this is the fallback.
+ */
+export const selectedVariantsSchema = z
+  .record(z.string().trim().min(1).max(40).regex(/^[a-zA-Z][a-zA-Z0-9]*$/), z.string().trim().max(80))
+  .refine((value) => Object.keys(value).length <= 12, 'Too many options');
+
 export const commerceCartItemSchema = z
   .object({
     productId: publicId,
     quantity: z.coerce.number().int().min(1).max(99),
     variantId: variantIdentifier.optional(),
     quoteId: publicId.optional(),
-    selectedVariants: z
-      .object({
-        color: z.string().trim().max(80).optional(),
-        size: z.string().trim().max(80).optional(),
-      })
-      .strict()
-      .optional(),
+    selectedVariants: selectedVariantsSchema.optional(),
   })
   .strict();
 
@@ -63,10 +67,7 @@ export const commerceImportSchema = z.object({
     clientLineId: z.string().trim().min(1).max(120),
     productId: publicId,
     variantId: variantIdentifier.optional(),
-    selectedVariants: z.object({
-      color: z.string().trim().max(80).optional(),
-      size: z.string().trim().max(80).optional(),
-    }).strict().optional(),
+    selectedVariants: selectedVariantsSchema.optional(),
     quantity: z.number().int().min(1).max(99),
   }).strict()).max(100),
   likedProductIds: z.array(publicId).max(500),
@@ -87,6 +88,8 @@ export const checkoutPreviewSchema = z
     logisticsProviderId: publicId.optional(),
     couponCode: z.string().trim().min(3).max(40).optional(),
     useCredits: z.boolean().optional(),
+    // Instructions for the courier ("call me at the gate"). Kept on the order.
+    deliveryNote: z.string().trim().max(300).optional(),
   })
   .strict();
 
@@ -126,6 +129,25 @@ export const emailSettingsSchema = z.object({
   appUrl: z.string().trim().url().optional(),
   reason: z.string().trim().min(5).max(500),
 }).strict();
+
+export const checkoutSettingsSchema = z.object({
+  /** Naira-in-kobo: 1_800_000 is N18,000. 0 switches the minimum off. */
+  minimumCheckoutMinor: z.coerce.number().int().min(0).max(100_000_000),
+  reason: z.string().trim().min(5).max(500),
+}).strict();
+
+/** Pay on Delivery rules and VAT. Every field optional so the admin can change one at a time; a reason is always required. */
+export const podConfigSchema = z.object({
+  podEnabled: z.boolean().optional(),
+  podMinimumOrderMinor: z.coerce.number().int().min(0).max(1_000_000_000).optional(),
+  podSurchargeType: z.enum(['flat', 'percent']).optional(),
+  podSurchargeValue: z.coerce.number().min(0).max(100_000_000).optional(),
+  defaultPodLimitMinor: z.coerce.number().int().min(0).max(10_000_000_000).optional(),
+  podAutoApproveEnabled: z.boolean().optional(),
+  podRefusalSuspendCount: z.coerce.number().int().min(1).max(20).optional(),
+  vatRatePercent: z.coerce.number().min(0).max(30).optional(),
+  reason: z.string().trim().min(5).max(500),
+}).strict().refine((value) => value.podSurchargeType !== 'percent' || value.podSurchargeValue === undefined || value.podSurchargeValue <= 50, { message: 'A percentage surcharge cannot exceed 50%', path: ['podSurchargeValue'] });
 
 export const inventorySettingsSchema = z.object({
   lowStockThreshold: z.coerce.number().int().min(0).max(100),

@@ -118,6 +118,20 @@ async function bootstrap() {
     printReady(port, apiPrefix);
   });
   realtime.attach(server);
+  startCacheWarmer(port, apiPrefix);
+}
+
+/**
+ * Keeps the default public reads (the ones every app launch asks for) hot in
+ * the cache, so a customer never pays for a cold database round trip.
+ * Set CACHE_WARMER=off to disable.
+ */
+function startCacheWarmer(port: number, apiPrefix: string) {
+  if (process.env.CACHE_WARMER === 'off' || process.env.NODE_ENV === 'test') return;
+  const paths = ['/public/categories', '/public/categories?withProducts=true', '/public/markets', '/public/banners?placement=home', '/public/banners?placement=category', '/public/feed', '/public/products?limit=20', '/public/discover?limit=30'];
+  const warm = () => Promise.allSettled(paths.map((path) => fetch(`http://127.0.0.1:${port}/${apiPrefix}${path}`).then((response) => response.arrayBuffer())));
+  setTimeout(() => void warm(), 3_000).unref();
+  setInterval(() => void warm(), 15_000).unref();
 }
 
 bootstrap().catch((error: unknown) => {

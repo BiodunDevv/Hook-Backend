@@ -4,6 +4,7 @@ import { calculateHookCoinEarnMinor } from '@lib/hook-coin';
 import { createCommerceNotification } from '@services/commerce-notification.service';
 import { CreditLedger, type CreditEntryType } from '@models/promotions/credit-ledger.model';
 import { HttpError } from '@utils/http';
+import { User } from '@models/users/user.model';
 
 const DEFAULT_SPEND_CAP_PERCENT = 20;
 
@@ -230,6 +231,9 @@ export class CreditService {
     // has since dropped by that very spend.
     const already = await CreditLedger.findOne({ idempotencyKey: key }).session(session ?? null).lean({ virtuals: true });
     if (already) return already;
+    // Touch the customer's own document first: inside a transaction two spends for one customer then
+    // conflict on it and the second retries against the reduced balance, so credit cannot be spent twice.
+    if (session) await User.updateOne({ _id: input.userId }, { $inc: { creditSpendCounter: 1 } }, { session, strict: false });
     const balance = await this.balance(input.userId, session);
     if (balance < input.amountMinor) {
       throw new HttpError(409, 'Your Hook credit balance changed. Review checkout again.', undefined, 'CREDIT_BALANCE_CHANGED');

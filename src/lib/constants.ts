@@ -87,6 +87,8 @@ export enum CommercePaymentStatus {
 
 export enum CommerceOrderStatus {
   AWAITING_PAYMENT = 'AWAITING_PAYMENT',
+  /** Pay on Delivery: waiting for the delivery fee to be paid online before review. */
+  AWAITING_DELIVERY_FEE = 'AWAITING_DELIVERY_FEE',
   VERIFICATION_PENDING = 'VERIFICATION_PENDING',
   OPERATIONS_REVIEW = 'OPERATIONS_REVIEW',
   APPROVED_FOR_FULFILMENT = 'APPROVED_FOR_FULFILMENT',
@@ -308,6 +310,6 @@ export const DEFAULT_POD_LIMIT_MINOR = 10000000;
  * select it. Flip to false to resume; the per-state and per-customer POD
  * toggles then apply as before.
  */
-export const POD_PAUSED = true;
+export const POD_PAUSED = false;
 export const VENDOR_CONFIRMATION_HOURS = 2;
 export const GIFT_EXPIRY_DAYS = 7;

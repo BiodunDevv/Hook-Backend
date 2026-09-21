@@ -14,7 +14,7 @@ export type CommerceImportInput = {
     clientLineId: string;
     productId: string;
     variantId?: string;
-    selectedVariants?: { color?: string; size?: string };
+    selectedVariants?: Record<string, string | undefined>;
     quantity: number;
   }>;
   likedProductIds: string[];

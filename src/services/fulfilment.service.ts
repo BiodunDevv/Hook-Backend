@@ -15,6 +15,7 @@ import { emitOutbox, processOutbox } from '@services/outbox.service';
 import { wakeOutbox } from '../jobs/wake';
 import { FulfilmentTask, RunnerPackage, HubPackage, Consolidation, Shipment, PartnerCustody, ReturnRequest, FulfilmentRefund, LogisticsWebhookEvent, type LogisticsProviderKey } from '@models/fulfilment/fulfilment.model';
 import { Order } from '@models/orders/order.model';
+import { CommerceSettings } from '@models/commerce/commerce.model';
 import { LogisticsProviderService } from '@services/logistics-provider.service';
 import { getPagination } from '@lib/api-utils';
 import { OrderItem } from '@models/orders/order-item.model';
@@ -185,6 +186,33 @@ async function resolveFulfilmentNames(records: Array<{ marketId?: string; hubId?
     marketAssociate: (id?: string) => (id ? marketAssociateById.get(id) || null : null),
     order: (id?: string) => (id ? orderById.get(id) || null : null),
   };
+}
+
+/** "Capacity: 10,000 mAh" style lines for every ordered detail other than colour and size. */
+function otherDetails(item: { selectedVariants?: Record<string, string>; variantSnapshot?: Record<string, string> }): string[] {
+  const source = { ...(item.selectedVariants || {}), ...(item.variantSnapshot || {}) };
+  return Object.entries(source)
+    .filter(([key, value]) => key !== 'color' && key !== 'size' && value)
+    .map(([key, value]) => `${key.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase())}: ${value}`);
+}
+
+/**
+ * A failed or refused Pay on Delivery parcel counts against the customer. After the admin-set number of refusals
+ * they lose the Pay on Delivery option until an admin restores it. The delivery fee they paid is not refunded.
+ */
+async function recordPodRefusal(orderId: string, session?: import('mongoose').ClientSession) {
+  const order = (await Order.findById(orderId).select('userId commercePaymentMethod').session(session ?? null).lean()) as { userId?: string; commercePaymentMethod?: string } | null;
+  if (!order?.userId || order.commercePaymentMethod !== 'PAY_AT_HANDOVER') return;
+  const settings = (await CommerceSettings.findOne({ key: 'commerce' }).select('podRefusalSuspendCount').lean()) as { podRefusalSuspendCount?: number } | null;
+  const limit = Math.max(1, Number(settings?.podRefusalSuspendCount ?? 2));
+  const user = (await User.findOneAndUpdate({ _id: order.userId }, { $inc: { podRefusals: 1 } }, { returnDocument: 'after', session, strict: false }).lean()) as { podRefusals?: number } | null;
+  if (user && Number(user.podRefusals || 0) >= limit) await User.updateOne({ _id: order.userId }, { $set: { podEligible: false } }, { session });
+}
+
+/** Orders store the partner's internal id, older ones the public id: match both. */
+const partnerIds = (partner: any) => [String(partner.publicId), String(partner.id || partner._id)].filter(Boolean);
+function partnerIdentity(value: string) {
+  return /^[a-f\d]{24}$/i.test(value) ? { $or: [{ _id: value }, { publicId: value }] } : { publicId: value };
 }
 
 export class FulfilmentService {
@@ -800,10 +828,24 @@ export class FulfilmentService {
     const photos = Array.isArray(body.photos) ? body.photos : [];
     const photoViews = new Set(photos.map((photo: any) => photo.view));
     if (photos.length < 3 || photos.length > 7 || photoViews.size !== photos.length || !['front', 'side', 'back'].every((view) => photoViews.has(view))) throw new HttpError(400, 'Front, side and back photos are required (up to 7 photos in total)', undefined, 'VALIDATION_ERROR');
+    // What this item was ordered with decides what must be verified: a phone case has no size or colour to check.
+    const ordered = ((await OrderItem.findById(orderItemId).select('variantSnapshot').lean()) as { variantSnapshot?: Record<string, string> } | null)?.variantSnapshot || {};
+    const orderedOther = Object.keys(ordered).filter((key) => key !== 'color' && key !== 'size' && ordered[key]);
+    const needsColor = Boolean(ordered.color);
+    const needsSize = Boolean(ordered.size);
+    if (needsColor && !String(body.actualColor || '').trim()) throw new HttpError(400, 'Enter the colour you found', undefined, 'VALIDATION_ERROR');
+    if (needsSize && !String(body.actualSize || '').trim()) throw new HttpError(400, 'Enter the size you found', undefined, 'VALIDATION_ERROR');
+    const actualAttributes: Record<string, string> = {};
+    for (const key of orderedOther) {
+      const found = String(body.actualAttributes?.[key] ?? '').trim();
+      if (!found) throw new HttpError(400, `Enter the ${key.replace(/([A-Z])/g, ' $1').toLowerCase()} you found`, undefined, 'VALIDATION_ERROR');
+      actualAttributes[key] = found;
+    }
     const checks = {
       productMatches: Boolean(body.checks?.productMatches),
-      sizeMatches: Boolean(body.checks?.sizeMatches),
-      colorMatches: Boolean(body.checks?.colorMatches),
+      sizeMatches: needsSize ? Boolean(body.checks?.sizeMatches) : true,
+      colorMatches: needsColor ? Boolean(body.checks?.colorMatches) : true,
+      attributesMatch: orderedOther.length ? Boolean(body.checks?.attributesMatch) : true,
       quantityMatches: Boolean(body.checks?.quantityMatches),
     };
     const matched = Object.values(checks).every(Boolean);
@@ -811,8 +853,9 @@ export class FulfilmentService {
       orderItemId: String(orderItemId),
       photoUrl: String(photos.find((photo: any) => photo.view === 'front')?.url || ''),
       photos,
-      actualColor: String(body.actualColor),
-      actualSize: String(body.actualSize),
+      actualColor: needsColor ? String(body.actualColor) : undefined,
+      actualSize: needsSize ? String(body.actualSize) : undefined,
+      ...(orderedOther.length ? { actualAttributes } : {}),
       actualQuantity: Number(body.actualQuantity),
       unitCostMinor: Number(body.unitCostMinor),
       supplierReference: body.supplierReference ? String(body.supplierReference) : undefined,
@@ -1122,6 +1165,9 @@ export class FulfilmentService {
           itemReference: item?.publicId,
           orderedColor: (item?.variantSnapshot as any)?.color,
           orderedSize: (item?.variantSnapshot as any)?.size,
+          // Every other ordered detail (capacity, length, phone model...), in order.
+          orderedAttributes: Object.entries((item?.variantSnapshot as Record<string, string>) || {}).filter(([key, value]) => key !== 'color' && key !== 'size' && value).map(([key, value]) => ({ key, value })),
+          actualAttributes: verification?.actualAttributes,
           orderedQuantity: item?.quantity,
           photos: verification?.photos,
           actualColor: verification?.actualColor,
@@ -1468,7 +1514,8 @@ export class FulfilmentService {
       }
     }
     if (order.channel === CommerceChannel.PARTNER_ASSISTED && order.initiatingPartnerId) {
-      const partner = await HookPartner.findOne({ publicId: order.initiatingPartnerId }).select('accountId').lean() as any;
+      // Orders store the partner's internal id; older ones stored the public id. Accept both.
+      const partner = await HookPartner.findOne(partnerIdentity(String(order.initiatingPartnerId))).select('accountId').lean() as any;
       if (partner?.accountId) {
         await createCommerceNotification({
           eventKey: `order:${order.publicId}:partner:item-verified:${pack.publicId}`,
@@ -1580,6 +1627,7 @@ export class FulfilmentService {
         quantity: item.quantity,
         color: item.selectedVariants?.color || item.variantSnapshot?.color,
         size: item.selectedVariants?.size || item.variantSnapshot?.size,
+        details: otherDetails(item),
       })),
       courier: { code: shipment?.courierCode || chosen.code, name: shipment?.courierName || chosen.name, trackingNumber: shipment?.trackingNumber },
       payment: { method: order.commercePaymentMethod, collectMinor },
@@ -1621,7 +1669,7 @@ export class FulfilmentService {
       order: { publicId: order.publicId, placedAt: order.createdAt },
       packedAt: parcel.sealedAt,
       recipient: { name: address.recipientName, city: address.cityName, state: address.stateName },
-      items: items.map((item: any) => ({ title: item.productTitle, quantity: item.quantity, color: item.selectedVariants?.color || item.variantSnapshot?.color, size: item.selectedVariants?.size || item.variantSnapshot?.size })),
+      items: items.map((item: any) => ({ title: item.productTitle, quantity: item.quantity, color: item.selectedVariants?.color || item.variantSnapshot?.color, size: item.selectedVariants?.size || item.variantSnapshot?.size, details: otherDetails(item) })),
       courier: { name: shipment?.courierName || order.logisticsProviderSnapshot?.name, trackingNumber: shipment?.trackingNumber },
       payment: { method: order.commercePaymentMethod, collectMinor: order.commercePaymentMethod === 'PAY_AT_HANDOVER' ? Number(order.totalMinor || 0) : 0 },
     };
@@ -1720,6 +1768,7 @@ export class FulfilmentService {
     const updated = await this.atomically(async (session) => {
       const moved = await Shipment.findOneAndUpdate({ _id: shipment._id, version: body.version ?? shipment.version }, { $set: { status: next, releaseStatus: next === ShipmentStatus.RELEASE_APPROVED ? 'RELEASE_APPROVED' : shipment.releaseStatus, pickedUpAt: next === ShipmentStatus.PICKED_UP ? new Date() : shipment.pickedUpAt, deliveredAt: next === ShipmentStatus.DELIVERED ? new Date() : shipment.deliveredAt, failedAt: next === ShipmentStatus.DELIVERY_FAILED ? new Date() : shipment.failedAt }, $push: { trackingEvents: { status: next, at: new Date(), actorId: actor.accountId, note: body.note } }, $inc: { version: 1 } }, { returnDocument: 'after', session }).lean({ virtuals: true });
       if (!moved) return null;
+      if (next === ShipmentStatus.DELIVERY_FAILED) await recordPodRefusal(String(shipment.orderId), session);
       if (shipment.fulfilmentGroupId) {
         const groupStatus = next === ShipmentStatus.DELIVERED ? 'DELIVERED'
           : [ShipmentStatus.PICKED_UP, ShipmentStatus.IN_TRANSIT, ShipmentStatus.OUT_FOR_DELIVERY].includes(next) ? 'IN_TRANSIT'
@@ -1767,13 +1816,51 @@ export class FulfilmentService {
 
   async partnerCustody(actor: Actor, orderIdentifier: string) {
     const partner = await HookPartner.findOne({ accountId: actor.accountId, status: 'active' }).lean({ virtuals: true }) as any; if (!partner) throw new HttpError(403, 'Active Hook Partner required', undefined, 'ACCESS_DENIED');
-    const order = await Order.findOne({ ...identifier(orderIdentifier), initiatingPartnerId: partner.publicId }).lean({ virtuals: true }) as any; if (!order) throw new HttpError(404, 'Order not found', undefined, 'NOT_FOUND');
+    const order = await Order.findOne({ ...identifier(orderIdentifier), initiatingPartnerId: { $in: partnerIds(partner) } }).lean({ virtuals: true }) as any; if (!order) throw new HttpError(404, 'Order not found', undefined, 'NOT_FOUND');
     if (order.deliveryMethod !== 'PARTNER_PICKUP') throw new HttpError(409, 'Partner custody is only available for Partner pickup Orders', undefined, 'DELIVERY_METHOD_NOT_ALLOWED');
     const shipment = await Shipment.findOne({ orderId: order._id.toString() }).lean({ virtuals: true }) as any; if (!shipment) throw new HttpError(409, 'Shipment is not ready for Partner custody', undefined, 'INVALID_STATE_TRANSITION');
     const existing = await PartnerCustody.findOne({ orderId: order._id.toString() }).lean({ virtuals: true }) as any; if (existing) return safeCustody(existing);
+    const created = await this.createCustody(order, shipment, partner, actor.accountId);
+    // The collection code goes to the customer, never back to the partner: the partner has to be given it at the counter.
+    return created;
+  }
+
+  /**
+   * Opens the custody record for a Partner pickup parcel and sends the 6-digit collection code to the CUSTOMER.
+   * Runs when a Partner pickup order is dispatched (see syncPartnerCustody), so the Partner sees the incoming parcel
+   * without having to ask for it.
+   */
+  private async createCustody(order: any, shipment: any, partner: any, actorAccountId: string) {
     const code = String(randomInt(100000, 999999));
-    const custody = await PartnerCustody.create({ publicId: await nextPublicId('partnerCustody'), orderId: order._id.toString(), shipmentId: shipment._id.toString(), partnerId: partner.publicId, status: 'AWAITING_RECEIPT', collectionCodeHash: digest(code), collectionCodeHint: hint(code), codeAttempts: 0, codeSentAt: new Date(), expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), customerEmailSnapshot: String((order.customerSnapshot as any)?.email || order.guestEmail || ''), idempotencyKey: `custody:${order._id}`, history: [{ action: 'CODE_CREATED', actorId: actor.accountId, at: new Date() }] });
-    return { ...safeCustody(custody.toJSON()) as any, collectionCode: code };
+    const custody = await PartnerCustody.create({ publicId: await nextPublicId('partnerCustody'), orderId: order._id.toString(), shipmentId: shipment._id.toString(), partnerId: partner.publicId, status: 'AWAITING_RECEIPT', collectionCodeHash: digest(code), collectionCodeHint: hint(code), codeAttempts: 0, codeSentAt: new Date(), expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), customerEmailSnapshot: String((order.customerSnapshot as any)?.email || order.guestEmail || ''), idempotencyKey: `custody:${order._id}`, history: [{ action: 'CODE_CREATED', actorId: actorAccountId, at: new Date() }] });
+    if (order.userId) {
+      await createCommerceNotification({
+        eventKey: `order:${order.publicId}:collection-code`,
+        userId: String(order.userId),
+        title: 'Your collection code',
+        body: `Show code ${code} to ${partner.businessName || 'the partner'} when you collect your order. Do not share it with anyone else.`,
+        type: 'order_updated',
+        data: { orderId: order.publicId },
+      }).catch(() => undefined);
+    }
+    return safeCustody(custody.toJSON()) as any;
+  }
+
+  /** Creates custody records for Partner pickup parcels that are on their way, so the Partner's list is never empty by accident. */
+  async syncPartnerCustody() {
+    const orders = await Order.find({ deliveryMethod: 'PARTNER_PICKUP', initiatingPartnerId: { $exists: true, $ne: null }, commerceStatus: { $in: ['READY_FOR_DISPATCH', 'IN_TRANSIT', 'PARTIALLY_IN_TRANSIT'] } }).select('_id publicId userId initiatingPartnerId customerSnapshot guestEmail').limit(100).lean() as any[];
+    let created = 0;
+    for (const order of orders) {
+      if (await PartnerCustody.exists({ orderId: order._id.toString() })) continue;
+      const [partner, shipment] = await Promise.all([
+        HookPartner.findOne({ ...partnerIdentity(String(order.initiatingPartnerId)), status: 'active' }).lean({ virtuals: true }) as Promise<any>,
+        Shipment.findOne({ orderId: order._id.toString() }).lean({ virtuals: true }) as Promise<any>,
+      ]);
+      if (!partner || !shipment) continue;
+      await this.createCustody(order, shipment, partner, 'SYSTEM').catch(() => undefined);
+      created += 1;
+    }
+    return { created };
   }
 
   async partnerCustodyList(actor: Actor, query: Record<string, unknown>) {
@@ -1807,10 +1894,24 @@ export class FulfilmentService {
       return safeCustody(received as any);
     }
     if (custody.status !== 'IN_CUSTODY') throw new HttpError(409, 'Package is not available for collection', undefined, 'INVALID_STATE_TRANSITION');
-    if (custody.codeAttempts >= 5) throw new HttpError(429, 'Too many collection attempts', undefined, 'RATE_LIMITED');
-    if (!code || digest(code) !== custody.collectionCodeHash) { await PartnerCustody.updateOne({ _id: custody._id }, { $inc: { codeAttempts: 1 } }); throw new HttpError(400, 'Invalid collection code', undefined, 'VALIDATION_ERROR'); }
-    const payment = await Payment.findOne({ orderId: custody.orderId }).select('commerceStatus').lean() as any;
-    if (!payment || payment.commerceStatus !== CommercePaymentStatus.CONFIRMED) throw new HttpError(409, 'Confirmed payment is required before collection', undefined, 'PAYMENT_REQUIRED');
+    // A cancelled or failed order must never hand over a parcel.
+    const custodyOrder = await Order.findById(custody.orderId).select('commerceStatus').lean() as any;
+    if (custodyOrder && ['CANCELLED', 'DELIVERY_FAILED', 'RETURNED', 'REFUNDED'].includes(String(custodyOrder.commerceStatus))) throw new HttpError(409, 'This order is no longer active, so it cannot be collected', undefined, 'INVALID_STATE_TRANSITION');
+    // Wrong guesses lock collection for 15 minutes, then the counter starts over.
+    const LOCK_MS = 15 * 60_000;
+    const lastAttemptAt = custody.lastCodeAttemptAt ? new Date(custody.lastCodeAttemptAt).getTime() : 0;
+    let attempts = Number(custody.codeAttempts || 0);
+    if (attempts >= 5 && Date.now() - lastAttemptAt > LOCK_MS) { attempts = 0; await PartnerCustody.updateOne({ _id: custody._id }, { $set: { codeAttempts: 0 } }); }
+    if (attempts >= 5) throw new HttpError(429, 'Too many wrong codes. Try again in about 15 minutes, or ask the customer to check their code.', undefined, 'RATE_LIMITED');
+    const entered = String(code ?? '').replace(/\s+/g, '');
+    if (!/^\d{6}$/.test(entered) || digest(entered) !== custody.collectionCodeHash) {
+      await PartnerCustody.updateOne({ _id: custody._id }, { $inc: { codeAttempts: 1 }, $set: { lastCodeAttemptAt: new Date() } });
+      throw new HttpError(400, attempts >= 4 ? 'Invalid collection code. Collection is now locked for 15 minutes.' : `Invalid collection code. ${4 - attempts} attempt${4 - attempts === 1 ? '' : 's'} left.`, undefined, 'VALIDATION_ERROR');
+    }
+    // Every live payment on the order must be confirmed, not just the first one found.
+    const payments = await Payment.find({ orderId: custody.orderId }).select('commerceStatus').lean() as any[];
+    const live = payments.filter((item) => !['CANCELLED', 'EXPIRED', 'FAILED'].includes(String(item.commerceStatus)));
+    if (!live.length || live.some((item) => item.commerceStatus !== CommercePaymentStatus.CONFIRMED)) throw new HttpError(409, 'Confirmed payment is required before collection', undefined, 'PAYMENT_REQUIRED');
     const result = await PartnerCustody.findOneAndUpdate({ _id: custody._id, status: 'IN_CUSTODY' }, { $set: { status: 'RELEASED', releasedAt: new Date() }, $push: { history: { action: 'RELEASED', actorId: actor.accountId, at: new Date(), ...(idempotencyKey ? { idempotencyKey } : {}) } } }, { returnDocument: 'after' }).lean({ virtuals: true });
     if (!result) throw new HttpError(409, 'Custody state changed. Refresh and try again.', undefined, 'STALE_VERSION');
     await Order.updateOne({ _id: custody.orderId }, { $set: { commerceStatus: CommerceOrderStatus.COLLECTED, fulfilmentCompletedAt: new Date() }, $push: { timeline: timelineEntry('COLLECTED', actor.accountId) } });
@@ -2377,6 +2478,7 @@ export class FulfilmentService {
     const updated = await this.atomically(async (session) => {
       const moved = await Shipment.findOneAndUpdate({ _id: shipment._id, version: shipment.version }, { $set: { status: next, trackingNumber: payload.trackingNumber ? String(payload.trackingNumber) : shipment.trackingNumber, pickedUpAt: next === ShipmentStatus.PICKED_UP ? new Date() : shipment.pickedUpAt, deliveredAt: next === ShipmentStatus.DELIVERED ? new Date() : shipment.deliveredAt, failedAt: next === ShipmentStatus.DELIVERY_FAILED ? new Date() : shipment.failedAt }, $push: { trackingEvents: { status: next, at: new Date(), actorId: `WEBHOOK:${provider}`, note: typeof payload.note === 'string' ? payload.note.slice(0, 500) : undefined } }, $inc: { version: 1 } }, { returnDocument: 'after', session }).lean({ virtuals: true });
       if (!moved) return null;
+      if (next === ShipmentStatus.DELIVERY_FAILED) await recordPodRefusal(String(shipment.orderId), session);
       if (orderStatus) await Order.updateOne({ _id: shipment.orderId }, { $set: { commerceStatus: orderStatus, ...(next === ShipmentStatus.DELIVERED ? { deliveredAt: new Date() } : {}) }, $push: { timeline: timelineEntry(next, `WEBHOOK:${provider}`) } }, { session });
       await LogisticsWebhookEvent.updateOne({ _id: event._id }, { $set: { status: 'PROCESSED', processedAt: new Date(), shipmentId: shipment.publicId || shipment._id.toString() } }, { session });
       return moved;

@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { CommerceSettings } from '@models/commerce/commerce.model';
 import {
   ProductAvailabilityStatus,
   ProductStatus,
@@ -21,6 +22,7 @@ import { CatalogMediaService } from './catalog-media.service';
 import { createCommerceNotification } from './commerce-notification.service';
 import { EmailService } from '@emails/email.service';
 import { HttpError } from '@utils/http';
+import { categoryService } from '@services/category.service';
 import { adminReviewCache } from '@lib/ttl-cache';
 import { defaultNegotiationRules } from '@lib/negotiation-defaults';
 
@@ -142,9 +144,8 @@ async function ensureMarketVendor(identifier: string, marketId: string) {
 }
 
 async function category(identifier: string) {
-  const result = await byIdentifier<any>(Category, identifier);
-  if (!result.isActive || result.deletedAt) throw new HttpError(409, 'The selected category is inactive', undefined, 'CONFLICT');
-  return result;
+  // Only an active leaf may hold products: a parent with sub-categories is refused.
+  return categoryService.assertAssignable(identifier) as Promise<any>;
 }
 
 async function activeMarket(identifier: string) {
@@ -388,7 +389,8 @@ export class MarketAssociateCatalogService {
     }
     if (current.version !== version) throw new HttpError(409, 'This submission was updated elsewhere', undefined, 'STALE_VERSION');
     await marketAssociateContext(accountId, current.marketId);
-    await category(current.categorySuggestionId);
+    const submissionCategory = await category(current.categorySuggestionId);
+    await categoryService.validateVariants(submissionCategory, (current.variants || []).filter((item: SubmissionVariant) => item.active));
     const mediaCount = await CatalogMediaAsset.countDocuments({
       $or: [
         { publicId: { $in: current.mediaIds } },
@@ -427,12 +429,13 @@ export class CatalogReviewService {
     const marketAssociate = await MarketAssociateProfile.findById(marketAssociateId).select('accountId').lean() as any;
     if (!marketAssociate?.accountId) return;
     await createCommerceNotification({
-      eventKey: `submission:${submissionId}:${decision}`,
+      // Each review round is its own event, so a second "changes requested" still notifies.
+      eventKey: `submission:${submissionId}:${decision}:${Date.now()}`,
       userId: marketAssociate.accountId,
       title: decision === 'approved' ? 'Your submission was approved' : decision === 'rejected' ? 'Your submission was not approved' : 'Changes requested on your submission',
       body: decision === 'approved' ? `${productTitle} was approved and is now live on Hook.` : decision === 'rejected' ? `${productTitle} was not approved.` : `${productTitle} needs a few changes before it can go live.`,
       type: 'submission_decision',
-      data: { decision, productTitle },
+      data: { decision, productTitle, submissionId },
     }).catch(() => undefined);
     const account = await User.findById(marketAssociate.accountId).select('email firstName').lean() as any;
     if (account?.email) {
@@ -496,13 +499,31 @@ export class CatalogReviewService {
     const limit = Math.min(Math.max(Number(query.limit || 20), 1), 50);
     const filter: Record<string, any> = { deletedAt: { $exists: false } };
     if (stateIds?.length) filter.sourceStateId = { $in: stateIds };
-    if (query.status) filter.status = query.status;
-    if (query.stateId) filter.sourceStateId = query.stateId;
-    if (query.marketId) filter.marketId = query.marketId;
-    if (query.marketAssociateId) filter.marketAssociateId = query.marketAssociateId;
-    if (query.categoryId) filter.categorySuggestionId = query.categoryId;
-    if (query.cursor) filter._id = { $lt: query.cursor };
-    if (query.q) filter.$text = { $search: String(query.q) };
+    if (query.status) {
+      const allowed = Object.values(ProductSubmissionStatus) as string[];
+      if (!allowed.includes(String(query.status))) throw new HttpError(400, 'Unknown status', undefined, 'VALIDATION_ERROR');
+      filter.status = query.status;
+    }
+    // A State filter can only narrow what the caller may already see, never widen it.
+    if (query.stateId) filter.sourceStateId = stateIds?.length ? { $in: stateIds.filter((id) => id === String(query.stateId)) } : query.stateId;
+    // Filters may arrive as public ids (what the admin lists show) or internal ids.
+    const internal = async (value: unknown, model: { findOne: (q: object) => { select: (f: string) => { lean: () => Promise<{ _id: unknown } | null> } } }) => {
+      const text = String(value);
+      if (/^[a-f\d]{24}$/i.test(text)) return text;
+      const found = await model.findOne({ publicId: text }).select('_id').lean();
+      return found ? String(found._id) : '000000000000000000000000';
+    };
+    if (query.marketId) filter.marketId = await internal(query.marketId, Market as never);
+    if (query.marketAssociateId) filter.marketAssociateId = await internal(query.marketAssociateId, MarketAssociateProfile as never);
+    if (query.categoryId) filter.categorySuggestionId = { $in: await categoryService.descendantIds(String(query.categoryId)) };
+    if (query.cursor) {
+      if (!/^[a-f\d]{24}$/i.test(String(query.cursor))) throw new HttpError(400, 'Invalid cursor', undefined, 'VALIDATION_ERROR');
+      filter._id = { [query.sort === 'oldest' ? '$gt' : '$lt']: query.cursor };
+    }
+    if (query.q) {
+      const pattern = new RegExp(String(query.q).trim().slice(0, 60).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      filter.$or = [{ basicTitle: pattern }, { publicId: pattern }];
+    }
     const direction = query.sort === 'oldest' ? 1 : -1;
     const data = await ProductSubmission.find(filter).sort({ _id: direction }).limit(limit + 1).lean({ virtuals: true });
     const hasMore = data.length > limit;
@@ -623,6 +644,10 @@ export class CatalogReviewService {
         { returnDocument: 'after' },
       ).lean({ virtuals: true });
       if (!updated) throw new HttpError(409, 'Another reviewer changed this submission', undefined, 'SUBMISSION_REVIEW_CONFLICT');
+      // A rejected capture is final, so its uploads are released instead of lingering unowned.
+      if (action === 'rejected' && current.mediaIds?.length) {
+        await CatalogMediaAsset.updateMany({ $or: [{ publicId: { $in: current.mediaIds } }, { _id: { $in: current.mediaIds.filter((id: string) => /^[a-f\d]{24}$/i.test(id)) } }] }, { $set: { status: 'removed' } });
+      }
       await this.notifySubmissionDecision(current._id.toString(), current.marketAssociateId, current.basicTitle, action, input.reason);
       return updated;
     }
@@ -637,11 +662,28 @@ export class CatalogReviewService {
       category(approveInput.categoryId || current.categorySuggestionId),
       activeMarket(current.marketId),
     ]);
+    await categoryService.validateVariants(resolvedCategory, (current.variants || []).filter((item: SubmissionVariant) => item.active));
     const isPublished = approveInput.status === ProductStatus.PUBLISHED;
     const costPrice = Number(approveInput.costPrice);
     const sellingPrice = Number(approveInput.sellingPrice);
     const minAcceptablePrice = Number(approveInput.minAcceptablePrice);
     const images = approveInput.images?.length ? approveInput.images : [];
+    // Prices have to make sense before a product exists: the price cannot sit below cost, and the negotiation floor
+    // has to fall between cost and the selling price.
+    if (costPrice > 0 && sellingPrice > 0 && sellingPrice < costPrice) {
+      throw new HttpError(400, 'The selling price cannot be lower than the cost price', undefined, 'VALIDATION_ERROR');
+    }
+    if (minAcceptablePrice > 0 && ((costPrice > 0 && minAcceptablePrice < costPrice) || (sellingPrice > 0 && minAcceptablePrice > sellingPrice))) {
+      throw new HttpError(400, 'The lowest negotiable price must sit between the cost price and the selling price', undefined, 'VALIDATION_ERROR');
+    }
+    if (approveInput.discountedPrice && Number(approveInput.discountedPrice) >= sellingPrice) {
+      throw new HttpError(400, 'The discounted price must be lower than the selling price', undefined, 'VALIDATION_ERROR');
+    }
+    // Going live with an item the Market Associate could not confirm would list something nobody can buy.
+    if (isPublished && ![ProductAvailabilityStatus.AVAILABLE, ProductAvailabilityStatus.LIMITED].includes(current.availabilityStatus)) {
+      throw new HttpError(409, 'The Market Associate has not confirmed this item is available. Approve it as a draft, or ask for a fresh availability check first.', undefined, 'CONFLICT');
+    }
+    const checkDays = Math.min(Math.max(Number((await CommerceSettings.findOne({ key: 'commerce' }).select('catalogAvailabilityCheckDays').lean())?.catalogAvailabilityCheckDays || 4), 1), 30);
     if (isPublished) {
       assertSubmissionPublishReady({
         description: approveInput.description,
@@ -651,6 +693,17 @@ export class CatalogReviewService {
         sellingPrice,
       });
     }
+    // The product keeps only the uploads that made it into its final gallery; the rest are released.
+    const submissionAssets = current.mediaIds?.length
+      ? await CatalogMediaAsset.find({ $or: [{ publicId: { $in: current.mediaIds } }, { _id: { $in: current.mediaIds.filter((id: string) => /^[a-f\d]{24}$/i.test(id)) } }] }).lean({ virtuals: true })
+      : [];
+    const mediaDelivery = new CatalogMediaService();
+    const urlOf = (asset: any) => (asset.deliveryType === 'external' ? asset.secureUrl : mediaDelivery.deliveryUrl(asset));
+    const matched = images.length ? submissionAssets.filter((asset: any) => images.includes(urlOf(asset)) || images.includes(asset.secureUrl)) : [];
+    // If no upload can be matched to the gallery (links pasted by hand), keep them all rather than release good files.
+    const keptAssets = matched.length ? matched : submissionAssets;
+    const keptIds = keptAssets.map((asset: any) => asset.publicId || String(asset._id));
+    const releasedIds = submissionAssets.filter((asset: any) => !keptAssets.includes(asset)).map((asset: any) => String(asset._id));
     const negotiationRules = defaultNegotiationRules({
       sellingPriceMinor: Math.round(sellingPrice * 100),
       basePriceMinor: Math.round(costPrice * 100),
@@ -682,7 +735,7 @@ export class CatalogReviewService {
             ? Math.max(0, Math.round((sellingPrice - Number(approveInput.discountedPrice)) * 100))
             : 0,
           currency: current.currency,
-          mediaAssetIds: current.mediaIds,
+          mediaAssetIds: keptIds,
           images,
           colors: approveInput.colors || [],
           sizes: approveInput.sizes || [],
@@ -705,6 +758,8 @@ export class CatalogReviewService {
             publishedAt: now,
             publishedBy: actorId,
             lastAvailabilityConfirmedAt: now,
+            // Same rolling expiry every other publish path sets, so the availability job can escalate it.
+            availabilityValidUntil: new Date(now.getTime() + checkDays * 86_400_000),
           } : {}),
         }], { session: transaction });
         for (let index = 0; index < current.variants.length; index += 1) {
@@ -745,15 +800,11 @@ export class CatalogReviewService {
         ).lean({ virtuals: true });
         if (!result) throw new HttpError(409, 'Another reviewer changed this submission', undefined, 'SUBMISSION_REVIEW_CONFLICT');
         await CatalogMediaAsset.updateMany(
-          {
-            $or: [
-              { publicId: { $in: current.mediaIds } },
-              { _id: { $in: current.mediaIds.filter((id: string) => /^[a-f\d]{24}$/i.test(id)) } },
-            ],
-          },
+          { _id: { $in: keptAssets.map((asset: any) => asset._id) } },
           { $set: { ownerType: 'product', ownerId: product[0].id } },
           { session: transaction },
         );
+        if (releasedIds.length) await CatalogMediaAsset.updateMany({ _id: { $in: releasedIds } }, { $set: { status: 'removed' } }, { session: transaction });
       });
       await this.notifySubmissionDecision(current._id.toString(), current.marketAssociateId, current.basicTitle, 'approved', approveInput.reason);
       return result;

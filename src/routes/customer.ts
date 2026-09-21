@@ -282,6 +282,20 @@ export function createCustomerRouter() {
   );
 
   router.get("/notifications", asyncHandler(controller.listNotifications));
+  router.get("/notifications/preferences", asyncHandler(controller.notificationPreferences));
+  router.patch(
+    "/notifications/preferences",
+    validateBody(z.object({
+      groups: z.object({ credit: z.boolean(), reminders: z.boolean(), discovery: z.boolean() }).partial().strict().optional(),
+      quietHours: z.object({
+        enabled: z.boolean(),
+        start: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+        end: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+      }).partial().strict().optional(),
+    }).strict()),
+    asyncHandler(controller.updateNotificationPreferences),
+  );
+  router.post("/notifications/:id/opened", asyncHandler(controller.notificationOpened));
   router.patch(
     "/notifications/read-all",
     asyncHandler(controller.markAllNotificationsRead),

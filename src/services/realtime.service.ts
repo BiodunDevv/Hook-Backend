@@ -354,7 +354,7 @@ export const realtime = new RealtimeService();
  * coverage, couriers, coupons, commerce settings, legal text) changed. Apps
  * refetch the matching data straight away instead of waiting for a refresh.
  */
-export type ConfigScope = 'delivery' | 'logistics' | 'commerce' | 'legal' | 'coupons';
+export type ConfigScope = 'delivery' | 'logistics' | 'commerce' | 'legal' | 'coupons' | 'banners';
 export function publishConfigChanged(scope: ConfigScope) {
   realtime.emit({ type: 'config.updated', entityId: scope, data: { scope } }, { public: true, admin: true });
 }

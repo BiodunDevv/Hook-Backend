@@ -2,6 +2,8 @@ import type { ClientSession } from 'mongoose';
 import { Order } from '@models/orders/order.model';
 import { CouponService } from '@services/coupon.service';
 import { CreditService } from '@services/credit.service';
+import { NegotiatedQuote } from '@models/catalog/catalog.model';
+import { NegotiatedQuoteStatus } from '@lib/constants';
 
 const coupons = new CouponService();
 const credits = new CreditService();
@@ -52,6 +54,13 @@ export async function restoreOrderIncentives(orderIdentifier: string, session?: 
         await credits.reverseEarn({ userId: String(order.userId), orderId: identifier }, session);
       }
     }
+
+    // A quote spent on this order is handed back while it is still valid, so the customer can use their agreed price again.
+    await NegotiatedQuote.updateMany(
+      { usedByOrderId: orderId, status: NegotiatedQuoteStatus.USED, expiresAt: { $gt: new Date() } },
+      { $set: { status: NegotiatedQuoteStatus.ACTIVE }, $unset: { usedByOrderId: 1, usedAt: 1 } },
+      { session },
+    );
 
     // Redemptions are stored against the order's _id at checkout time.
     const couponsReleased = await coupons.release(orderId, session);

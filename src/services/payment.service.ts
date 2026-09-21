@@ -63,7 +63,11 @@ export class PaymentService {
       userId: customerId,
     });
     if (!order || !["PREPAID", "PAY_AT_HANDOVER"].includes(String(order.commercePaymentMethod))) throw new HttpError(404, "Order not found");
-    if (order.commercePaymentMethod === "PAY_AT_HANDOVER") {
+    // A Pay on Delivery order first asks for its delivery fee online; the balance is due at the door afterwards.
+    const awaitingFee = order.commercePaymentMethod === "PAY_AT_HANDOVER"
+      && order.commerceStatus === CommerceOrderStatus.AWAITING_DELIVERY_FEE
+      && !fulfilmentGroupIdentifier;
+    if (order.commercePaymentMethod === "PAY_AT_HANDOVER" && !awaitingFee) {
       const shipment = await Shipment.findOne({ orderId: order.id, status: ShipmentStatus.AWAITING_HANDOVER_PAYMENT, releaseStatus: "AWAITING_HANDOVER_PAYMENT" }).lean();
       if (!shipment) throw new HttpError(409, "Pay-at-Handover payment is not due for this Order yet", undefined, "PAYMENT_INITIALIZATION_NOT_ALLOWED");
     }
@@ -122,9 +126,15 @@ export class PaymentService {
       amountMinor: Number(payment.amountMinor),
       currency: order.currency || "NGN",
       email: customer.email,
-      callbackUrl:
-        process.env.PAYSTACK_CALLBACK_URL ||
-        `${String(process.env.APP_URL || "http://localhost:4000").replace(/\/$/, "")}/api/v1/payments/paystack/callback`,
+      callbackUrl: (() => {
+        const url = process.env.PAYSTACK_CALLBACK_URL ||
+          `${String(process.env.APP_URL || "http://localhost:4000").replace(/\/$/, "")}/api/v1/payments/paystack/callback`;
+        // Paystack must be able to send the customer back: a localhost or plain-http address only works on a dev machine.
+        if (process.env.NODE_ENV === "production" && !/^https:\/\//i.test(url)) {
+          throw new HttpError(503, "Card payments are not configured. Please try again later.", undefined, "SERVICE_UNAVAILABLE" as any);
+        }
+        return url;
+      })(),
       metadata: {
         orderId: order.publicId,
         paymentId: payment.publicId,
@@ -391,6 +401,26 @@ export class PaymentService {
     }
   }
 
+  /**
+   * Gives a Pay on Delivery customer their online delivery fee back when the order is cancelled before it was
+   * dispatched. After dispatch the fee is kept (it paid for a courier trip). Safe to call twice.
+   */
+  async refundDeliveryFee(orderId: string) {
+    try {
+      const shipmentStarted = await Shipment.exists({ orderId, status: { $nin: [ShipmentStatus.CANCELLED] } } as any);
+      if (shipmentStarted) return { refunded: false, reason: "dispatched" as const };
+      const payment = await Payment.findOne({ orderId, fulfilmentGroupId: { $exists: false }, commerceStatus: CommercePaymentStatus.CONFIRMED });
+      if (!payment) return { refunded: false, reason: "no_fee_paid" as const };
+      const amountMinor = Number(payment.amountMinor || 0) - Number(payment.refundedAmount || 0);
+      if (amountMinor < 1) return { refunded: false, reason: "already_refunded" as const };
+      await this.refund(String(payment._id), amountMinor, `delivery-fee-refund:${orderId}`);
+      return { refunded: true, amountMinor };
+    } catch (error) {
+      console.error("[pod] delivery fee refund failed", orderId, error);
+      return { refunded: false, reason: "failed" as const };
+    }
+  }
+
   async approvePodPayment(orderId: string) {
     const payment = await Payment.findOne({ orderId });
     if (!payment) throw new HttpError(409, "Payment record is missing");
@@ -475,6 +505,40 @@ export class PaymentService {
           { session },
         );
 
+        // Pay on Delivery, first step: the online delivery fee. It moves the order into review, or straight to
+        // approval when the admin allows it, the order is not high value and the customer is in good standing.
+        if (handover && !payment.fulfilmentGroupId) {
+          if (!transitioned) return;
+          const review = (order.podReview as any) || {};
+          const customer = order.userId ? await User.findById(order.userId).select("podEligible").session(session).lean() as any : null;
+          const autoApprove = review.autoApprove === true && customer?.podEligible !== false;
+          const nextStatus = autoApprove
+            ? CommerceOrderStatus.APPROVED_FOR_FULFILMENT
+            : review.highValue ? CommerceOrderStatus.VERIFICATION_PENDING : CommerceOrderStatus.OPERATIONS_REVIEW;
+          const nextLegacy = autoApprove
+            ? OrderStatus.APPROVED_FOR_FULFILMENT
+            : review.highValue ? OrderStatus.VERIFICATION_PENDING : OrderStatus.OPERATIONS_REVIEW;
+          const moved = await Order.updateOne(
+            { _id: order._id, commerceStatus: CommerceOrderStatus.AWAITING_DELIVERY_FEE },
+            {
+              $set: { podFeePaid: true, commerceStatus: nextStatus, status: nextLegacy, commercePaymentStatus: CommercePaymentStatus.DUE_AT_HANDOVER },
+              $push: { timeline: timelineEntry(nextStatus, "PAYSTACK_WEBHOOK", { note: autoApprove ? "Delivery fee paid; approved automatically" : "Delivery fee paid; awaiting review" }) },
+            },
+            { session },
+          );
+          if (moved.modifiedCount) {
+            if (autoApprove) await this.emitOrderApproved(order as any, session);
+            await emitOutbox([{
+              aggregateType: "payment",
+              aggregateId: String(payment._id),
+              eventType: "PAYMENT_CONFIRMED_EFFECTS",
+              payload: { paymentId: paymentKey, orderId: orderKey, flow: autoApprove ? "delivery_fee_approved" : "delivery_fee" },
+            }], session);
+            activated = true;
+          }
+          return;
+        }
+
         if (handover) {
           // Nothing to repair for handover payments: only the first transition acts.
           if (!transitioned) return;
@@ -521,7 +585,8 @@ export class PaymentService {
         // Prepaid: activate the order the first time, or repair one left
         // inactive by a confirmation that predates this transaction.
         const activate = await Order.updateOne(
-          { _id: order._id, commercePaymentStatus: { $ne: CommercePaymentStatus.CONFIRMED } },
+          // A cancelled order must never be brought back to life by a payment that lands late.
+          { _id: order._id, commercePaymentStatus: { $ne: CommercePaymentStatus.CONFIRMED }, commerceStatus: { $ne: CommerceOrderStatus.CANCELLED } },
           {
             $set: {
               commercePaymentStatus: CommercePaymentStatus.CONFIRMED,
@@ -533,6 +598,16 @@ export class PaymentService {
           },
           { session },
         );
+        if (!activate.modifiedCount && order.commerceStatus === CommerceOrderStatus.CANCELLED) {
+          // The customer paid for an order that was already cancelled: money was collected, nothing is owed
+          // to fulfil, so open a refund exception for finance instead of silently keeping it.
+          await IntegrationException.updateOne(
+            { provider: 'paystack', reference: String(payment.transactionRef || paymentKey), type: 'status', status: 'open' },
+            { $setOnInsert: { paymentId: String(payment._id), orderId: orderKey, details: { message: 'Payment confirmed after the order was cancelled. Refund the customer.' } } },
+            { upsert: true, session },
+          ).catch(() => undefined);
+          return;
+        }
         if (!transitioned && !activate.modifiedCount) return;
         if (order.userId) {
           // Hook credit is pure DB work keyed on the order, so it commits with
@@ -595,6 +670,19 @@ export class PaymentService {
     if (!order) return;
     this.publishOrderUpdate(order);
     if (!order.userId) return;
+    if (flow === "delivery_fee" || flow === "delivery_fee_approved") {
+      await createCommerceNotification({
+        eventKey: `order:${order.publicId}:delivery-fee-paid`,
+        userId: order.userId,
+        title: "Delivery fee received",
+        body: flow === "delivery_fee_approved"
+          ? "Thank you. Your order is approved and we are sourcing it now. You pay the rest when it arrives."
+          : "Thank you. Our team will confirm your order shortly. You pay the rest when it arrives.",
+        type: "payment_confirmed",
+        data: { orderId: order.publicId, paymentId },
+      });
+      return;
+    }
     if (flow === "handover") {
       await createCommerceNotification({
         eventKey: `order:${order.publicId}:handover-payment-confirmed`,

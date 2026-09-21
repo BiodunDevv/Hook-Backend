@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "crypto";
 import mongoose, { isValidObjectId } from "mongoose";
+import { ProductVariant } from "@models/catalog/catalog.model";
 import {
   CommerceChannel,
   CommerceOrderStatus,
@@ -13,7 +14,6 @@ import {
   OrderType,
   PaymentMode,
   PaymentStatus,
-  POD_PAUSED,
   ProductAvailabilityStatus,
   ProductStatus,
 } from "@lib/constants";
@@ -57,6 +57,7 @@ type PreviewInput = {
   logisticsProviderId?: string;
   couponCode?: string;
   useCredits?: boolean;
+  deliveryNote?: string;
 };
 
 type CheckoutActor = {
@@ -113,6 +114,10 @@ export class CheckoutService {
     paymentMethod: CommercePaymentMethod;
     couponCode?: string;
     useCredits?: boolean;
+    /** VAT as a fraction (0.075 = 7.5%). Comes from settings, locked at preview. */
+    vatRate?: number;
+    /** Extra charge for Pay on Delivery, collected with the delivery fee up front. */
+    podSurchargeMinor?: number;
   }) {
     const coupon = await this.coupons.tryValidate(input.couponCode, {
       userId: input.customerId,
@@ -125,7 +130,8 @@ export class CheckoutService {
     const itemDiscountMinor = coupon?.appliesToDelivery ? 0 : couponDiscountMinor;
 
     const deliveryFeeMinor = Math.max(0, input.deliveryFeeMinor - deliveryDiscountMinor);
-    const vatRate = 0.075;
+    const vatRate = input.vatRate ?? 0.075;
+    const podSurchargeMinor = Math.max(0, Number(input.podSurchargeMinor || 0));
     const vatBasisMinor = Math.max(0, input.subtotalMinor - itemDiscountMinor);
     const vatMinor = Math.round(vatBasisMinor * vatRate);
     const taxSnapshot = {
@@ -133,12 +139,12 @@ export class CheckoutService {
       name: "VAT",
       rate: vatRate,
       basis: "product_subtotal",
-      version: "ng-vat-7.5-v1",
+      version: `ng-vat-${Number((vatRate * 100).toFixed(2))}-v1`,
     };
 
     const payableBeforeCredits = Math.max(
       0,
-      input.subtotalMinor - itemDiscountMinor + vatMinor + deliveryFeeMinor,
+      input.subtotalMinor - itemDiscountMinor + vatMinor + deliveryFeeMinor + podSurchargeMinor,
     );
     // Credits are a prepayment instrument: they come off what Hook collects
     // up front. On Pay at Handover there is nothing to collect up front, so
@@ -171,6 +177,7 @@ export class CheckoutService {
       vatMinor,
       taxSnapshot,
       deliveryFeeMinor,
+      podSurchargeMinor,
       totalMinor: Math.max(0, payableBeforeCredits - creditsAppliedMinor),
     };
   }
@@ -346,6 +353,15 @@ export class CheckoutService {
       (sum, line) => sum + Number(line.totalPriceMinor),
       0,
     );
+    const minimumCheckoutMinor = Number(settings.minimumCheckoutMinor ?? 1_800_000);
+    if (minimumCheckoutMinor > 0 && subtotalMinor < minimumCheckoutMinor) {
+      throw new HttpError(
+        409,
+        `Add items worth at least ₦${(minimumCheckoutMinor / 100).toLocaleString("en-NG")} to check out. Smaller carts can be saved but not bought.`,
+        { minimumCheckoutMinor, subtotalMinor },
+        "MINIMUM_ORDER_NOT_MET",
+      );
+    }
     const logisticsProvider = input.logisticsProviderId
       ? await this.logisticsProviders.getSelectable(input.logisticsProviderId)
       : undefined;
@@ -356,6 +372,13 @@ export class CheckoutService {
             coordinates: addressSnapshot?.coordinates as { latitude: number; longitude: number } | undefined,
             defaultFeeMinor: settings.defaultDeliveryFeeMinor ?? DEFAULT_DELIVERY_FEE_MINOR,
           });
+    const isPod = input.paymentMethod === CommercePaymentMethod.PAY_AT_HANDOVER;
+    // VAT and the Pay on Delivery surcharge are admin settings, locked into the preview so confirm charges what was shown.
+    const vatFraction = Number(settings.vatRatePercent ?? 7.5) / 100;
+    const surchargeValue = Number(settings.podSurchargeValue || 0);
+    const podSurchargeMinor = isPod
+      ? settings.podSurchargeType === "percent" ? Math.round((subtotalMinor * surchargeValue) / 100) : Math.round(surchargeValue)
+      : 0;
     const money = await this.calculateMoney({
       customerId: actor.customerId,
       subtotalMinor,
@@ -363,23 +386,36 @@ export class CheckoutService {
       paymentMethod: input.paymentMethod,
       couponCode: input.couponCode,
       useCredits: input.useCredits,
+      vatRate: vatFraction,
+      podSurchargeMinor,
     });
     const { vatRate, vatMinor, taxSnapshot, deliveryFeeMinor, couponDiscountMinor, creditsAppliedMinor, totalMinor, coupon } = money;
+    // What is paid online now on a Pay on Delivery order: the delivery fee plus the surcharge. The rest is paid at the door.
+    const podFeeDueNowMinor = isPod ? deliveryFeeMinor + podSurchargeMinor : 0;
     const podLimitMinor = Number(
       deliveryState.podLimitMinor ??
         settings.defaultPodLimitMinor ??
         DEFAULT_POD_LIMIT_MINOR,
     );
+    // A State can ask for a higher (or lower) minimum than the global one.
+    const podMinimumMinor = Number((deliveryState as any).podMinimumOrderMinor ?? settings.podMinimumOrderMinor ?? 3_000_000);
+    // The minimum is judged on what the order really comes to (goods after discount, VAT and delivery), not on goods alone.
+    // The Pay on Delivery surcharge and Hook credit are left out so choosing either never changes eligibility.
+    const orderValueMinor = Math.max(0, subtotalMinor - (coupon?.appliesToDelivery ? 0 : couponDiscountMinor) + vatMinor + deliveryFeeMinor);
     const podEnabled = Boolean(
-      !POD_PAUSED &&
       settings.podEnabled &&
       deliveryState.podEnabled &&
-      customer.podEligible !== false,
+      customer.podEligible !== false &&
+      orderValueMinor >= podMinimumMinor,
     );
-    if (
-      input.paymentMethod === CommercePaymentMethod.PAY_AT_HANDOVER &&
-      !podEnabled
-    )
+    if (isPod && orderValueMinor < podMinimumMinor && settings.podEnabled && deliveryState.podEnabled && customer.podEligible !== false)
+      throw new HttpError(
+        409,
+        `Pay on Delivery is for orders of ₦${(podMinimumMinor / 100).toLocaleString("en-NG")} or more, including delivery and VAT. Yours comes to ₦${(orderValueMinor / 100).toLocaleString("en-NG")}.`,
+        { podMinimumOrderMinor: podMinimumMinor, orderValueMinor, subtotalMinor },
+        "POD_NOT_ELIGIBLE",
+      );
+    if (isPod && !podEnabled)
       throw new HttpError(
         409,
         "Pay at Handover is not available for this Order",
@@ -437,6 +473,7 @@ export class CheckoutService {
         : undefined,
       couponId: coupon?.couponId,
       couponCode: coupon?.code,
+      deliveryNote: input.deliveryNote || undefined,
       couponDiscountMinor,
       creditsAppliedMinor,
       totalMinor,
@@ -444,12 +481,21 @@ export class CheckoutService {
       policyVersions: settings.activePolicyVersions,
       podDecision: {
         eligible: podEnabled,
+        orderValueMinor,
+        minimumOrderMinor: podMinimumMinor,
         limitMinor: podLimitMinor,
         highValue,
         requiresOverride: highValue,
         requiresConfirmationCall:
           input.paymentMethod === CommercePaymentMethod.PAY_AT_HANDOVER,
+        feeDueNowMinor: podFeeDueNowMinor,
+        surchargeMinor: podSurchargeMinor,
+        // A paid fee approves the order on its own when the admin allows it, the order is not high value
+        // and the customer is in good standing. Anything else keeps the manual confirmation call.
+        autoApprove: isPod && settings.podAutoApproveEnabled !== false && !highValue,
       },
+      podSurchargeMinor,
+      podFeeDueNowMinor,
       expiresAt,
     });
     return {
@@ -475,6 +521,9 @@ export class CheckoutService {
       couponDiscountMinor,
       creditsAppliedMinor,
       totalMinor,
+      podFeeDueNowMinor,
+      podSurchargeMinor,
+      balanceDueOnDeliveryMinor: isPod ? Math.max(0, totalMinor - podFeeDueNowMinor) : 0,
       currency: "NGN",
       podDecision: preview.podDecision,
       policyVersions: preview.policyVersions,
@@ -609,6 +658,17 @@ export class CheckoutService {
         throw new HttpError(409, "Delivery pricing changed. Review checkout again.", undefined, "CHECKOUT_REVALIDATION_REQUIRED");
     }
 
+    // The minimum can be raised while a preview is open; a token must not slip under the new floor.
+    const minimumNow = Number((await this.getSettings()).minimumCheckoutMinor ?? 1_800_000);
+    if (minimumNow > 0 && currentSubtotalMinor < minimumNow) {
+      throw new HttpError(
+        409,
+        `Add items worth at least ₦${(minimumNow / 100).toLocaleString("en-NG")} to check out.`,
+        { minimumCheckoutMinor: minimumNow, subtotalMinor: currentSubtotalMinor },
+        "MINIMUM_ORDER_NOT_MET",
+      );
+    }
+
     // Re-run the same money math the quote used. This re-validates the coupon
     // as a side effect, so one that expired or hit its cap in the meantime
     // throws here rather than silently under-charging.
@@ -619,6 +679,9 @@ export class CheckoutService {
       paymentMethod: preview.paymentMethod as CommercePaymentMethod,
       couponCode: preview.couponCode,
       useCredits: Number(preview.creditsAppliedMinor || 0) > 0,
+      // Charge exactly what the preview showed, even if an admin changed VAT or the surcharge meanwhile.
+      vatRate: Number((preview.taxSnapshot as any)?.rate ?? 0.075),
+      podSurchargeMinor: Number(preview.podSurchargeMinor || 0),
     });
 
     if (
@@ -638,7 +701,9 @@ export class CheckoutService {
     const effectiveGroups = groupSnapshots.length ? groupSnapshots : [{ sourceStateId: preview.stateId, subtotalMinor: Number(preview.subtotalMinor) }];
     const groupIds = await Promise.all(effectiveGroups.map(() => nextPublicId("orderFulfilmentGroup")));
     const pod = preview.paymentMethod === CommercePaymentMethod.PAY_AT_HANDOVER;
-    const paymentIds = await Promise.all((pod ? effectiveGroups : [null]).map(() => nextPublicId("payment")));
+    // Pay on Delivery: one balance payment per group (paid at the door) plus one online payment for the delivery fee and surcharge.
+    const paymentIds = await Promise.all((pod ? [...effectiveGroups, null] : [null]).map(() => nextPublicId("payment")));
+    const feePaymentPublicId = pod ? paymentIds[effectiveGroups.length] : undefined;
     let allocatedFee = 0;
     let allocatedVat = 0;
     let allocatedDiscount = 0;
@@ -682,10 +747,9 @@ export class CheckoutService {
     try {
       await session.withTransaction(async () => {
         const highValue = Boolean((preview.podDecision as any)?.highValue);
+        // Pay on Delivery starts by waiting for the online delivery fee; review follows once it is paid.
         const commerceStatus = pod
-          ? highValue
-            ? CommerceOrderStatus.VERIFICATION_PENDING
-            : CommerceOrderStatus.OPERATIONS_REVIEW
+          ? CommerceOrderStatus.AWAITING_DELIVERY_FEE
           : CommerceOrderStatus.AWAITING_PAYMENT;
         const order = new Order({
           publicId: ids.order,
@@ -715,6 +779,7 @@ export class CheckoutService {
           couponDiscountMinor: Number(preview.couponDiscountMinor || 0),
           creditsAppliedMinor: Number(preview.creditsAppliedMinor || 0),
           totalMinor: preview.totalMinor,
+          deliveryNotes: preview.deliveryNote || undefined,
           currency: preview.currency,
           subtotal: preview.subtotalMinor / 100,
           deliveryFee: preview.deliveryFeeMinor / 100,
@@ -723,11 +788,9 @@ export class CheckoutService {
             (Number(preview.couponDiscountMinor || 0) + Number(preview.creditsAppliedMinor || 0)) / 100,
           total: preview.totalMinor / 100,
           vendorCount: 0,
-          status: pod
-            ? highValue
-              ? OrderStatus.VERIFICATION_PENDING
-              : OrderStatus.OPERATIONS_REVIEW
-            : OrderStatus.AWAITING_PAYMENT,
+          status: OrderStatus.AWAITING_PAYMENT,
+          podFeeDueNowMinor: pod ? Number(preview.podFeeDueNowMinor || 0) : 0,
+          podFeePaid: false,
           paymentStatus: PaymentStatus.PENDING,
           paymentMode: pod ? PaymentMode.PAY_ON_DELIVERY : PaymentMode.PAY_NOW,
           orderType: OrderType.STANDARD,
@@ -807,12 +870,18 @@ export class CheckoutService {
           }]).map((group) => {
             // Charge the discounted figure: the coupon and any credits the
             // customer applied come off what the gateway actually collects.
+            // A free-delivery coupon is already inside the delivery fee (it is stored net), so
+            // only an item-level coupon comes off the subtotal; subtracting both would
+            // discount the delivery twice and under-charge the payment.
+            const itemDiscountShareMinor = currentMoney.coupon?.appliesToDelivery ? 0 : group.couponDiscountShareMinor;
+            // On Pay on Delivery the delivery fee and surcharge were paid online up front, so the amount left
+            // to pay at the door covers only the goods and their VAT.
             const payableMinor = Math.max(
               0,
               group.subtotalMinor
                 + group.vatShareMinor
-                + group.deliveryFeeShareMinor
-                - group.couponDiscountShareMinor
+                + (pod ? 0 : group.deliveryFeeShareMinor)
+                - itemDiscountShareMinor
                 - group.creditsAppliedShareMinor,
             );
             return {
@@ -834,12 +903,30 @@ export class CheckoutService {
                 : CommercePaymentStatus.PENDING,
               refundedAmount: 0,
             };
-          }),
+          }).concat(pod ? [{
+            publicId: feePaymentPublicId,
+            orderId: order.id,
+            fulfilmentGroupId: undefined as any,
+            resourceType: "order",
+            transactionRef: `PSK-${feePaymentPublicId}`,
+            gateway: "paystack",
+            paymentMethod: "card",
+            amount: Number(preview.podFeeDueNowMinor || 0) / 100,
+            amountMinor: Number(preview.podFeeDueNowMinor || 0),
+            currency: preview.currency,
+            gatewayFee: 0,
+            amountSettled: 0,
+            status: PaymentStatus.PENDING,
+            commerceStatus: CommercePaymentStatus.PENDING,
+            refundedAmount: 0,
+          }] : []) as any,
           { session },
         );
         if (pod) {
           const payments = await Payment.find({ orderId: order.id }).session(session).select("_id publicId fulfilmentGroupId").lean();
           for (const payment of payments) {
+            // The delivery-fee payment belongs to the order, not to a fulfilment group.
+            if (!payment.fulfilmentGroupId) continue;
             await OrderFulfilmentGroup.updateOne(
               { publicId: payment.fulfilmentGroupId },
               { $set: { paymentId: payment.publicId || String(payment._id) } },
@@ -872,20 +959,25 @@ export class CheckoutService {
                 "NEGOTIATION_QUOTE_EXPIRED",
               );
           }
+        // Remove exactly the lines that became order items; anything added after the preview stays in the cart.
         await CartItem.deleteMany(
-          { cartId: cart.id, ...(combined ? {} : { stateId: { $in: stateIdentifiers } }) },
+          { cartId: cart.id, _id: { $in: currentLines.map((line) => line.cartItemId) } },
           { session },
         );
-        await Cart.updateOne(
+        const cartUpdate = await Cart.updateOne(
           { _id: cart.id, version: preview.cartVersion },
           { $inc: { version: 1 } },
           { session },
         );
-        await CheckoutPreview.updateOne(
+        if (!cartUpdate.matchedCount)
+          throw new HttpError(409, "Your cart changed while ordering. Review it and try again.", undefined, "CART_VERSION_CHANGED");
+        const previewUpdate = await CheckoutPreview.updateOne(
           { _id: preview.id, consumedAt: null },
           { $set: { consumedAt: new Date(), orderId: order.id } },
           { session },
         );
+        if (!previewUpdate.modifiedCount)
+          throw new HttpError(409, "Checkout preview has already been used", undefined, "CHECKOUT_PREVIEW_INVALID");
         // Coupon use, Hook credit debit and the follow-up notification commit
         // with the order. They used to run after the commit with errors
         // swallowed, so a failure silently gave a discount that was never
@@ -927,6 +1019,8 @@ export class CheckoutService {
       if (isDuplicateKeyError(error) || (error as any)?.hasErrorLabel?.("TransientTransactionError")) {
         const winner = await Order.findOne({ idempotencyKey }).lean({ virtuals: true });
         if (winner && winner.userId === actor.customerId) return this.orderResult(winner.id);
+        // Same preview confirmed twice with different keys: one order already exists for it.
+        if (isDuplicateKeyError(error)) throw new HttpError(409, "This checkout was already completed", undefined, "CHECKOUT_PREVIEW_INVALID");
       }
       throw error;
     } finally {
@@ -980,8 +1074,15 @@ export class CheckoutService {
     const map = new Map(
       products.map((product) => [recordId(product), product]),
     );
+    // A chosen option that was switched off or removed since it went into the cart can no longer be bought.
+    const variantIds = [...new Set(items.map((item) => item.variantId).filter((id): id is string => Boolean(id) && isValidObjectId(id)))];
+    const liveVariants = variantIds.length
+      ? new Set((await ProductVariant.find({ _id: { $in: variantIds }, active: true, deletedAt: { $exists: false } } as never).select("_id").lean()).map((variant: any) => String(variant._id)))
+      : new Set<string>();
     const lines: any[] = [];
     for (const item of items) {
+      if (item.variantId && !liveVariants.has(String(item.variantId)))
+        throw new HttpError(409, "A basket option is no longer available", undefined, "CHECKOUT_REVALIDATION_REQUIRED");
       const product = map.get(item.productId);
       if (
         !product ||
@@ -1003,13 +1104,15 @@ export class CheckoutService {
           customerId,
           productId,
           ...(item.variantId ? { variantId: item.variantId } : {}),
+          // The agreed price was for this exact quantity.
+          quantity: item.quantity,
           status: NegotiatedQuoteStatus.ACTIVE,
           expiresAt: { $gt: new Date() },
         }).lean({ virtuals: true });
         if (!quote)
           throw new HttpError(
             409,
-            "A negotiated quote expired",
+            "A negotiated quote expired or no longer matches the quantity",
             undefined,
             "NEGOTIATION_QUOTE_EXPIRED",
           );
@@ -1054,7 +1157,21 @@ export class CheckoutService {
     return lines;
   }
 
-  private async getSettings() {
+  // Read on every preview and confirm; a few seconds of caching avoids a database write per request.
+  private static settingsCache: { value: any; until: number } | null = null;
+
+  static clearSettingsCache() {
+    CheckoutService.settingsCache = null;
+  }
+
+  private async getSettings(): Promise<any> {
+    const cached = CheckoutService.settingsCache;
+    if (cached && cached.until > Date.now()) return cached.value;
+    const existing = await CommerceSettings.findOne({ key: "commerce" }).lean({ virtuals: true });
+    if (existing) {
+      CheckoutService.settingsCache = { value: existing, until: Date.now() + 5_000 };
+      return existing;
+    }
     return CommerceSettings.findOneAndUpdate(
       { key: "commerce" },
       {

@@ -1,4 +1,6 @@
+import { publicBanners } from '@controllers/admin/banners.controller';
 import { Router } from 'express';
+import { categoryService } from '@services/category.service';
 import { isValidObjectId } from 'mongoose';
 import { OperationCity, OperationLocalGovernment, OperationState } from '@models/platform/geography.model';
 import { Market } from '@models/platform/network.model';
@@ -49,7 +51,9 @@ export function createPublicGeographyRouter() {
   router.get('/products', asyncHandler(catalog.products));
   router.get('/products/status', asyncHandler(catalog.statuses));
   router.get('/products/:id', asyncHandler(catalog.product));
+  router.get('/banners', asyncHandler(publicBanners));
   router.get('/categories', asyncHandler(catalog.categories));
+  router.get('/categories/tree', asyncHandler(catalog.categories));
   router.get('/search', asyncHandler(catalog.search));
   router.get('/search/suggestions', asyncHandler(catalog.suggestions));
   router.get('/operating-states', asyncHandler(publicController.getOperatingStates));
@@ -141,31 +145,42 @@ export function createPublicGeographyRouter() {
       return;
     }
     const marketId = await resolveId(Market, req.params.id);
-    const categoryIds = await Product.distinct('categoryId', {
-      marketId,
-      status: ProductStatus.PUBLISHED,
-      publishedAt: { $lte: new Date() },
-      deletedAt: { $exists: false },
-    });
-    const [categories, counts] = await Promise.all([
-      Category.find({ _id: { $in: categoryIds }, isActive: true, deletedAt: { $exists: false } })
-        .select('publicId name slug iconUrl description sortOrder')
-        .sort({ sortOrder: 1, name: 1 })
-        .lean({ virtuals: true }),
+    // One aggregate gives both which categories exist here and how many products each holds; the tree loads alongside it.
+    const [counts, tree] = await Promise.all([
       Product.aggregate([
         { $match: { marketId, status: ProductStatus.PUBLISHED, publishedAt: { $lte: new Date() }, deletedAt: { $exists: false } } },
         { $group: { _id: '$categoryId', count: { $sum: 1 } } },
       ]),
+      categoryService.tree(),
     ]);
+    const categoryIds = counts.map((item: any) => item._id);
     const countMap = new Map(counts.map((item: any) => [String(item._id), item.count]));
-    const response = categories.map((category: any) => ({
-      publicId: category.publicId,
-      name: category.name,
-      slug: category.slug,
-      iconUrl: category.iconUrl || null,
-      description: category.description || '',
-      productCount: countMap.get(String(category._id)) || 0,
-    }));
+    // Products sit in sub-categories, so show the top-level categories that
+    // contain any, with the rolled-up count and the sub-categories present.
+    const response = tree
+      .map((root: any) => {
+        const children = (root.children || [])
+          .map((child: any) => ({ ...child, productCount: countMap.get(child.internalId) || 0 }))
+          .filter((child: any) => child.productCount > 0);
+        const own = countMap.get(root.internalId) || 0;
+        return { root, children, productCount: own + children.reduce((sum: number, child: any) => sum + child.productCount, 0) };
+      })
+      .filter((entry: any) => entry.productCount > 0 && categoryIds.length)
+      .map(({ root, children, productCount }: any) => ({
+        publicId: root.publicId,
+        name: root.name,
+        slug: root.slug,
+        iconUrl: root.iconUrl || null,
+        description: root.description || '',
+        productCount,
+        children: children.map((child: any) => ({
+          publicId: child.publicId,
+          name: child.name,
+          slug: child.slug,
+          iconUrl: child.iconUrl || null,
+          productCount: child.productCount,
+        })),
+      }));
     await lookup.store(response);
     sendSuccess(res, response);
   }));

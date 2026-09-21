@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "crypto";
+import { categoryService } from "@services/category.service";
 import { classifyNegotiationMessage, negotiationMoneyFromMessage } from "@lib/negotiation-intent";
 import { Negotiation } from "@models/negotiations/negotiation.model";
 import { Product } from "@models/products/product.model";
@@ -113,12 +114,17 @@ export class NegotiationShoppingService {
       | { id: string; state: "pending"; quantity: number; quoteId: string }
       | undefined;
     if (classification.intent === "alternatives") {
-      const categories = await Category.find({ deletedAt: null })
+      const categories = await Category.find({ deletedAt: null, isActive: true })
         .select("name")
         .lean();
-      const requestedCategory = categories.find((category) =>
-        message.toLowerCase().includes(category.name.toLowerCase()),
-      );
+      // The most specific name wins ("Sneakers male" over "Shoes").
+      const requestedCategory = categories
+        .filter((category) => message.toLowerCase().includes(category.name.toLowerCase()))
+        .sort((a, b) => b.name.length - a.name.length)[0];
+      // A parent such as "Shoes" covers every sub-category beneath it.
+      const categoryScope = requestedCategory
+        ? await categoryService.descendantIds(requestedCategory._id.toString())
+        : [product.categoryId];
       const budget =
         classification.budgetMinor ||
         session.lastCounterPriceMinor ||
@@ -127,7 +133,7 @@ export class NegotiationShoppingService {
       const candidates = await Product.aggregate([
         {
           $match: {
-            categoryId: requestedCategory?._id.toString() || product.categoryId,
+            categoryId: { $in: categoryScope },
             _id: { $ne: product._id },
             status: ProductStatus.PUBLISHED,
             availabilityStatus: {

@@ -1,3 +1,4 @@
+import { notifyLikersOfProductChange } from '@services/engagement-notifications.service';
 import { Request, Response } from 'express';
 import { ProductAvailabilityStatus, ProductStatus, UserRole } from '@lib/constants';
 import { auditAdminAction } from '@lib/audit';
@@ -5,6 +6,8 @@ import { HttpError, sendCreated, sendSuccess } from '@utils/http';
 import { adminRepos, getPagination, paginated, routeParam } from './admin.helpers';
 import { publicProduct } from '@lib/public-resource';
 import { Product } from '@models/products/product.model';
+import { recordAudit } from '@services/platform-audit.service';
+import { categoryService } from '@services/category.service';
 import { Category } from '@models/categories/category.model';
 import { User } from '@models/users/user.model';
 import { Market } from '@models/platform/network.model';
@@ -33,7 +36,8 @@ async function activeCatalogRelations(categoryIdentifier: string, marketIdentifi
     Market.findOne(referenceFilter(marketIdentifier) as any).lean({ virtuals: true }),
   ]);
   if (!category) throw new HttpError(404, 'Category not found');
-  if (!category.isActive) throw new HttpError(409, 'Select an active category', undefined, 'CONFLICT');
+  // Only an active leaf (with an active parent) may hold products.
+  await categoryService.assertAssignable((category as any)._id.toString());
   if (!market) throw new HttpError(404, 'Market not found');
   if (market.status !== 'active') throw new HttpError(409, 'Select an active Market', undefined, 'CONFLICT');
   return { category, market };
@@ -130,6 +134,29 @@ async function categoryManagersMap(): Promise<Map<string, any[]>> {
 }
 
 export class AdminProductsController {
+  /**
+   * Moves products into a new category in one step. This is how products that
+   * were filed under the old flat categories get their sub-category, and it
+   * clears their "needs a sub-category" flag.
+   */
+  recategorise = async (req: Request, res: Response) => {
+    const ids: string[] = req.body.productIds;
+    const category = await categoryService.assertAssignable(String(req.body.categoryId));
+    const internal = ids.filter((id) => /^[a-f\d]{24}$/i.test(id));
+    const filter = { deletedAt: { $exists: false }, $or: [{ _id: { $in: internal } }, { publicId: { $in: ids } }] };
+    const result = await Product.updateMany(filter, { $set: { categoryId: category._id.toString() }, $unset: { needsRecategorisation: 1 } });
+    await recordAudit(req, {
+      action: 'products.recategorise',
+      entityType: 'product',
+      after: { categoryId: category._id.toString(), count: result.modifiedCount },
+      reason: `Moved ${result.modifiedCount} product(s) to ${category.name}`,
+    });
+    publishRealtime({ type: 'catalog.updated', entityType: 'category', entityId: category.publicId }, { public: true, admin: true });
+    publishRealtime({ type: 'home.updated', entityType: 'category', entityId: category.publicId }, { public: true, admin: true });
+    adminProductStatsCache.clear();
+    sendSuccess(res, { moved: result.modifiedCount, category: { publicId: category.publicId, name: category.name } });
+  };
+
   reviewQueue = async (req: Request, res: Response) => {
     const { page, limit, skip } = getPagination(req.query);
     const [data, total] = await adminRepos.products().findAndCount({
@@ -147,17 +174,29 @@ export class AdminProductsController {
     const search = typeof req.query.search === 'string' ? req.query.search.toLowerCase() : undefined;
     const where: Record<string, any> = { deletedAt: { $exists: false } };
     if (typeof req.query.status === 'string') where.status = req.query.status;
-    if (typeof req.query.categoryId === 'string') where.categoryId = req.query.categoryId;
+    if (typeof req.query.categoryId === 'string') where.categoryId = { $in: await categoryService.descendantIds(req.query.categoryId) };
+    if (req.query.needsRecategorisation === 'true') where.needsRecategorisation = true;
     if (req.query.stock === 'low') where.quantity = { $gt: 0, $lt: 10 };
     if (req.query.stock === 'out') where.quantity = 0;
+    if (typeof req.query.marketId === 'string' && req.query.marketId) {
+      const market: any = await Market.findOne(referenceFilter(req.query.marketId) as any).select('_id').lean();
+      where.marketId = market ? String(market._id) : '__none__';
+    }
+    if (typeof req.query.source === 'string' && ['field_agent', 'admin', 'partner', 'vendor'].includes(req.query.source)) where.source = req.query.source;
+    if (req.query.negotiable === 'true') where['negotiationRules.enabled'] = true;
     if (search) {
       const expression = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
       where.$or = [{ title: expression }, { hookId: expression }, { publicId: expression }];
     }
-    const listFields = 'publicId hookId title slug description costPrice sellingPrice discountedPrice minAcceptablePrice sellingPriceMinor discountMinor currency quantity reservedQuantity colors sizes images status categoryId marketId sourceStateId availabilityStatus vendorId source viewCount orderCount averageRating createdAt updatedAt';
+    // Rows in a dense table do not need the long description; the whole list can be 100 rows.
+    const summary = req.query.fields === 'summary';
+    const SORTABLE: Record<string, string> = { createdAt: 'createdAt', updatedAt: 'updatedAt', title: 'title', sellingPrice: 'sellingPriceMinor', quantity: 'quantity', orderCount: 'orderCount', viewCount: 'viewCount' };
+    const sortField = SORTABLE[String(req.query.sort || 'createdAt')] || 'createdAt';
+    const sortDir = req.query.dir === 'asc' ? 1 : -1;
+    const listFields = (summary ? '' : 'description ') + 'publicId hookId title slug costPrice sellingPrice discountedPrice minAcceptablePrice sellingPriceMinor discountMinor currency quantity reservedQuantity colors sizes images status categoryId marketId sourceStateId availabilityStatus vendorId source viewCount orderCount averageRating createdAt updatedAt';
     const productsQuery = Product.find(where)
       .select(listFields)
-      .sort({ createdAt: -1 })
+      .sort({ [sortField]: sortDir, _id: -1 })
       .skip(skip)
       .limit(limit)
       .lean({ virtuals: true });
@@ -175,7 +214,7 @@ export class AdminProductsController {
             { publicId: { $in: categoryIds } },
             ...(objectIds.length ? [{ _id: { $in: objectIds } }] : []),
           ],
-        }).select('publicId name slug iconUrl').lean({ virtuals: true })
+        }).select('publicId name slug iconUrl parentId').lean({ virtuals: true })
       : [];
     const categoryMap = new Map<string, any>();
     (categories as any[]).forEach((category) => {
@@ -187,9 +226,17 @@ export class AdminProductsController {
       categoryMap.set(String(_id), value);
       if (category.publicId) categoryMap.set(String(category.publicId), value);
     });
+    // One batch each for the parent categories and the markets, so a 100-row page stays a handful of queries.
+    const parentIds = [...new Set((categories as any[]).map((category) => String(category.parentId || '')).filter(Boolean))];
+    const parents = parentIds.length ? await Category.find({ _id: { $in: parentIds.filter((value) => /^[a-f\d]{24}$/i.test(value)) } }).select('name').lean() : [];
+    const parentName = new Map((parents as any[]).map((parent) => [String(parent._id), parent.name]));
+    const marketIds = [...new Set((rows as any[]).map((product) => String(product.marketId || '')).filter((value) => /^[a-f\d]{24}$/i.test(value)))];
+    const marketRows = marketIds.length ? await Market.find({ _id: { $in: marketIds } }).select('name').lean() : [];
+    const marketName = new Map((marketRows as any[]).map((market) => [String(market._id), market.name]));
     const data = (rows as any[]).map((product) => ({
       ...product,
-      category: categoryMap.get(String(product.categoryId)) || null,
+      marketName: marketName.get(String(product.marketId)) || null,
+      category: categoryMap.get(String(product.categoryId)) ? { ...categoryMap.get(String(product.categoryId)), parentName: parentName.get(String((categories as any[]).find((row) => String(row._id) === String(product.categoryId) || row.publicId === String(product.categoryId))?.parentId || '')) || null } : null,
       managers: managers.get(String(product.categoryId)) || [],
     }));
     sendSuccess(res, { ...paginated(data.map(adminProductSummary), total, page, limit), stats });
@@ -214,8 +261,14 @@ export class AdminProductsController {
         ? MarketVendor.findOne(referenceFilter(product.sourceMarketVendorId) as any).select('publicId businessName status').lean({ virtuals: true })
         : null,
     ]);
+    const parentCategory = product.category?.parentId
+      ? await Category.findById(product.category.parentId).select('name publicId').lean()
+      : null;
     sendSuccess(res, publicProduct({
       ...product,
+      category: product.category && parentCategory
+        ? { ...(typeof product.category.toJSON === 'function' ? product.category.toJSON() : product.category), parent: { id: String(parentCategory._id), name: parentCategory.name } }
+        : product.category,
       categoryManagers: managers.get(product.categoryId) || [],
       sourceMarket: sourceMarket
         ? { publicId: sourceMarket.publicId, name: sourceMarket.name, address: sourceMarket.address }
@@ -318,11 +371,13 @@ export class AdminProductsController {
       });
     }
     updates.catalogVersion = Number(product.catalogVersion || 1) + 1;
+    const before = { quantity: product.quantity, sellingPriceMinor: product.sellingPriceMinor };
     Object.assign(product, updates);
     if (req.body.title && !req.body.slug) product.slug = `${slugify(req.body.title)}-${Date.now().toString().slice(-6)}`;
     await products.save(product);
     await auditAdminAction(req, 'product.update', 'product', product.id, { fields: Object.keys(req.body) });
     publishProductUpdate(product);
+    void notifyLikersOfProductChange(before, product as any).catch(() => undefined);
     sendSuccess(res, publicProduct(await products.findOne({ where: { id: product.id }, relations: { category: true } }) as any));
   };
 

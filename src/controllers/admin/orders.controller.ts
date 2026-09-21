@@ -22,6 +22,7 @@ import { Payment } from "@models/payments/payment.model";
 import { PaymentLink } from "@models/payments/payment-link.model";
 import { CommerceOrderStatus } from "@lib/constants";
 import { appendTimeline, notifyStatus } from "@lib/order-timeline";
+import { PaymentService } from "@services/payment.service";
 import { restoreOrderIncentives } from "@services/order-restoration.service";
 import { splitOrderIntoGroups } from "@services/order-split.service";
 import { createCommerceNotification } from "@services/commerce-notification.service";
@@ -262,6 +263,13 @@ export class AdminOrdersController {
       throw new HttpError(409, "A delivered order cannot be cancelled", undefined, "INVALID_STATE_TRANSITION");
     }
 
+    // Cancelling a paid order would return credit and the coupon but leave the customer's cash uncollected-and-unrefunded,
+    // and leave fulfilment tasks and shipments running. Paid orders go through a refund, not a plain cancel.
+    const paid = ["CONFIRMED", "PAID"].includes(String(order.commercePaymentStatus || "").toUpperCase());
+    if (paid) {
+      throw new HttpError(409, "This order is already paid. Refund it first; a paid order cannot be cancelled directly.", undefined, "INVALID_STATE_TRANSITION");
+    }
+
     const { reason } = req.body as { reason: string };
     order.commerceStatus = CommerceOrderStatus.CANCELLED;
     order.status = OrderStatus.CANCELLED;
@@ -273,6 +281,8 @@ export class AdminOrdersController {
     // Coin, coupon and earn all come back. Idempotent and never throws, so a
     // restoration failure cannot leave the order stuck un-cancelled.
     await restoreOrderIncentives(String(order._id));
+    // Pay on Delivery: an order cancelled before dispatch returns the delivery fee the customer paid online.
+    if (order.commercePaymentMethod === "PAY_AT_HANDOVER") await new PaymentService().refundDeliveryFee(String(order._id));
 
     // Retire any open payment link so the customer cannot pay a dead order.
     await PaymentLink.updateMany(
@@ -473,7 +483,7 @@ export class AdminOrdersController {
             quantity: line.quantity,
             unitPrice: line.unitPrice,
             totalPrice: line.totalPrice,
-            selectedVariants: line.selectedVariants,
+            selectedVariants: line.selectedVariants as Record<string, string | undefined> | undefined,
             commissionAmount: 0,
           }),
         );

@@ -88,5 +88,8 @@ test('a new notification pushes once; a replay of the same event does not buzz t
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.equal(await Notification.countDocuments({ eventKey: input.eventKey }), 1);
   assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0].body[0].data, { type: 'payment_confirmed', orderId: 'ORD-1' });
+  // The push tells the app where to go, and still carries orderId for older app versions.
+  const { notificationId, ...data } = calls[0].body[0].data;
+  assert.deepEqual(data, { type: 'payment_confirmed', group: 'orders', screen: 'order', params: { orderId: 'ORD-1' }, orderId: 'ORD-1' });
+  assert.ok(notificationId, 'the push carries the notification id so a tap can be recorded');
 });

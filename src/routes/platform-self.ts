@@ -1,3 +1,4 @@
+import { rateLimit } from "@middleware/security";
 import { Router } from "express";
 import { z } from "zod";
 import { AccountType, ProductAvailabilityStatus } from "@lib/constants";
@@ -95,12 +96,18 @@ export function createMarketAssociateRouter() {
   );
   router.patch(
     "/profile",
+    validateBody(z.object({
+      phone: z.string().trim().min(7).max(24).regex(/^[+\d][\d\s()-]*$/, "Enter a valid phone number").optional(),
+      avatarUrl: z.union([z.string().trim().url().max(500), z.literal("")]).optional(),
+      // Merged into the saved preferences, so one key can change without wiping the rest.
+      preferences: z.record(z.string().max(60), z.unknown()).optional(),
+    }).strict()),
     asyncHandler(async (req, res) => {
       const { phone, avatarUrl, preferences } = req.body ?? {};
       const set: Record<string, unknown> = {};
       const unset: Record<string, unknown> = {};
       if (phone !== undefined) set.phone = phone;
-      if (preferences !== undefined) set.preferences = preferences;
+      if (preferences !== undefined) for (const [key, value] of Object.entries(preferences as Record<string, unknown>)) set[`preferences.${key}`] = value;
       // An empty avatarUrl means "remove my photo"; $set with undefined is a no-op.
       if (avatarUrl !== undefined) {
         if (avatarUrl) set.avatarUrl = avatarUrl;
@@ -292,7 +299,12 @@ export function createPartnerRouter() {
       sendSuccess(res, partner);
     }),
   );
-  router.get("/customers/lookup", asyncHandler(commerce.lookupCustomer));
+  // Exact-email lookups are throttled per partner so the directory cannot be probed for who has an account.
+  router.get(
+    "/customers/lookup",
+    rateLimit("partner-customer-lookup", { windowMs: 10 * 60_000, max: 20, key: (req) => `partner:${req.user?.sub || "anon"}`, message: "Too many customer lookups. Please wait a few minutes." }),
+    asyncHandler(commerce.lookupCustomer),
+  );
   router.post(
     "/customers",
     validateBody(

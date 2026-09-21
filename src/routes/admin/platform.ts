@@ -4,6 +4,7 @@ import { PlatformController } from '@controllers/admin/platform.controller';
 import { requirePermission } from '@middleware/permissions';
 import { validateBody } from '@middleware/validate';
 import { asyncHandler } from '@utils/http';
+import { requireSuperAdmin } from '@middleware/roles';
 import { AdminMarketVendorController } from '@controllers/market-vendor.controller';
 import { marketVendorSchema, marketVendorUpdateSchema, vendorReconcileSchema } from '@validations/vendor.schemas';
 
@@ -105,10 +106,13 @@ const partnerSchema = z.object({
   devicePolicy: z.record(z.string(), z.unknown()).optional(),
   reason,
 });
+const deleteAccountSchema = z.object({ reason, confirmation: z.string().min(3).max(80) }).strict();
 const marketAssociateSchema = z.object({
   ...person,
   stateIds: z.array(z.string().min(1)).min(1),
   hubIds: idList,
+  /** Markets to assign as soon as the account exists; the first becomes the primary Market. */
+  marketIds: z.array(z.string().min(1)).max(10).optional(),
   availability: z.enum(['available', 'unavailable', 'paused']).optional(),
   reason,
 });
@@ -196,6 +200,7 @@ export function createPlatformAdminRouter() {
   router.post('/staff/:id/restore', validateBody(lifecycleSchema), asyncHandler(controller.staffStatus));
   router.post('/staff/:id/archive', validateBody(lifecycleSchema), asyncHandler(controller.archiveStaff));
   router.post('/staff/:id/revoke-sessions', validateBody(lifecycleSchema), asyncHandler(controller.revokeStaffSessions));
+  router.delete('/staff/:id', requireSuperAdmin, validateBody(deleteAccountSchema), asyncHandler(controller.deleteStaff));
   router.post('/staff/:id/resend-invitation', asyncHandler(controller.resendStaffInvitation));
   router.post('/staff/:id/cancel-invitation', validateBody(lifecycleSchema), asyncHandler(controller.cancelStaffInvitation));
 
@@ -246,6 +251,10 @@ export function createPlatformAdminRouter() {
   router.post('/market-associates/:id/activate', validateBody(lifecycleSchema), asyncHandler(controller.marketAssociateStatus));
   router.post('/market-associates/:id/suspend', validateBody(lifecycleSchema), asyncHandler(controller.marketAssociateStatus));
   router.post('/market-associates/:id/reactivate', validateBody(lifecycleSchema), asyncHandler(controller.marketAssociateStatus));
+  router.post('/market-associates/:id/archive', validateBody(lifecycleSchema), asyncHandler(controller.archiveMarketAssociate));
+  router.post('/market-associates/:id/restore', validateBody(lifecycleSchema), asyncHandler(controller.restoreMarketAssociate));
+  router.post('/market-associates/:id/revoke-sessions', validateBody(lifecycleSchema), asyncHandler(controller.revokeMarketAssociateSessions));
+  router.delete('/market-associates/:id', requireSuperAdmin, validateBody(deleteAccountSchema), asyncHandler(controller.deleteMarketAssociate));
   router.post('/market-associates/:id/resend-invitation', asyncHandler(controller.resendMarketAssociateInvitation));
   router.post('/market-associates/:id/cancel-invitation', validateBody(lifecycleSchema), asyncHandler(controller.cancelMarketAssociateInvitation));
 

@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { announce } from '@services/engagement-notifications.service';
 import { isValidObjectId, Model } from 'mongoose';
 import { AccountStatus, AccountType, ScopeType, UserRole } from '@lib/constants';
 import { getPagination, paginated, routeParam } from '@lib/api-utils';
@@ -17,6 +18,8 @@ import {
 import { User } from '@models/users/user.model';
 import { assertPermission, assertScope, resolveAccessContext, scopedFilter } from '@services/access-control.service';
 import { revokeAccountSessions } from '@services/account-session.service';
+import { FulfilmentTask } from '@models/fulfilment/fulfilment.model';
+import { ProductSubmission } from '@models/catalog/catalog.model';
 import { recordAudit } from '@services/platform-audit.service';
 import { nextPublicId, repairPublicIdCounter, PublicIdDomain } from '@services/public-id.service';
 import { issueAccountInvitation, revokeAccountInvitations } from '@services/account-invitation.service';
@@ -36,8 +39,12 @@ async function byIdentifier<T>(model: Model<T>, identifier: string) {
 }
 
 async function stateAndHub(req: Request) {
-  const requestedStateValue = req.platformContext?.stateId || (req.query.stateId as string | undefined);
-  const requestedHubValue = req.platformContext?.hubId || (req.query.hubId as string | undefined);
+  // An explicit filter on the request (a form asking for the hubs of one State) wins over the top-bar scope picker;
+  // otherwise "All states" in the picker would return every hub.
+  const queryState = (req.query.stateId as string | undefined)?.trim();
+  const queryHub = (req.query.hubId as string | undefined)?.trim();
+  const requestedStateValue = queryState || req.platformContext?.stateId;
+  const requestedHubValue = queryHub || req.platformContext?.hubId;
   const requestedState = requestedStateValue?.trim().toLowerCase() === 'all' ? undefined : requestedStateValue;
   const requestedHub = requestedHubValue?.trim().toLowerCase() === 'all' ? undefined : requestedHubValue;
   const state = requestedState ? await byIdentifier(OperationState, requestedState) : undefined;
@@ -446,6 +453,9 @@ export class PlatformController {
 
     if (requestedStatus && Object.values(AccountStatus).includes(requestedStatus as AccountStatus)) {
       filter.status = requestedStatus;
+    } else {
+      // Archived accounts live in their own tab and stay out of the everyday list.
+      filter.status = { $ne: AccountStatus.DISABLED };
     }
     if (requestedScope && Object.values(ScopeType).includes(requestedScope as ScopeType)) {
       filter.scopeType = requestedScope;
@@ -956,7 +966,15 @@ export class PlatformController {
       Market.find(filter).sort({ isFeatured: -1, displayPriority: 1, name: 1 }).skip(skip).limit(limit).lean({ virtuals: true }),
       Market.countDocuments(filter),
     ]);
-    sendSuccess(res, paginated(await presentMarketRecords(data), total, page, limit));
+    // How many Market Associates work each Market, so the directory can flag the ones nobody covers.
+    const ids = (data as any[]).map((market) => String(market._id));
+    const counts = ids.length
+      ? await MarketAssociateMarketAssignment.aggregate([{ $match: { marketId: { $in: ids }, status: 'active' } }, { $group: { _id: '$marketId', count: { $sum: 1 } } }])
+      : [];
+    const countByMarket = new Map((counts as any[]).map((row) => [String(row._id), row.count]));
+    const presented = (await presentMarketRecords(data)) as any[];
+    const withCounts = presented.map((market, index) => ({ ...market, associateCount: countByMarket.get(ids[index]) || 0 }));
+    sendSuccess(res, paginated(withCounts, total, page, limit));
   };
   marketDetail = async (req: Request, res: Response) => {
     const context = await access(req, 'markets.view');
@@ -968,6 +986,7 @@ export class PlatformController {
       vendors: detail.vendors,
       assignments: detail.assignments,
       marketAssociates: detail.marketAssociates,
+      associates: detail.associates,
       submissions: detail.submissions,
       products: detail.products,
       collections: detail.collections,
@@ -990,6 +1009,13 @@ export class PlatformController {
     });
     await recordAudit(req, { action: 'market.created', entityType: 'market', entityId: market.id, entityPublicId: market.publicId, stateId: market.stateId, hubId: market.hubId, after: market.toObject() });
     publishMarketUpdate(market);
+    // Tell customers in that State a new market is on Hook. Background, best effort.
+    if (market.status === 'active') {
+      void (async () => {
+        const state: any = await OperationState.findById(market.stateId).select('publicId name').lean();
+        await announce('new_market', market.publicId || market.id, { marketName: market.name, stateName: state?.name }, { stateId: state?.publicId, data: { marketId: market.publicId } });
+      })().catch(() => undefined);
+    }
     await sendPlatformCreated(res, market.toObject());
   };
   updateMarket = async (req: Request, res: Response) => {
@@ -1228,6 +1254,8 @@ export class PlatformController {
         : { stateIds: stateId || { $in: context.stateIds } };
     if (requestedStatus && Object.values(AccountStatus).includes(requestedStatus as AccountStatus)) {
       filter.status = requestedStatus;
+    } else {
+      filter.status = { $ne: AccountStatus.DISABLED };
     }
     if (requestedAvailability) filter.availability = requestedAvailability;
     if (search) {
@@ -1305,7 +1333,7 @@ export class PlatformController {
       DispatchHub.find({ $or: marketAssociate.hubIds.flatMap((id) => [
         { publicId: id },
         ...(isValidObjectId(id) ? [{ _id: id }] : []),
-      ]) }).select('_id publicId name status').lean(),
+      ]) }).select('_id publicId name status stateId').lean(),
       MarketAssociateMarketAssignment.find({ marketAssociateId: marketAssociate.id || (marketAssociate as any)._id?.toString() })
         .sort({ isPrimary: -1, createdAt: -1 })
         .lean({ virtuals: true }),
@@ -1315,9 +1343,16 @@ export class PlatformController {
       ? await Market.find({ $or: marketIds.flatMap((id) => [
           { publicId: id },
           ...(isValidObjectId(id) ? [{ _id: id }] : []),
-        ]) }).select('_id publicId name stateId').lean()
+        ]) }).select('_id publicId name stateId hubId').lean()
       : [];
     const marketMap = new Map(markets.flatMap((market) => [[market._id.toString(), market], [market.publicId, market]]));
+    // The Hubs that matter are the ones serving where this person works: Hubs in their own states, plus the Hub of every
+    // Market they are assigned to. A stored list that names Hubs in other states is ignored rather than shown.
+    const stateInternalIds = new Set((states as any[]).map((state) => String(state._id)));
+    const servingHubIds = new Set((markets as any[]).filter((market) => market.hubId).map((market) => String(market.hubId)));
+    const missingHubIds = [...servingHubIds].filter((id) => !(hubs as any[]).some((hub) => String(hub._id) === id || hub.publicId === id));
+    const extraHubs = missingHubIds.length ? await DispatchHub.find({ _id: { $in: missingHubIds.filter((id) => isValidObjectId(id)) } }).select('_id publicId name status stateId').lean() : [];
+    const relevantHubs = [...(hubs as any[]), ...(extraHubs as any[])].filter((hub) => stateInternalIds.has(String(hub.stateId)));
     const presentedProfile = await presentPlatformRecords(marketAssociate);
     sendSuccess(res, {
       ...presentedProfile,
@@ -1343,7 +1378,7 @@ export class PlatformController {
         code: state.code,
         status: state.status,
       })),
-      hubs: hubs.map((hub) => ({
+      hubs: relevantHubs.map((hub) => ({
         id: hub.publicId || hub._id.toString(),
         publicId: hub.publicId,
         name: hub.name,
@@ -1369,6 +1404,18 @@ export class PlatformController {
     const scope = await resolveMarketAssociateScope(req.body.stateIds, req.body.hubIds);
     for (const stateId of scope.stateIds) assertScope(context, stateId);
     for (const hubId of scope.hubIds) assertScope(context, undefined, hubId);
+    const email = String(req.body.email || '').trim().toLowerCase();
+    if (await User.exists({ email })) throw new HttpError(409, 'An account with this email already exists', { field: 'email' }, 'CONFLICT');
+    if (req.body.phone && await User.exists({ phone: req.body.phone })) throw new HttpError(409, 'An account with this phone number already exists', { field: 'phone' }, 'CONFLICT');
+    // Markets to assign straight away are checked before anything is created, so a bad choice leaves no half-made account.
+    const startMarkets: any[] = [];
+    for (const identifier of req.body.marketIds || []) {
+      const market = await byIdentifier(Market, identifier);
+      if (market.status !== 'active') throw new HttpError(409, `${market.name} is not active`, undefined, 'CONFLICT');
+      if (!scope.stateIds.includes(market.stateId)) throw new HttpError(409, `${market.name} is outside the states selected for this Market Associate`, undefined, 'CONFLICT');
+      assertScope(context, market.stateId);
+      startMarkets.push(market);
+    }
     const publicId = await nextPublicId('marketAssociate');
     const account = await User.create({
       publicId, accountType: AccountType.MARKETASSOCIATE, accountStatus: AccountStatus.INVITED,
@@ -1376,7 +1423,16 @@ export class PlatformController {
       firstName: req.body.firstName, lastName: req.body.lastName, role: UserRole.MARKETASSOCIATE,
       isActive: true, isEmailVerified: false, isPhoneVerified: false, scopeType: ScopeType.SELF,
     });
-    const marketAssociate = await MarketAssociateProfile.create({ publicId, accountId: account.id, stateIds: scope.stateIds, hubIds: scope.hubIds, availability: 'unavailable', status: 'invited' });
+    let marketAssociate;
+    try {
+      marketAssociate = await MarketAssociateProfile.create({ publicId, accountId: account.id, stateIds: scope.stateIds, hubIds: scope.hubIds, availability: 'unavailable', status: 'invited' });
+    } catch (error) {
+      await User.deleteOne({ _id: account._id });
+      throw error;
+    }
+    for (const [index, market] of startMarkets.entries()) {
+      await this.makeAssignment(req, context, marketAssociate.toObject(), market, { isPrimary: index === 0, priority: (index + 1) * 10, assignmentReason: 'Assigned when the account was created' });
+    }
     const invitation = await issueAccountInvitation({
       accountId: account.id,
       accountType: AccountType.MARKETASSOCIATE,
@@ -1427,6 +1483,97 @@ export class PlatformController {
     sendSuccess(res, { status });
   };
 
+  /** Archive a Market Associate: sign-in stops, sessions end, and their Market assignments are closed. */
+  archiveMarketAssociate = async (req: Request, res: Response) => {
+    const context = await access(req, 'runners.manage');
+    const marketAssociate = await byIdentifier(MarketAssociateProfile, routeParam(req.params.id));
+    for (const stateId of marketAssociate.stateIds) assertScope(context, stateId);
+    for (const hubId of marketAssociate.hubIds) assertScope(context, undefined, hubId);
+    if (marketAssociate.status === AccountStatus.DISABLED) throw new HttpError(409, 'This account is already archived', undefined, 'CONFLICT');
+    // Work in progress would be stranded, so it has to be finished or reassigned first.
+    const openTasks = await FulfilmentTask.countDocuments({
+      marketAssociateId: marketAssociate._id.toString(),
+      status: { $nin: ['COMPLETED', 'CANCELLED', 'UNASSIGNED'] },
+    } as any);
+    if (openTasks > 0) throw new HttpError(409, `${openTasks} order${openTasks === 1 ? ' is' : 's are'} still in progress with this Market Associate. Finish or reassign ${openTasks === 1 ? 'it' : 'them'} first.`, { openTasks }, 'CONFLICT');
+    const now = new Date();
+    await Promise.all([
+      MarketAssociateProfile.updateOne({ _id: marketAssociate._id }, { $set: { status: AccountStatus.DISABLED, availability: 'unavailable', deletedAt: now } }),
+      User.updateOne({ _id: marketAssociate.accountId }, { $set: { accountStatus: AccountStatus.DISABLED, isActive: false, deletedAt: now } }),
+      MarketAssociateMarketAssignment.updateMany({ marketAssociateId: marketAssociate._id.toString(), status: { $in: ['active', 'paused'] } }, { $set: { status: 'ended', activeTo: now, isPrimary: false }, $push: { history: { action: 'ended', at: now, actorId: req.user!.sub, reason: 'Account archived' } } }),
+      revokeAccountSessions(marketAssociate.accountId, 'marketassociate_archived', req.user!.sub),
+      revokeAccountInvitations(marketAssociate.accountId),
+    ]);
+    await recordAudit(req, { action: 'marketassociate.archived', entityType: 'marketassociate', entityId: marketAssociate._id.toString(), entityPublicId: marketAssociate.publicId, before: { status: marketAssociate.status }, after: { status: AccountStatus.DISABLED }, reason: req.body.reason });
+    sendSuccess(res, { status: AccountStatus.DISABLED });
+  };
+
+  /** Bring an archived Market Associate back. Their old assignments stay ended; assign Markets again. */
+  restoreMarketAssociate = async (req: Request, res: Response) => {
+    const context = await access(req, 'runners.manage');
+    const marketAssociate = await byIdentifier(MarketAssociateProfile, routeParam(req.params.id));
+    for (const stateId of marketAssociate.stateIds) assertScope(context, stateId);
+    if (marketAssociate.status !== AccountStatus.DISABLED) throw new HttpError(409, 'Only archived accounts can be restored', undefined, 'INVALID_STATE_TRANSITION');
+    await Promise.all([
+      MarketAssociateProfile.updateOne({ _id: marketAssociate._id }, { $set: { status: AccountStatus.ACTIVE }, $unset: { deletedAt: 1 } }),
+      User.updateOne({ _id: marketAssociate.accountId }, { $set: { accountStatus: AccountStatus.ACTIVE, isActive: true }, $unset: { deletedAt: 1 } }),
+    ]);
+    await recordAudit(req, { action: 'marketassociate.restored', entityType: 'marketassociate', entityId: marketAssociate._id.toString(), entityPublicId: marketAssociate.publicId, before: { status: marketAssociate.status }, after: { status: AccountStatus.ACTIVE }, reason: req.body.reason });
+    sendSuccess(res, { status: AccountStatus.ACTIVE });
+  };
+
+  revokeMarketAssociateSessions = async (req: Request, res: Response) => {
+    const context = await access(req, 'runners.manage');
+    const marketAssociate = await byIdentifier(MarketAssociateProfile, routeParam(req.params.id));
+    for (const stateId of marketAssociate.stateIds) assertScope(context, stateId);
+    await revokeAccountSessions(marketAssociate.accountId, req.body.reason || 'administrative_revocation', req.user!.sub);
+    await recordAudit(req, { action: 'marketassociate.sessions_revoked', entityType: 'marketassociate', entityId: marketAssociate._id.toString(), entityPublicId: marketAssociate.publicId, reason: req.body.reason });
+    sendSuccess(res, { revoked: true });
+  };
+
+  /**
+   * Permanently deletes an ARCHIVED Market Associate. Refused when the person has work history (captures, orders),
+   * because that history would be left pointing at nobody; those accounts stay archived.
+   */
+  deleteMarketAssociate = async (req: Request, res: Response) => {
+    const context = await access(req, 'runners.manage');
+    const marketAssociate = await byIdentifier(MarketAssociateProfile, routeParam(req.params.id));
+    for (const stateId of marketAssociate.stateIds) assertScope(context, stateId);
+    if (marketAssociate.status !== AccountStatus.DISABLED) throw new HttpError(409, 'Archive this account before deleting it', undefined, 'INVALID_STATE_TRANSITION');
+    const expected = `DELETE ${marketAssociate.publicId}`;
+    if (String(req.body?.confirmation || '').trim() !== expected) throw new HttpError(400, `Type "${expected}" exactly to confirm`, undefined, 'VALIDATION_ERROR');
+    const id = marketAssociate._id.toString();
+    const [tasks, captures] = await Promise.all([FulfilmentTask.exists({ marketAssociateId: id }), ProductSubmission.exists({ marketAssociateId: id })]);
+    if (tasks || captures) throw new HttpError(409, 'This person has order or product history, so deleting them would orphan those records. Keep the account archived.', undefined, 'CONFLICT');
+    await recordAudit(req, { action: 'marketassociate.deleted', entityType: 'marketassociate', entityId: id, entityPublicId: marketAssociate.publicId, before: { status: marketAssociate.status }, reason: req.body.reason });
+    await revokeAccountSessions(marketAssociate.accountId, 'marketassociate_deleted', req.user!.sub);
+    await Promise.all([
+      MarketAssociateMarketAssignment.deleteMany({ marketAssociateId: id }),
+      MarketAssociateProfile.deleteOne({ _id: marketAssociate._id }),
+      User.deleteOne({ _id: marketAssociate.accountId }),
+    ]);
+    sendSuccess(res, { deleted: true });
+  };
+
+  /** Permanently deletes an ARCHIVED staff account. Super Admins and your own account are protected. */
+  deleteStaff = async (req: Request, res: Response) => {
+    const context = await access(req, 'staff.suspend');
+    const profile = await byIdentifier(StaffProfile, routeParam(req.params.id));
+    for (const stateId of profile.stateIds) assertScope(context, stateId);
+    if (profile.accountId.toString() === req.user!.sub) throw new HttpError(409, 'You cannot delete your own account', undefined, 'CONFLICT');
+    if (profile.status !== AccountStatus.DISABLED) throw new HttpError(409, 'Archive this account before deleting it', undefined, 'INVALID_STATE_TRANSITION');
+    const target = await User.findById(profile.accountId).select('roleIds').lean();
+    const targetRoles = await Role.find({ _id: { $in: target?.roleIds || [] } }).select('key').lean();
+    if (targetRoles.some((role) => role.key === 'SUPER_ADMIN')) throw new HttpError(409, 'Super Admin accounts are protected', undefined, 'CONFLICT');
+    const expected = `DELETE ${profile.publicId}`;
+    if (String(req.body?.confirmation || '').trim() !== expected) throw new HttpError(400, `Type "${expected}" exactly to confirm`, undefined, 'VALIDATION_ERROR');
+    await recordAudit(req, { action: 'staff.deleted', entityType: 'staff', entityId: profile._id.toString(), entityPublicId: profile.publicId, before: { status: profile.status }, reason: req.body.reason });
+    await revokeAccountSessions(profile.accountId, 'staff_deleted', req.user!.sub);
+    await Promise.all([StaffProfile.deleteOne({ _id: profile._id }), User.deleteOne({ _id: profile.accountId })]);
+    adminStaffCache.clear();
+    sendSuccess(res, { deleted: true });
+  };
+
   resendMarketAssociateInvitation = async (req: Request, res: Response) => {
     const context = await access(req, 'runners.manage');
     const marketAssociate = await byIdentifier(MarketAssociateProfile, routeParam(req.params.id));
@@ -1474,25 +1621,51 @@ export class PlatformController {
 
   listAssignments = async (req: Request, res: Response) => sendSuccess(res, await listScoped(req, MarketAssociateMarketAssignment, 'runners.assign'));
   assignmentDetail = async (req: Request, res: Response) => sendSuccess(res, await detailScoped(req, MarketAssociateMarketAssignment, 'runners.assign'));
+  /**
+   * The one place an assignment is made, whether from the Market Associate page, the Market page or account creation.
+   * Refuses the cases that would leave bad data: an inactive Market, an ended account, a duplicate live assignment.
+   */
+  private async makeAssignment(req: Request, context: Awaited<ReturnType<typeof access>>, marketAssociate: any, market: any, options: { preferredHubId?: string; priority?: number; isPrimary?: boolean; activeFrom?: Date; activeTo?: Date; assignmentReason: string }) {
+    if (market.status !== 'active') throw new HttpError(409, `${market.name} is not active, so nobody can be assigned to it`, undefined, 'CONFLICT');
+    if (['archived', 'suspended'].includes(String(marketAssociate.status))) throw new HttpError(409, 'This Market Associate account is not active', undefined, 'CONFLICT');
+    if (!marketAssociate.stateIds.includes(market.stateId)) throw new HttpError(409, `This Market Associate does not work in ${market.name}'s state yet. Add the state to their profile first.`, undefined, 'CONFLICT');
+    const preferredHub = options.preferredHubId ? await ensureHub(options.preferredHubId, market.stateId) : undefined;
+    assertScope(context, market.stateId, preferredHub?._id.toString());
+    const duplicate = await MarketAssociateMarketAssignment.exists({ marketAssociateId: marketAssociate._id.toString(), marketId: market._id.toString(), status: { $in: ['active', 'paused'] } });
+    if (duplicate) throw new HttpError(409, 'This Market Associate is already assigned to this Market', undefined, 'CONFLICT');
+    // Only one primary Market per person per state: making this one primary retires the previous flag.
+    if (options.isPrimary) {
+      await MarketAssociateMarketAssignment.updateMany({ marketAssociateId: marketAssociate._id.toString(), stateId: market.stateId, isPrimary: true, status: 'active' }, { $set: { isPrimary: false } });
+    }
+    const assignment = await MarketAssociateMarketAssignment.create({
+      marketAssociateId: marketAssociate._id.toString(),
+      marketId: market._id.toString(),
+      stateId: market.stateId,
+      priority: options.priority ?? 100,
+      isPrimary: Boolean(options.isPrimary),
+      activeFrom: options.activeFrom ?? new Date(),
+      ...(options.activeTo && { activeTo: options.activeTo }),
+      assignmentReason: options.assignmentReason,
+      ...(preferredHub && { preferredHubId: preferredHub._id.toString() }),
+      createdBy: req.user!.sub,
+      history: [{ action: 'created', at: new Date(), actorId: req.user!.sub, reason: options.assignmentReason }],
+    });
+    await recordAudit(req, { action: 'marketassociate_assignment.created', entityType: 'marketassociate_assignment', entityId: assignment.id, stateId: assignment.stateId, hubId: assignment.preferredHubId, after: assignment.toObject(), reason: options.assignmentReason });
+    return assignment;
+  }
+
   createAssignment = async (req: Request, res: Response) => {
     const context = await access(req, 'runners.assign');
     const marketAssociate = await byIdentifier(MarketAssociateProfile, req.body.marketAssociateId);
     const market = await byIdentifier(Market, req.body.marketId);
-    const preferredHub = req.body.preferredHubId
-      ? await ensureHub(req.body.preferredHubId, market.stateId)
-      : undefined;
-    assertScope(context, market.stateId, preferredHub?._id.toString());
-    if (!marketAssociate.stateIds.includes(market.stateId)) throw new HttpError(409, 'Market Associate is not assigned to the Market state', undefined, 'CONFLICT');
-    const assignment = await MarketAssociateMarketAssignment.create({
-      ...req.body,
-      stateId: market.stateId,
-      marketAssociateId: marketAssociate._id.toString(),
-      marketId: market._id.toString(),
-      ...(preferredHub && { preferredHubId: preferredHub._id.toString() }),
-      createdBy: req.user!.sub,
-      history: [{ action: 'created', at: new Date(), actorId: req.user!.sub }],
+    const assignment = await this.makeAssignment(req, context, marketAssociate, market, {
+      preferredHubId: req.body.preferredHubId,
+      priority: req.body.priority,
+      isPrimary: req.body.isPrimary,
+      activeFrom: req.body.activeFrom,
+      activeTo: req.body.activeTo,
+      assignmentReason: req.body.assignmentReason,
     });
-    await recordAudit(req, { action: 'marketassociate_assignment.created', entityType: 'marketassociate_assignment', entityId: assignment.id, stateId: assignment.stateId, hubId: assignment.preferredHubId, after: assignment.toObject() });
     await sendPlatformCreated(res, assignment.toObject());
   };
   updateAssignment = async (req: Request, res: Response) => {

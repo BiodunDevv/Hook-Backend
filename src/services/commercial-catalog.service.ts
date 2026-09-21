@@ -1,4 +1,5 @@
 import { ProductAvailabilityStatus, ProductStatus } from "@lib/constants";
+import { categoryService } from "@services/category.service";
 import { Category } from "@models/categories/category.model";
 import {
   CatalogMediaAsset,
@@ -205,7 +206,7 @@ export class CommercialCatalogService {
     if (query.status) filter.status = query.status;
     if (query.stateId) filter.sourceStateId = query.stateId;
     if (query.marketId) filter.marketId = query.marketId;
-    if (query.categoryId) filter.categoryId = query.categoryId;
+    if (query.categoryId) filter.categoryId = { $in: await categoryService.descendantIds(String(query.categoryId)) };
     if (query.cursor) filter._id = { $lt: query.cursor };
     if (query.q) filter.$text = { $search: String(query.q) };
     const data = await Product.find(filter)
@@ -300,15 +301,15 @@ export class CommercialCatalogService {
     const current = await productRecord(identifier, stateIds);
     const filter = versionFilter(current, input.version);
     if (input.categoryId) {
-      const category = await byIdentifier<any>(Category, input.categoryId);
-      if (!category.isActive)
-        throw new HttpError(
-          409,
-          "The selected category is inactive",
-          undefined,
-          "CONFLICT",
-        );
+      const category = await categoryService.assertAssignable(input.categoryId);
+      // The product's options must still make sense in the new category (a shoe size means nothing on a powerbank).
+      if (category._id.toString() !== current.categoryId) {
+        const liveVariants = await ProductVariant.find({ productId: current._id.toString(), active: true, deletedAt: { $exists: false } }).select('size colour attributes').lean();
+        await categoryService.validateVariants(category, liveVariants.map((variant: any) => ({ size: variant.size, colour: variant.colour, attributes: variant.attributes })));
+      }
       input.categoryId = category._id.toString();
+      // Moving a product into the new tree clears its "needs a sub-category" flag.
+      (input as Record<string, unknown>).needsRecategorisation = false;
     }
     if (input.mediaAssetIds) {
       const assets = await CatalogMediaAsset.find({
@@ -407,6 +408,14 @@ export class CommercialCatalogService {
       input.sellingPriceMinor,
       input.discountMinor,
     );
+    // A negotiation floor above the new price would make haggling impossible; make the admin fix the rules first.
+    const floor = current.negotiationRules?.minimumNegotiablePriceMinor;
+    if (current.negotiationRules?.enabled && floor && floor > pricing.effectivePriceMinor) {
+      throw new HttpError(409, 'The new price is below this product\'s lowest negotiable price. Lower the negotiation floor first.', undefined, 'CONFLICT');
+    }
+    if (current.negotiationRules?.enabled && floor && floor < pricing.basePriceMinor) {
+      throw new HttpError(409, 'The lowest negotiable price would sit below the new cost price. Raise the negotiation floor first.', undefined, 'CONFLICT');
+    }
     const updated = await Product.findOneAndUpdate(
       versionFilter(current, input.version),
       {
@@ -512,6 +521,12 @@ export class CommercialCatalogService {
     stateIds?: string[],
   ) {
     const current = await productRecord(identifier, stateIds);
+    // Only sensible moves: you cannot publish what is live, or pause what is not.
+    const live = current.status === ProductStatus.PUBLISHED;
+    if (action === "publish" && live) throw new HttpError(409, "This product is already published", undefined, "CONFLICT");
+    if (action === "pause" && !live) throw new HttpError(409, "Only a published product can be paused", undefined, "CONFLICT");
+    if (action === "availability_unconfirmed" && !live) throw new HttpError(409, "Only a published product can be marked unconfirmed", undefined, "CONFLICT");
+    if (action === "unpublish" && current.status === ProductStatus.UNPUBLISHED) throw new HttpError(409, "This product is already unpublished", undefined, "CONFLICT");
     let nextStatus: ProductStatus;
     let availabilityValidUntil: Date | undefined;
     if (action === "publish") {
@@ -719,6 +734,7 @@ export async function publicProductRepresentations(
     /^[a-f\d]{24}$/i.test(String(id)),
   );
 
+  const categoryDetails = await categoryService.describe(categoryIds.filter((id) => /^[a-f\d]{24}$/i.test(String(id))).map(String));
   const [categories, markets, states, variants, media] = await Promise.all([
     categoryIds.length
       ? Category.find(identifierFilter(categoryIds))
@@ -853,7 +869,10 @@ export async function publicProductRepresentations(
             name: category.name,
             slug: category.slug,
             iconUrl: category.iconUrl || null,
-            sizingGuide: (category as any).attributeSchema?.sizingGuide || null,
+            sizingGuide: categoryDetails.get(String((category as any)._id))?.sizingGuide ?? null,
+            // Breadcrumb and what the customer chooses between (sizes, colours, capacity...).
+            parent: categoryDetails.get(String((category as any)._id))?.parent ?? null,
+            attributes: options.compact ? undefined : categoryDetails.get(String((category as any)._id))?.attributes ?? [],
           }
         : null,
       variants: productVariants,

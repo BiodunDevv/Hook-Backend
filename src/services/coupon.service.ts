@@ -123,7 +123,13 @@ export class CouponService {
         status: 'applied',
         idempotencyKey,
       }], { session });
-      await Coupon.updateOne({ _id: input.couponId }, { $inc: { usedCount: 1 } }, { session });
+      // Claim a use atomically: two checkouts racing for the last use cannot both succeed.
+      const claimed = await Coupon.updateOne(
+        { _id: input.couponId, $or: [{ totalUsageLimit: { $exists: false } }, { totalUsageLimit: null }, { totalUsageLimit: 0 }, { $expr: { $lt: ['$usedCount', '$totalUsageLimit'] } }] },
+        { $inc: { usedCount: 1 } },
+        { session },
+      );
+      if (!claimed.matchedCount) throw new HttpError(409, 'That coupon has been fully claimed', undefined, 'COUPON_EXHAUSTED');
       return redemption;
     } catch (error) {
       if (!session && (error as { code?: number }).code === 11000) {

@@ -1,4 +1,6 @@
 import { Request, Response } from 'express';
+import { adminReviewCache } from '@lib/ttl-cache';
+import { publishRealtime } from '@services/realtime.service';
 import { MarketAssociateCatalogService } from '@services/catalog.service';
 import { recordAudit } from '@services/platform-audit.service';
 import { routeParam } from '@lib/api-utils';
@@ -59,6 +61,9 @@ export class MarketAssociateCatalogController {
       stateId: updated.sourceStateId,
       after: { status: updated.status, submittedAt: updated.submittedAt },
     });
+    // The review dashboard's "awaiting review" count must not lag behind a submission that just arrived.
+    adminReviewCache.clear();
+    publishRealtime({ type: 'admin.dashboard.updated', entityId: updated.publicId }, { admin: true });
     sendSuccess(res, await presentSubmission(updated));
   };
 }

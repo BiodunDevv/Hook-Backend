@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import { CheckoutService } from '@services/checkout.service';
 import { Request, Response } from 'express';
 import { publishConfigChanged } from '@services/realtime.service';
 import { PaymentService } from '@services/payment.service';
@@ -405,6 +406,65 @@ export class AdminCommerceController {
       reason: req.body.reason,
     });
     sendSuccess(res, { lowStockThreshold: updated?.lowStockThreshold });
+  };
+
+  podConfig = async (_req: Request, res: Response) => {
+    const s = await CommerceSettings.findOne({ key: 'commerce' }).lean();
+    sendSuccess(res, {
+      podEnabled: s?.podEnabled ?? false,
+      podMinimumOrderMinor: s?.podMinimumOrderMinor ?? 3000000,
+      podSurchargeType: s?.podSurchargeType ?? 'flat',
+      podSurchargeValue: s?.podSurchargeValue ?? 0,
+      defaultPodLimitMinor: s?.defaultPodLimitMinor ?? 10000000,
+      podAutoApproveEnabled: s?.podAutoApproveEnabled ?? true,
+      podRefusalSuspendCount: s?.podRefusalSuspendCount ?? 2,
+      vatRatePercent: s?.vatRatePercent ?? 7.5,
+      defaultDeliveryFeeMinor: s?.defaultDeliveryFeeMinor ?? 300000,
+      updatedAt: s?.updatedAt,
+    });
+  };
+
+  updatePodConfig = async (req: Request, res: Response) => {
+    const { reason, ...fields } = req.body as Record<string, unknown>;
+    const changes = Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined));
+    const before = await CommerceSettings.findOne({ key: 'commerce' }).lean();
+    const updated = await CommerceSettings.findOneAndUpdate(
+      { key: 'commerce' },
+      { $set: { ...changes, updatedBy: req.user!.sub } },
+      { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
+    ).lean();
+    CheckoutService.clearSettingsCache();
+    await recordAudit(req, {
+      action: 'commerce.pod_config.update',
+      entityType: 'commerce_settings',
+      before: Object.fromEntries(Object.keys(changes).map((key) => [key, (before as Record<string, unknown> | null)?.[key]])),
+      after: changes,
+      reason: reason as string,
+    });
+    publishConfigChanged('commerce');
+    sendSuccess(res, { ...changes, updatedAt: updated?.updatedAt });
+  };
+
+  checkoutSettings = async (_req: Request, res: Response) => {
+    const settings = await CommerceSettings.findOne({ key: 'commerce' }).select('minimumCheckoutMinor updatedAt').lean();
+    sendSuccess(res, { minimumCheckoutMinor: settings?.minimumCheckoutMinor ?? 1800000, updatedAt: settings?.updatedAt });
+  };
+
+  updateCheckoutSettings = async (req: Request, res: Response) => {
+    const updated = await CommerceSettings.findOneAndUpdate(
+      { key: 'commerce' },
+      { $set: { minimumCheckoutMinor: req.body.minimumCheckoutMinor, updatedBy: req.user!.sub } },
+      { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
+    ).lean();
+    await recordAudit(req, {
+      action: 'commerce.checkout_settings.update',
+      entityType: 'commerce_settings',
+      after: { minimumCheckoutMinor: req.body.minimumCheckoutMinor },
+      reason: req.body.reason,
+    });
+    CheckoutService.clearSettingsCache();
+    publishConfigChanged('commerce');
+    sendSuccess(res, { minimumCheckoutMinor: updated?.minimumCheckoutMinor, updatedAt: updated?.updatedAt });
   };
 
   hookCoinSettings = async (_req: Request, res: Response) => {

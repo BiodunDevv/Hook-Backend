@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { categoryService } from '@services/category.service';
 import { ProductStatus } from '@lib/constants';
 import { getPagination, paginated } from '@lib/api-utils';
 import { Category } from '@models/categories/category.model';
@@ -75,7 +76,7 @@ export class PublicController {
   getProducts = async (req: Request, res: Response) => {
     const { page, limit, skip } = getPagination(req.query);
     const where: Record<string, any> = { status: ProductStatus.APPROVED };
-    if (typeof req.query.categoryId === 'string') where.categoryId = req.query.categoryId;
+    if (typeof req.query.categoryId === 'string') where.categoryId = { $in: await categoryService.descendantIds(req.query.categoryId) };
     const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
     const minPrice = typeof req.query.minPrice === 'string' ? Number(req.query.minPrice) : undefined;
     const maxPrice = typeof req.query.maxPrice === 'string' ? Number(req.query.maxPrice) : undefined;
@@ -149,7 +150,7 @@ export class PublicController {
   /** What customers earn and are given in Hook credit, as the admin has set it. */
   creditConfig = async (_req: Request, res: Response) => {
     const settings = await CommerceSettings.findOne({ key: 'commerce' })
-      .select('orderEarnEnabled orderEarnPercent orderEarnMaxMinor creditSpendCapPercent welcomeBonusMinor referralSignupBonusMinor referralReferrerBonusMinor')
+      .select('orderEarnEnabled orderEarnPercent orderEarnMaxMinor creditSpendCapPercent welcomeBonusMinor referralSignupBonusMinor referralReferrerBonusMinor minimumCheckoutMinor')
       .lean();
     sendSuccess(res, {
       orderEarnEnabled: settings?.orderEarnEnabled ?? true,
@@ -159,6 +160,8 @@ export class PublicController {
       welcomeBonusMinor: settings?.welcomeBonusMinor ?? 30000,
       referralSignupBonusMinor: settings?.referralSignupBonusMinor ?? 30000,
       referralReferrerBonusMinor: settings?.referralReferrerBonusMinor ?? 100000,
+      // Guests need the minimum too: it is a cart rule, not an account one.
+      minimumCheckoutMinor: settings?.minimumCheckoutMinor ?? 1800000,
     });
   };
 
@@ -168,7 +171,7 @@ export class PublicController {
       status: 'active',
       operationsEnabled: true,
     })
-      .select('publicId code name capitalName operationsEnabled deliveryEnabled deliveryFeeMinor deliveryPromiseHours')
+      .select('publicId code name capitalName operationsEnabled deliveryEnabled deliveryFeeMinor deliveryPromiseHours podEnabled podLimitMinor podMinimumOrderMinor')
       .sort({ name: 1 })
       .lean({ virtuals: true });
     sendSuccess(res, (states as any[]).map((state) => ({
@@ -180,6 +183,9 @@ export class PublicController {
       deliveryEnabled: state.deliveryEnabled !== false,
       deliveryFeeMinor: state.deliveryFeeMinor,
       deliveryPromiseHours: state.deliveryPromiseHours,
+      podEnabled: state.podEnabled === true,
+      podLimitMinor: state.podLimitMinor ?? null,
+      podMinimumOrderMinor: state.podMinimumOrderMinor ?? null,
     })));
   };
 

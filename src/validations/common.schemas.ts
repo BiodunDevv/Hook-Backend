@@ -59,10 +59,7 @@ export const changePasswordSchema = z.object({
 export const cartItemSchema = z.object({
   productId: idSchema,
   quantity: z.coerce.number().int().positive(),
-  selectedVariants: z.object({
-    color: z.string().optional(),
-    size: z.string().optional(),
-  }).optional(),
+  selectedVariants: z.record(z.string().min(1).max(40), z.string().max(80)).optional(),
 });
 
 export const cartQuantitySchema = z.object({ quantity: z.coerce.number().int().positive() });
@@ -299,17 +296,32 @@ export const adminUserSchema = z.object({
 });
 
 const sizingGuideSchema = z.object({
+  /** Admin switch: false hides the guide everywhere without deleting it. */
+  enabled: z.boolean().optional(),
   summary: z.string().max(200).optional(),
   howToMeasure: z.string().max(2000).optional(),
-  presetGroups: z.array(z.enum(['clothing', 'shoes', 'general'])).max(3).default([]),
+  presetGroups: z.array(z.enum(['clothing', 'shoes', 'kids-shoes', 'bra', 'general'])).max(5).default([]),
   chart: z.array(z.object({
     size: z.string().min(1).max(40),
     measurements: z.record(z.string(), z.string().max(60)).default({}),
   })).max(20).optional(),
 }).strict().optional();
 
+export const categoryAttributeSchema = z.object({
+  key: z.string().trim().min(1).max(40).regex(/^[a-zA-Z][a-zA-Z0-9]*$/, 'Use letters and numbers only'),
+  label: z.string().trim().min(1).max(60),
+  type: z.enum(['size', 'colour', 'select', 'text']),
+  required: z.boolean(),
+  options: z.array(z.string().trim().min(1).max(60)).max(60).optional(),
+  preset: z.enum(['clothing', 'shoes', 'kids-shoes', 'bra', 'general']).optional(),
+  variantAxis: z.boolean(),
+}).strict();
+
 export const categoryCreateSchema = z.object({
   name: z.string().min(2).max(60),
+  /** Public or internal id of the parent. Omit for a top-level category. */
+  parentId: z.string().min(3).max(80).optional(),
+  attributes: z.array(categoryAttributeSchema).max(12).optional(),
   description: z.string().max(300).optional(),
   iconUrl: z.string().url().optional(),
   sortOrder: z.coerce.number().int().min(0).optional(),

@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { announce } from '@services/engagement-notifications.service';
 import { publishConfigChanged } from '@services/realtime.service';
 import { CommerceSettings } from '@models/commerce/commerce.model';
 import { DeliveryPricingRule } from '@models/platform/delivery-pricing.model';
@@ -48,7 +49,7 @@ export class AdminDeliveryController {
     const [settings, stateRows, lgaCounts, rules] = await Promise.all([
       CommerceSettings.findOne({ key: 'commerce' }).lean({ virtuals: true }),
       OperationState.find({ countryCode: 'NG' })
-        .select('publicId name capitalName code status deliveryEnabled deliveryFeeMinor deliveryPricingRuleId')
+        .select('publicId name capitalName code status deliveryEnabled deliveryFeeMinor podEnabled podLimitMinor podMinimumOrderMinor deliveryPricingRuleId')
         .sort({ name: 1 }).lean({ virtuals: true }),
       OperationLocalGovernment.aggregate([
         { $match: { status: 'active' } },
@@ -65,6 +66,9 @@ export class AdminDeliveryController {
       status: state.status,
       deliveryEnabled: state.deliveryEnabled !== false,
       deliveryFeeMinor: state.deliveryFeeMinor,
+      podEnabled: state.podEnabled === true,
+      podLimitMinor: state.podLimitMinor ?? null,
+      podMinimumOrderMinor: state.podMinimumOrderMinor ?? null,
       deliveryPricingRuleId: state.deliveryPricingRuleId,
       lgaCount: lgaCountByState.get(String(state.id || state._id)) || 0,
     }));
@@ -183,14 +187,22 @@ export class AdminDeliveryController {
     const state = await OperationState.findOne({ $or: identity(String(req.params.id)) });
     if (!state) throw new HttpError(404, 'Operation State not found');
     const before = state.toJSON();
+    const enabling = req.body.deliveryEnabled === true && state.deliveryEnabled === false;
     if (req.body.deliveryEnabled !== undefined) state.deliveryEnabled = Boolean(req.body.deliveryEnabled);
     // The customer's delivery price for this State. Checkout reads it directly.
     if (req.body.deliveryFeeMinor !== undefined) state.deliveryFeeMinor = Number(req.body.deliveryFeeMinor);
+    // Pay on Delivery for this State: on/off, and the highest order value allowed (null clears it back to the global limit).
+    if (req.body.podEnabled !== undefined) state.podEnabled = Boolean(req.body.podEnabled);
+    if (req.body.podLimitMinor !== undefined) (state as any).podLimitMinor = req.body.podLimitMinor === null ? undefined : Number(req.body.podLimitMinor);
+    // The smallest order that may use Pay on Delivery in this State (null goes back to the global minimum).
+    if (req.body.podMinimumOrderMinor !== undefined) (state as any).podMinimumOrderMinor = req.body.podMinimumOrderMinor === null ? undefined : Number(req.body.podMinimumOrderMinor);
     await state.save();
     await recordAudit(req, { action: 'delivery.coverage.update', entityType: 'operation_state', entityId: state.id, entityPublicId: state.publicId, stateId: state.id, before, after: state.toJSON(), reason: req.body.reason });
     adminDeliveryCache.clear();
     publishConfigChanged('delivery');
-    sendSuccess(res, { publicId: state.publicId, name: state.name, code: state.code, status: state.status, deliveryEnabled: state.deliveryEnabled, deliveryFeeMinor: state.deliveryFeeMinor });
+    // Customers with an address in this State hear that delivery has started.
+    if (enabling) void announce('new_state', `${state.publicId}:${Date.now()}`, { stateName: state.name }, { stateId: state.publicId, data: { stateId: state.publicId } }).catch(() => undefined);
+    sendSuccess(res, { publicId: state.publicId, name: state.name, code: state.code, status: state.status, deliveryEnabled: state.deliveryEnabled, deliveryFeeMinor: state.deliveryFeeMinor, podEnabled: (state as any).podEnabled, podLimitMinor: (state as any).podLimitMinor ?? null, podMinimumOrderMinor: (state as any).podMinimumOrderMinor ?? null });
   };
 
   preview = async (req: Request, res: Response) => {

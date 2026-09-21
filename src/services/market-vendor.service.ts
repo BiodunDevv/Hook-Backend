@@ -142,7 +142,7 @@ export class MarketVendorService {
     const { market, marketAssociate } = await marketAssociateContext(accountId, identifier);
     const [vendors, assignments, submissions, products, collections] = await Promise.all([
       MarketVendor.find({ marketId: market._id.toString(), deletedAt: { $exists: false } }).sort({ businessName: 1 }).lean({ virtuals: true }),
-      MarketAssociateMarketAssignment.find({ marketId: market._id.toString(), status: 'active' }).lean({ virtuals: true }),
+      MarketAssociateMarketAssignment.find({ marketId: market._id.toString(), status: { $in: ['active', 'paused'] } }).sort({ priority: 1 }).lean({ virtuals: true }),
       ProductSubmission.find({ marketId: market._id.toString(), deletedAt: { $exists: false } }).select('publicId basicTitle status marketVendorId marketAssociateId availabilityStatus updatedAt').sort({ updatedAt: -1 }).limit(50).lean({ virtuals: true }),
       Product.find({ marketId: market._id.toString(), deletedAt: { $exists: false } }).select('publicId title status availabilityStatus sourceMarketVendorId sourceMarketAssociateId images mediaAssetIds updatedAt').sort({ updatedAt: -1 }).limit(50).lean({ virtuals: true }),
       VendorCollection.find({ marketId: market._id.toString(), deletedAt: { $exists: false } }).sort({ createdAt: -1 }).limit(50).lean({ virtuals: true }),
@@ -166,7 +166,7 @@ export class MarketVendorService {
       collections: collections.map((collection: any) => presentVendorReference(collection, 'marketVendorId')),
       summary: {
         vendors: vendors.length,
-        assignedMarketAssociates: assignments.length,
+        assignedMarketAssociates: (assignments as any[]).filter((item) => item.status === 'active').length,
         products: products.length,
         pendingAvailability: products.filter((item: any) => item.availabilityStatus === 'unconfirmed').length,
         collections: collections.length,
@@ -485,6 +485,29 @@ export class MarketVendorService {
     ]);
     const marketAssociateIds = assignments.map((item: any) => item.marketAssociateId);
     const marketAssociates = await MarketAssociateProfile.find({ _id: { $in: marketAssociateIds } }).select('publicId accountId availability status stateIds hubIds').lean({ virtuals: true });
+    const associateAccounts = marketAssociates.length
+      ? await User.find({ _id: { $in: marketAssociates.map((profile: any) => profile.accountId) } }).select('firstName lastName email phone').lean()
+      : [];
+    const accountById = new Map((associateAccounts as any[]).map((account) => [String(account._id), account]));
+    const profileById = new Map((marketAssociates as any[]).map((profile) => [String(profile._id), profile]));
+    // Who works this Market, by name, with the assignment that ties them to it.
+    const associates = (assignments as any[]).map((assignment) => {
+      const profile: any = profileById.get(String(assignment.marketAssociateId));
+      const account: any = profile ? accountById.get(String(profile.accountId)) : undefined;
+      return {
+        assignmentId: assignment.publicId || String(assignment._id),
+        marketAssociateId: profile?.publicId || String(assignment.marketAssociateId),
+        name: [account?.firstName, account?.lastName].filter(Boolean).join(' ') || account?.email || 'Market Associate',
+        email: account?.email,
+        phone: account?.phone,
+        profileStatus: profile?.status,
+        availability: profile?.availability,
+        status: assignment.status,
+        isPrimary: Boolean(assignment.isPrimary),
+        priority: assignment.priority,
+        activeFrom: assignment.activeFrom,
+      };
+    });
     const vendorMap = new Map(vendors.map((vendor: any) => [String(vendor._id), vendor]));
     const paymentMap = new Map(payments.map((payment: any) => [String(payment.collectionId), payment]));
     const presentVendorReference = (record: any, field: 'marketVendorId' | 'sourceMarketVendorId') => {
@@ -500,6 +523,7 @@ export class MarketVendorService {
       vendors: vendors.map(safeVendor),
       assignments,
       marketAssociates,
+      associates,
       submissions: submissions.map((submission: any) => presentVendorReference(submission, 'marketVendorId')),
       products: products.map((product: any) => presentVendorReference(product, 'sourceMarketVendorId')),
       collections: collections.map((collection: any) => ({

@@ -17,6 +17,8 @@ export interface OperationState extends BaseEntity {
   deliveryFeeMinor?: number;
   podEnabled?: boolean;
   podLimitMinor?: number;
+  /** The smallest order that may use Pay on Delivery in this State; falls back to the global minimum. */
+  podMinimumOrderMinor?: number;
   deliveryEnabled: boolean;
   operationsEnabled: boolean;
   deliveryPricingRuleId?: string;
@@ -57,6 +59,8 @@ export interface ServiceZone extends BaseEntity {
   deliveryFeeMinor?: number;
   podEnabled?: boolean;
   podLimitMinor?: number;
+  /** The smallest order that may use Pay on Delivery in this State; falls back to the global minimum. */
+  podMinimumOrderMinor?: number;
   deliveryPricingRuleId?: string;
 }
 
@@ -75,6 +79,7 @@ const stateSchema = createSchema<OperationState>({
   deliveryFeeMinor: { type: Number, min: 0 },
   podEnabled: { type: Boolean, default: false },
   podLimitMinor: { type: Number, min: 0 },
+  podMinimumOrderMinor: { type: Number, min: 0 },
   deliveryEnabled: { type: Boolean, default: true, index: true },
   operationsEnabled: { type: Boolean, default: false, index: true },
   deliveryPricingRuleId: { type: String, index: true, sparse: true },
@@ -119,6 +124,7 @@ const zoneSchema = createSchema<ServiceZone>({
   deliveryFeeMinor: { type: Number, min: 0 },
   podEnabled: { type: Boolean, default: false },
   podLimitMinor: { type: Number, min: 0 },
+  podMinimumOrderMinor: { type: Number, min: 0 },
   deliveryPricingRuleId: { type: String, index: true, sparse: true },
 });
 zoneSchema.index({ cityId: 1, code: 1 }, { unique: true });

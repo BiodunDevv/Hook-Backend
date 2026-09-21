@@ -105,4 +105,7 @@ const PaymentSchema = createSchema<Payment>({
   deletedAt: { type: Date },
 });
 
+// reconcileStalePayments runs every minute over payments by status and age.
+PaymentSchema.index({ commerceStatus: 1, updatedAt: 1 });
+
 export const Payment = createModel<Payment>("Payment", PaymentSchema);

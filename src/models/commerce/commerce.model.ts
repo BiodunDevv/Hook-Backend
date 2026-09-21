@@ -54,12 +54,16 @@ export interface CheckoutPreview extends BaseEntity {
   logisticsProviderSnapshot?: Record<string, unknown>;
   couponId?: string;
   couponCode?: string;
+  deliveryNote?: string;
   couponDiscountMinor: number;
   creditsAppliedMinor: number;
   totalMinor: number;
   currency: string;
   policyVersions: Record<string, string>;
   podDecision: Record<string, unknown>;
+  /** Pay on Delivery: extra charge and the amount paid online now (delivery fee plus surcharge). */
+  podSurchargeMinor?: number;
+  podFeeDueNowMinor?: number;
   expiresAt: Date;
   consumedAt?: Date;
   orderId?: string;
@@ -97,6 +101,18 @@ export interface CommerceSettings extends BaseEntity {
     isDefault: boolean;
   }>;
   lowStockThreshold: number;
+  /** Smallest cart subtotal (kobo) that may be checked out. Smaller carts can be saved but not bought. */
+  minimumCheckoutMinor: number;
+  /** Pay on Delivery is only offered on orders at or above this subtotal (kobo). */
+  podMinimumOrderMinor: number;
+  podSurchargeType: "flat" | "percent";
+  /** Kobo when flat, percent of the subtotal when percent. */
+  podSurchargeValue: number;
+  podAutoApproveEnabled: boolean;
+  /** Refused Pay on Delivery parcels before the customer loses the option. */
+  podRefusalSuspendCount: number;
+  /** VAT charged on products, as a percent. */
+  vatRatePercent: number;
   activePolicyVersions: Record<string, string>;
   updatedBy?: string;
 }
@@ -256,12 +272,15 @@ const previewSchema = createSchema<CheckoutPreview>({
   logisticsProviderSnapshot: { type: Object },
   couponId: { type: String },
   couponCode: { type: String, uppercase: true },
+  deliveryNote: { type: String, maxlength: 300 },
   couponDiscountMinor: { type: Number, default: 0, min: 0 },
   creditsAppliedMinor: { type: Number, default: 0, min: 0 },
   totalMinor: { type: Number, required: true, min: 0 },
   currency: { type: String, default: "NGN" },
   policyVersions: { type: Object, required: true },
   podDecision: { type: Object, default: {} },
+  podSurchargeMinor: { type: Number, default: 0, min: 0 },
+  podFeeDueNowMinor: { type: Number, default: 0, min: 0 },
   expiresAt: { type: Date, required: true },
   consumedAt: { type: Date },
   orderId: { type: String, index: true },
@@ -297,6 +316,13 @@ const settingsSchema = createSchema<CommerceSettings>({
     ],
   },
   lowStockThreshold: { type: Number, default: 5, min: 0, max: 100 },
+  minimumCheckoutMinor: { type: Number, default: 1800000, min: 0 },
+  podMinimumOrderMinor: { type: Number, default: 3000000, min: 0 },
+  podSurchargeType: { type: String, enum: ["flat", "percent"], default: "flat" },
+  podSurchargeValue: { type: Number, default: 0, min: 0 },
+  podAutoApproveEnabled: { type: Boolean, default: true },
+  podRefusalSuspendCount: { type: Number, default: 2, min: 1, max: 20 },
+  vatRatePercent: { type: Number, default: 7.5, min: 0, max: 30 },
   activePolicyVersions: { type: Object, default: {} },
   updatedBy: { type: String },
   deletedAt: { type: Date },

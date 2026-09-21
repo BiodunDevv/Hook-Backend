@@ -353,10 +353,6 @@ const ownerProof = {
 const exactlyOneProof = (value: { password?: string; code?: string }) => (value.password !== undefined) !== (value.code !== undefined);
 const proofMessage = { message: 'Provide either your password or the emailed code' };
 const emailField = z.string().trim().toLowerCase().email().max(254);
-export const deletionRequestSchema = z
-  .object({ ...ownerProof, reason: z.string().trim().max(1000).optional() })
-  .strict()
-  .refine(exactlyOneProof, proofMessage);
 export const publicDeletionRequestSchema = z
   .object({ email: emailField, ...ownerProof, reason: z.string().trim().max(1000).optional() })
   .strict()

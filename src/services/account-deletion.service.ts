@@ -112,13 +112,6 @@ export class AccountDeletionService {
     return user;
   }
 
-  /** Re-verifies a signed-in customer (in-app deletion): same rules, identity taken from the session. */
-  async verifySignedIn(userId: string, proof: OwnerProof) {
-    const found: any = await User.findById(userId).select('email').lean();
-    if (!found) throw invalid();
-    return this.verifyOwner(found.email, proof);
-  }
-
   /** Emails a one-time code to social-sign-in customers. Always looks the same to the caller. */
   async sendCode(email: string) {
     const normalized = String(email || '').toLowerCase().trim();

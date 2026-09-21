@@ -1,7 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
 import { CustomerController } from "@controllers/customer.controller";
-import { AccountDeletionController } from "@controllers/account-deletion.controller";
 import { NegotiationController } from "@controllers/negotiation.controller";
 import { requireCustomerIdentity } from "@middleware/auth";
 import { validateBody } from "@middleware/validate";
@@ -9,7 +8,6 @@ import { withIdempotency } from "@middleware/idempotency";
 import {
   cartQuantitySchema,
   customerRefundRequestSchema,
-  deletionRequestSchema,
 } from "@validations/common.schemas";
 import {
   negotiationCreateSchema,
@@ -272,15 +270,6 @@ export function createCustomerRouter() {
     "/payments/orders/:orderId/status",
     asyncHandler(controller.paymentStatus),
   );
-  const accountDeletion = new AccountDeletionController();
-  router.get("/support/account-deletion", asyncHandler(accountDeletion.statusSignedIn));
-  router.post("/support/account-deletion/code", asyncHandler(accountDeletion.sendCodeSignedIn));
-  router.post(
-    "/support/account-deletion",
-    validateBody(deletionRequestSchema),
-    asyncHandler(accountDeletion.requestSignedIn),
-  );
-
   router.get("/notifications", asyncHandler(controller.listNotifications));
   router.get("/notifications/preferences", asyncHandler(controller.notificationPreferences));
   router.patch(

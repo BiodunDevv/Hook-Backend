@@ -1,11 +1,9 @@
 import { Request, Response } from 'express';
 import { AccountDeletionService } from '@services/account-deletion.service';
-import { HttpError, sendSuccess } from '@utils/http';
+import { sendSuccess } from '@utils/http';
 
 /**
- * Public (signed-out) and in-app entry points for account deletion. Both use
- * the same service, so the rules (ownership proof, blockers, cooling-off,
- * cancel) are identical wherever the request comes from.
+ * Public entry points for account deletion, used by the web page. The app opens that page instead of handling deletion itself.
  */
 export class AccountDeletionController {
   private readonly deletions = new AccountDeletionService();
@@ -36,27 +34,5 @@ export class AccountDeletionController {
     const { email, password, code } = req.body;
     const user = await this.deletions.verifyOwner(email, { password, code });
     sendSuccess(res, await this.deletions.cancel({ user }));
-  };
-
-  // ── Signed-in (mobile app) ───────────────────────────────────────────────
-
-  requestSignedIn = async (req: Request, res: Response) => {
-    if (!req.user?.sub) throw new HttpError(401, 'A registered account is required');
-    const { password, code, reason } = req.body;
-    const user = await this.deletions.verifySignedIn(req.user.sub, { password, code });
-    sendSuccess(res, await this.deletions.request(user, { reason, source: 'app' }));
-  };
-
-  statusSignedIn = async (req: Request, res: Response) => {
-    if (!req.user?.sub) throw new HttpError(401, 'A registered account is required');
-    sendSuccess(res, await this.deletions.status({ id: req.user.sub }));
-  };
-
-  /** Signed-in customers who use Google/Apple ask for their code from inside the app. */
-  sendCodeSignedIn = async (req: Request, res: Response) => {
-    if (!req.user?.email) throw new HttpError(401, 'A registered account is required');
-    await this.deletions.sendCode(req.user.email).catch(() => undefined);
-    res.status(202);
-    sendSuccess(res, { sent: true });
   };
 }

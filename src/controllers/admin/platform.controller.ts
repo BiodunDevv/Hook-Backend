@@ -18,6 +18,7 @@ import {
 import { User } from '@models/users/user.model';
 import { assertPermission, assertScope, resolveAccessContext, scopedFilter } from '@services/access-control.service';
 import { revokeAccountSessions } from '@services/account-session.service';
+import { clearStaleInvitationFor, purgeUnacceptedAccount } from '@services/stale-invitation.service';
 import { FulfilmentTask } from '@models/fulfilment/fulfilment.model';
 import { ProductSubmission } from '@models/catalog/catalog.model';
 import { recordAudit } from '@services/platform-audit.service';
@@ -644,6 +645,9 @@ export class PlatformController {
     }
     for (const stateId of scope.stateIds) assertScope(context, stateId);
     for (const hubId of scope.hubIds) assertScope(context, undefined, hubId);
+    await clearStaleInvitationFor(req.body.email, req.body.phone);
+    if (await User.exists({ email: String(req.body.email).trim().toLowerCase() })) throw new HttpError(409, 'An account with this email already exists', { field: 'email' }, 'CONFLICT');
+    if (req.body.phone && await User.exists({ phone: req.body.phone })) throw new HttpError(409, 'An account with this phone number already exists', { field: 'phone' }, 'CONFLICT');
     const publicId = await nextPublicId('staff');
     const account = await User.create({
       publicId,
@@ -828,22 +832,19 @@ export class PlatformController {
     if (profile.status !== AccountStatus.INVITED) {
       throw new HttpError(409, 'Only pending staff invitations can be cancelled', undefined, 'INVALID_STATE_TRANSITION');
     }
-    const revokedInvitations = await revokeAccountInvitations(profile.accountId);
-    await Promise.all([
-      StaffProfile.updateOne({ _id: profile._id }, { $set: { status: AccountStatus.DISABLED } }),
-      User.updateOne({ _id: profile.accountId }, { $set: { accountStatus: AccountStatus.DISABLED, isActive: false } }),
-    ]);
+    // A cancelled invitation leaves nothing behind: the account is removed so the email can be used again.
     await recordAudit(req, {
       action: 'staff.invitation_cancelled',
       entityType: 'staff',
       entityId: profile._id.toString(),
       entityPublicId: profile.publicId,
       before: { status: profile.status },
-      after: { status: AccountStatus.DISABLED, revokedInvitations },
+      after: { removed: true },
       reason: req.body.reason,
     });
+    if (!(await purgeUnacceptedAccount(String(profile.accountId)))) throw new HttpError(409, 'This account has already signed in, so it cannot be removed by cancelling the invitation. Archive it instead.', undefined, 'CONFLICT');
     adminStaffCache.clear();
-    sendSuccess(res, { status: AccountStatus.DISABLED, revokedInvitations });
+    sendSuccess(res, { removed: true });
   };
 
   listStates = async (req: Request, res: Response) => {
@@ -1405,6 +1406,8 @@ export class PlatformController {
     for (const stateId of scope.stateIds) assertScope(context, stateId);
     for (const hubId of scope.hubIds) assertScope(context, undefined, hubId);
     const email = String(req.body.email || '').trim().toLowerCase();
+    // A leftover from a cancelled or failed invitation must not block a fresh one.
+    await clearStaleInvitationFor(email, req.body.phone);
     if (await User.exists({ email })) throw new HttpError(409, 'An account with this email already exists', { field: 'email' }, 'CONFLICT');
     if (req.body.phone && await User.exists({ phone: req.body.phone })) throw new HttpError(409, 'An account with this phone number already exists', { field: 'phone' }, 'CONFLICT');
     // Markets to assign straight away are checked before anything is created, so a bad choice leaves no half-made account.
@@ -1608,21 +1611,17 @@ export class PlatformController {
     if (marketAssociate.status !== AccountStatus.INVITED) {
       throw new HttpError(409, 'Only pending Market Associate invitations can be cancelled', undefined, 'INVALID_STATE_TRANSITION');
     }
-    const revokedInvitations = await revokeAccountInvitations(marketAssociate.accountId);
-    await Promise.all([
-      MarketAssociateProfile.updateOne({ _id: marketAssociate._id }, { $set: { status: AccountStatus.DISABLED } }),
-      User.updateOne({ _id: marketAssociate.accountId }, { $set: { accountStatus: AccountStatus.DISABLED, isActive: false } }),
-    ]);
     await recordAudit(req, {
       action: 'marketassociate.invitation_cancelled',
       entityType: 'marketassociate',
       entityId: marketAssociate._id.toString(),
       entityPublicId: marketAssociate.publicId,
       before: { status: marketAssociate.status },
-      after: { status: AccountStatus.DISABLED, revokedInvitations },
+      after: { removed: true },
       reason: req.body.reason,
     });
-    sendSuccess(res, { status: AccountStatus.DISABLED, revokedInvitations });
+    if (!(await purgeUnacceptedAccount(String(marketAssociate.accountId)))) throw new HttpError(409, 'This account has already signed in, so it cannot be removed by cancelling the invitation. Archive it instead.', undefined, 'CONFLICT');
+    sendSuccess(res, { removed: true });
   };
 
   listAssignments = async (req: Request, res: Response) => sendSuccess(res, await listScoped(req, MarketAssociateMarketAssignment, 'runners.assign'));

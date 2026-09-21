@@ -38,6 +38,7 @@
     "db:backfill-permissions": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/backfill-permissions.ts",
     "db:verify-indexes": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/verify-indexes.ts",
     "db:report-duplicates": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/report-duplicates.ts",
+    "db:clear-stale-invitations": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/clear-stale-invitations.ts",
     "db:purge-sla": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/purge-sla.ts",
     "db:purge-exceptions": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/purge-exceptions.ts"
   },

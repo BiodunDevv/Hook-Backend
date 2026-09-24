@@ -48,6 +48,7 @@ import { HttpError, isDuplicateKeyError } from "@utils/http";
 import { emitOutbox } from "@services/outbox.service";
 import { wakeOutbox } from "../jobs/wake";
 import { timelineEntry } from "@lib/order-timeline";
+import { defaultProviderName } from "@services/payments/provider-registry";
 
 type PreviewInput = {
   addressId?: string;
@@ -742,6 +743,8 @@ export class CheckoutService {
         currentLines.map(() => nextPublicId("orderItem")),
       ),
     };
+    const providerName = await defaultProviderName();
+    const referencePrefix = providerName === "monnify" ? "MNF" : "PSK";
     const session = await mongoose.startSession();
     let orderId = "";
     try {
@@ -889,8 +892,8 @@ export class CheckoutService {
               orderId: order.id,
               fulfilmentGroupId: group.publicId,
               resourceType: "order",
-              transactionRef: `PSK-${group.paymentPublicId}`,
-              gateway: "paystack",
+              transactionRef: `${referencePrefix}-${group.paymentPublicId}`,
+              gateway: providerName,
               paymentMethod: pod ? "pos" : "card",
               amount: payableMinor / 100,
               amountMinor: payableMinor,
@@ -908,8 +911,8 @@ export class CheckoutService {
             orderId: order.id,
             fulfilmentGroupId: undefined as any,
             resourceType: "order",
-            transactionRef: `PSK-${feePaymentPublicId}`,
-            gateway: "paystack",
+            transactionRef: `${referencePrefix}-${feePaymentPublicId}`,
+            gateway: providerName,
             paymentMethod: "card",
             amount: Number(preview.podFeeDueNowMinor || 0) / 100,
             amountMinor: Number(preview.podFeeDueNowMinor || 0),

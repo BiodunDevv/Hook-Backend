@@ -24,10 +24,20 @@ const templateDirs = [
   path.join(process.cwd(), 'src', 'emails', 'templates'),
 ];
 
+// Template files are static content bundled with the app and never change at runtime, so once read they are kept
+// in memory — without this, every single email render re-read its template from disk synchronously.
+const templateFileCache = new Map<string, string>();
+
 function readTemplateFile(fileName: string) {
+  const cached = templateFileCache.get(fileName);
+  if (cached !== undefined) return cached;
   for (const dir of templateDirs) {
     const file = path.join(dir, fileName);
-    if (fs.existsSync(file)) return fs.readFileSync(file, 'utf8');
+    if (fs.existsSync(file)) {
+      const contents = fs.readFileSync(file, 'utf8');
+      templateFileCache.set(fileName, contents);
+      return contents;
+    }
   }
   throw new Error(`Email template not found: ${fileName}`);
 }

@@ -321,4 +321,37 @@ export class AdminCategoriesController {
     adminCategoryCache.clear();
     sendSuccess(res, { id: category.id, deleted: true });
   };
+
+  /**
+   * Sets the display order for a set of sibling categories (all top-level, or all children of the same parent) to
+   * match the order given — the position in `ids` becomes the new `sortOrder`, ten apart so a category can later be
+   * inserted between two others without renumbering everything. Every category everywhere already reads this field
+   * (`categoryService.tree()`, this controller's own `list`), so nothing else needs to change for the new order to
+   * show up.
+   */
+  reorder = async (req: Request, res: Response) => {
+    const ids: string[] = req.body.ids;
+    const rows = await Category.find({ _id: { $in: ids }, deletedAt: { $exists: false } }).select('_id parentId').lean();
+    if (rows.length !== ids.length) throw new HttpError(400, 'One or more categories could not be found', undefined, 'VALIDATION_ERROR');
+    const parentIds = new Set(rows.map((row) => String(row.parentId || '')));
+    if (parentIds.size > 1) throw new HttpError(400, 'All reordered categories must share the same parent', undefined, 'VALIDATION_ERROR');
+
+    await Category.bulkWrite(ids.map((id, index) => ({
+      updateOne: { filter: { _id: id }, update: { $set: { sortOrder: (index + 1) * 10 } } },
+    })));
+
+    const auditLogs = adminRepos.auditLogs();
+    await auditLogs.save(auditLogs.create({
+      action: 'category.reorder',
+      resourceType: 'category',
+      resourceId: ids[0],
+      details: `Reordered ${ids.length} categor${ids.length === 1 ? 'y' : 'ies'}`,
+      status: 'success',
+      ...actor(req),
+    }));
+
+    publishRealtime({ type: 'catalog.updated', entityType: 'category', entityId: 'reorder', version: 1 }, { public: true, admin: true });
+    adminCategoryCache.clear();
+    sendSuccess(res, { reordered: ids.length });
+  };
 }

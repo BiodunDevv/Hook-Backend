@@ -227,11 +227,14 @@ export class AdminProductsController {
       if (category.publicId) categoryMap.set(String(category.publicId), value);
     });
     // One batch each for the parent categories and the markets, so a 100-row page stays a handful of queries.
+    // Neither depends on the other, so they run concurrently instead of as two sequential round trips.
     const parentIds = [...new Set((categories as any[]).map((category) => String(category.parentId || '')).filter(Boolean))];
-    const parents = parentIds.length ? await Category.find({ _id: { $in: parentIds.filter((value) => /^[a-f\d]{24}$/i.test(value)) } }).select('name').lean() : [];
-    const parentName = new Map((parents as any[]).map((parent) => [String(parent._id), parent.name]));
     const marketIds = [...new Set((rows as any[]).map((product) => String(product.marketId || '')).filter((value) => /^[a-f\d]{24}$/i.test(value)))];
-    const marketRows = marketIds.length ? await Market.find({ _id: { $in: marketIds } }).select('name').lean() : [];
+    const [parents, marketRows] = await Promise.all([
+      parentIds.length ? Category.find({ _id: { $in: parentIds.filter((value) => /^[a-f\d]{24}$/i.test(value)) } }).select('name').lean() : [],
+      marketIds.length ? Market.find({ _id: { $in: marketIds } }).select('name').lean() : [],
+    ]);
+    const parentName = new Map((parents as any[]).map((parent) => [String(parent._id), parent.name]));
     const marketName = new Map((marketRows as any[]).map((market) => [String(market._id), market.name]));
     const data = (rows as any[]).map((product) => ({
       ...product,
@@ -337,6 +340,7 @@ export class AdminProductsController {
     const updates = { ...req.body };
     delete updates.vendorId;
     delete updates.source;
+    delete updates.reason;
     updates.categoryId = category._id.toString();
     updates.marketId = market._id.toString();
     updates.sourceStateId = market.stateId;
@@ -371,11 +375,15 @@ export class AdminProductsController {
       });
     }
     updates.catalogVersion = Number(product.catalogVersion || 1) + 1;
+    const priceFieldsChanged = (['costPrice', 'sellingPrice', 'discountedPrice', 'minAcceptablePrice'] as const)
+      .some((key) => updates[key] !== undefined && Number(updates[key]) !== Number(product[key] ?? undefined));
+    if (priceFieldsChanged && !String(req.body.reason || '').trim())
+      throw new HttpError(400, 'A reason is required when changing product pricing', undefined, 'VALIDATION_ERROR');
     const before = { quantity: product.quantity, sellingPriceMinor: product.sellingPriceMinor };
     Object.assign(product, updates);
     if (req.body.title && !req.body.slug) product.slug = `${slugify(req.body.title)}-${Date.now().toString().slice(-6)}`;
     await products.save(product);
-    await auditAdminAction(req, 'product.update', 'product', product.id, { fields: Object.keys(req.body) });
+    await auditAdminAction(req, 'product.update', 'product', product.id, { fields: Object.keys(req.body), reason: req.body.reason });
     publishProductUpdate(product);
     void notifyLikersOfProductChange(before, product as any).catch(() => undefined);
     sendSuccess(res, publicProduct(await products.findOne({ where: { id: product.id }, relations: { category: true } }) as any));

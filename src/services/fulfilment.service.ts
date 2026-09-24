@@ -28,7 +28,7 @@ import { User } from '@models/users/user.model';
 import { PlatformAuditLog } from '@models/platform/audit-log.model';
 import { nextPublicId } from '@services/public-id.service';
 import { PaymentService } from '@services/payment.service';
-import { paymentProvider } from '@services/payments/provider-registry';
+import { defaultProviderName, paymentProvider, type ProviderName } from '@services/payments/provider-registry';
 import { createCommerceNotification } from '@services/commerce-notification.service';
 import { isLogisticsSimulationEnabled, logisticsProvider, logisticsReadiness } from '@services/logistics/logistics-provider';
 import { publishRealtime } from '@services/realtime.service';
@@ -531,12 +531,14 @@ export class FulfilmentService {
     const customer = await User.findById(customerId).select('email publicId').lean() as any;
     if (!customer?.email) throw new HttpError(409, 'Customer email is required for the top-up payment', undefined, 'PAYMENT_INITIALIZATION_NOT_ALLOWED');
     const reference = issue.adjustmentPaymentReference || `SUB-${issue.publicId}-${issue.version}`;
-    const initialized = await paymentProvider('paystack').initialize({
+    const providerName = await defaultProviderName();
+    const callbackEnvVar = providerName === 'monnify' ? 'MONNIFY_CALLBACK_URL' : 'PAYSTACK_CALLBACK_URL';
+    const initialized = await paymentProvider(providerName).initialize({
       reference,
       amountMinor: Number(issue.adjustmentMinor),
       currency: String(order.currency || 'NGN'),
       email: customer.email,
-      callbackUrl: process.env.PAYSTACK_CALLBACK_URL || `${String(process.env.APP_URL || 'http://localhost:4000').replace(/\/$/, '')}/api/v1/payments/paystack/callback`,
+      callbackUrl: process.env[callbackEnvVar] || `${String(process.env.APP_URL || 'http://localhost:4000').replace(/\/$/, '')}/api/v1/payments/${providerName}/callback`,
       metadata: {
         purpose: 'order_substitution_top_up',
         itemResolutionId: issue.publicId,
@@ -546,7 +548,7 @@ export class FulfilmentService {
     });
     const updated = await ItemResolution.findOneAndUpdate(
       { _id: issue._id, status: 'PAYMENT_PENDING', adjustmentPaymentReference: { $exists: false } },
-      { $set: { adjustmentPaymentReference: reference, adjustmentAuthorizationUrl: initialized.authorizationUrl } },
+      { $set: { adjustmentPaymentReference: reference, adjustmentAuthorizationUrl: initialized.authorizationUrl, adjustmentProvider: providerName } },
       { returnDocument: 'after' },
     );
     if (!updated) {
@@ -563,11 +565,11 @@ export class FulfilmentService {
     const unknownEntry = [...issue.history].reverse().find((entry: any) => entry.action === 'REFUND_OUTCOME_UNKNOWN');
     const payment = unknownEntry?.paymentId ? await Payment.findById(String(unknownEntry.paymentId)) : await Payment.findOne({
       orderId: String(order._id),
-      gateway: 'paystack',
+      gateway: { $in: ['paystack', 'monnify'] },
       status: { $in: [PaymentStatus.SUCCESSFUL, PaymentStatus.PARTIALLY_REFUNDED] },
       $expr: { $gte: [{ $subtract: [{ $ifNull: ['$amountMinor', 0] }, { $ifNull: ['$refundedAmount', 0] }] }, amountMinor] },
     }).sort({ paidAt: 1 });
-    if (!payment) throw new HttpError(409, 'No captured Paystack payment can fund this refund', undefined, 'PAYMENT_RECORD_MISSING');
+    if (!payment) throw new HttpError(409, 'No captured payment can fund this refund', undefined, 'PAYMENT_RECORD_MISSING');
     const idempotencyKey = `substitution-refund:${issue.publicId}`;
     let result: { providerReference?: string } | undefined;
     const outcomeUnknown = Boolean(unknownEntry);
@@ -601,15 +603,17 @@ export class FulfilmentService {
     if (issue.status !== 'PAYMENT_PENDING') throw new HttpError(409, 'This top-up is no longer payable', undefined, 'INVALID_STATE_TRANSITION');
     const order = await Order.findById(issue.orderId).lean() as any;
     if (!order) throw new HttpError(404, 'Order not found', undefined, 'NOT_FOUND');
-    const verified = await paymentProvider('paystack').verify(reference);
+    const providerName = (issue.adjustmentProvider || 'paystack') as ProviderName;
+    const verified = await paymentProvider(providerName).verify(reference);
     if (verified.reference !== reference || verified.status !== 'success' || verified.amountMinor !== Number(issue.adjustmentMinor) || verified.currency !== String(order.currency || 'NGN').toUpperCase()) {
       throw new HttpError(409, 'Top-up payment evidence does not match this replacement', undefined, 'PAYMENT_EVIDENCE_MISMATCH');
     }
     issue.adjustmentStatus = 'CONFIRMED';
     issue.adjustmentProviderReference = verified.providerId || providerEventId || reference;
     issue.adjustmentProcessedAt = verified.paidAt || new Date();
-    issue.history.push({ action: 'TOP_UP_CONFIRMED', actorId: 'PAYSTACK_WEBHOOK', providerReference: issue.adjustmentProviderReference, at: new Date() });
-    await this.applyResolvedSubstitution(issue, 'PAYSTACK_WEBHOOK');
+    const actor = providerName === 'monnify' ? 'MONNIFY_WEBHOOK' : 'PAYSTACK_WEBHOOK';
+    issue.history.push({ action: 'TOP_UP_CONFIRMED', actorId: actor, providerReference: issue.adjustmentProviderReference, at: new Date() });
+    await this.applyResolvedSubstitution(issue, actor);
     await this.publishOrderUpdate(issue.orderId);
     return { matched: true, processed: true };
   }

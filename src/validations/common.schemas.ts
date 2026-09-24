@@ -107,7 +107,7 @@ export const negotiationSchema = z.object({
 
 export const paymentInitializeSchema = z.object({
   orderId: idSchema,
-  gateway: z.literal('paystack').default('paystack'),
+  gateway: z.enum(['paystack', 'monnify']).default('paystack'),
   paymentMethod: z.enum(['card', 'bank_transfer', 'ussd', 'pos']).default('card'),
   savePaymentMethod: z.boolean().default(false),
 });
@@ -212,6 +212,10 @@ export const adminProductUpdateSchema = productBaseSchema.extend({
   // Market Associate's own submission. An empty string clears the link
   // ("no vendor for this product"); the controller resolves it to null.
   sourceMarketVendorId: z.string().trim().max(80).optional(),
+  // Required only when a price field actually changes from its stored value —
+  // enforced in the controller, which is the only place that can compare
+  // against what the product currently has (this schema has no access to it).
+  reason: z.string().trim().min(5).max(500).optional(),
 }).partial().superRefine(validateNegotiationFloor);
 
 export const adminOrderCreateSchema = z.object({
@@ -407,7 +411,10 @@ export const adminRefundReviewSchema = z.object({
   assignedSupportUserId: idSchema.optional(),
   decisionNote: z.string().trim().min(3).max(1000),
 });
-export const settingsSchema = z.record(z.string(), z.unknown());
+export const settingsSchema = z.record(z.string(), z.unknown()).refine(
+  (data) => typeof data.reason === 'string' && data.reason.trim().length >= 5,
+  { message: 'A reason of at least 5 characters is required', path: ['reason'] },
+);
 export const reportSchema = z.object({ type: z.string().default('sales') });
 
 export { NegotiationStatus, PaymentStatus };

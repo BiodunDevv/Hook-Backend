@@ -22,13 +22,20 @@ export async function deliverNegotiationStartNotifications() {
     const sessions = await Negotiation.find({ startNotificationPending: true }).sort({ createdAt: 1 }).limit(20).lean();
     if (!sessions.length) return;
     const admins = await User.find({ accountType: AccountType.STAFF }).select('_id').lean();
+    // Each admin's access context is the same for every session in this batch — resolve it once per tick instead
+    // of once per session×admin, which previously re-ran resolveAccessContext's own 2-3 queries N×M times.
+    const accessByAdmin = new Map<string, AccessContext | null>(
+      await Promise.all(admins.map(async (admin) => {
+        try { return [admin._id.toString(), await resolveAccessContext(admin._id.toString())] as const; } catch { return [admin._id.toString(), null] as const; }
+      })),
+    );
     for (const session of sessions) {
       try {
         const product = await Product.findById(session.productId).select('title marketId sourceStateId').lean();
         const market = product?.marketId ? await Market.findOne({ $or: [{ publicId: product.marketId }, ...(/^[a-f\d]{24}$/i.test(product.marketId) ? [{ _id: product.marketId }] : [])] }).select('name stateId hubId').lean() : null;
         for (const admin of admins) {
-          let access: AccessContext;
-          try { access = await resolveAccessContext(admin._id.toString()); } catch { continue; }
+          const access = accessByAdmin.get(admin._id.toString());
+          if (!access) continue;
           if (!canReceiveNegotiationAlert(access, session.sourceStateId || product?.sourceStateId || market?.stateId, market?.hubId)) continue;
           await createCommerceNotification({
             eventKey: `negotiation:${session.publicId}:started:${admin._id}`, userId: admin._id.toString(),

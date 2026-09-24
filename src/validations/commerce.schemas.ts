@@ -106,13 +106,13 @@ export const paymentLinkCreateSchema = z.object({
 }).strict();
 
 export const paymentLinkInitializeSchema = z.object({
-  provider: z.enum(["paystack"]),
+  provider: z.enum(["paystack", "monnify"]),
   appReturn: z.boolean().optional().default(false),
 }).strict();
 
 export const paymentProviderSettingsSchema = z.object({
   providers: z.array(z.object({
-    provider: z.enum(["paystack"]),
+    provider: z.enum(["paystack", "monnify"]),
     enabled: z.boolean(),
     displayOrder: z.number().int().min(1).max(10),
     isDefault: z.boolean(),

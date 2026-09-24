@@ -17,7 +17,7 @@ export type ProviderTransaction = {
 };
 
 export interface PaymentProvider {
-  readonly name: "paystack";
+  readonly name: "paystack" | "monnify";
   readiness(): { configured: boolean; mode: "test" | "live"; reason?: string };
   initialize(
     input: ProviderInitializeInput,
@@ -38,4 +38,6 @@ export interface PaymentProvider {
     reference?: string;
     payload: Record<string, any>;
   };
+  /** True when this event type means "the transaction succeeded" for this provider. */
+  isSuccessEvent(eventType: string): boolean;
 }

@@ -1,6 +1,6 @@
 import { BaseEntity, createModel, createSchema } from "@models/base.model";
 
-export type PaymentProviderName = "paystack";
+export type PaymentProviderName = "paystack" | "monnify";
 
 export interface PaymentLink extends BaseEntity {
   publicId: string;
@@ -47,7 +47,7 @@ const paymentLinkSchema = createSchema<PaymentLink>({
   // The interface declared this but the schema did not, so Mongoose silently
   // dropped it on every link — leaving provider undefined and the hosted
   // payment page with nothing to initialize against.
-  provider: { type: String, enum: ["paystack"], default: "paystack", index: true },
+  provider: { type: String, enum: ["paystack", "monnify"], default: "paystack", index: true },
   amountMinor: { type: Number, required: true, min: 0 },
   currency: { type: String, required: true, default: "NGN" },
   status: {
@@ -70,7 +70,7 @@ const paymentAttemptSchema = createSchema<PaymentAttempt>({
   paymentLinkId: { type: String, required: true, index: true },
   paymentId: { type: String, required: true, index: true },
   orderId: { type: String, required: true, index: true },
-  provider: { type: String, enum: ["paystack"], required: true, index: true },
+  provider: { type: String, enum: ["paystack", "monnify"], required: true, index: true },
   reference: { type: String, required: true, unique: true, index: true },
   idempotencyKey: { type: String, required: true },
   requestHash: { type: String, required: true },

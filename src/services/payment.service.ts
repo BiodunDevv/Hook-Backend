@@ -26,7 +26,7 @@ import { ReferralService } from "@services/referral.service";
 import { CreditService } from "@services/credit.service";
 import { CreditLedger } from "@models/promotions/credit-ledger.model";
 import { HttpError, isDuplicateKeyError } from "@utils/http";
-import { paymentProvider, type ProviderName } from "./payments/provider-registry";
+import { defaultProviderName, paymentProvider, type ProviderName } from "./payments/provider-registry";
 import { PaymentAttempt, PaymentLink } from "@models/payments/payment-link.model";
 import { publishRealtime } from "@services/realtime.service";
 import { timelineEntry } from "@lib/order-timeline";
@@ -47,7 +47,6 @@ function identity(value: string) {
 }
 
 export class PaymentService {
-  private provider = paymentProvider("paystack");
   private email = new EmailService();
   private referrals = new ReferralService();
   private credits = new CreditService();
@@ -121,15 +120,22 @@ export class PaymentService {
       payment.commerceStatus === CommercePaymentStatus.PROCESSING
     )
       return this.publicPayment(payment);
-    const initialized = await this.provider.initialize({
+    // The provider was fixed at Payment-creation time (checkout.service.ts / pod.service.ts /
+    // fulfilment.service.ts) via the then-current default; honour whatever is already stored
+    // rather than re-resolving the default here, so a payment always initializes against the
+    // gateway its own record says it belongs to.
+    const providerName = (payment.gateway || "paystack") as ProviderName;
+    const initialized = await paymentProvider(providerName).initialize({
       reference: payment.transactionRef,
       amountMinor: Number(payment.amountMinor),
       currency: order.currency || "NGN",
       email: customer.email,
       callbackUrl: (() => {
-        const url = process.env.PAYSTACK_CALLBACK_URL ||
-          `${String(process.env.APP_URL || "http://localhost:4000").replace(/\/$/, "")}/api/v1/payments/paystack/callback`;
-        // Paystack must be able to send the customer back: a localhost or plain-http address only works on a dev machine.
+        const envVar = providerName === "monnify" ? "MONNIFY_CALLBACK_URL" : "PAYSTACK_CALLBACK_URL";
+        const callbackPath = providerName === "monnify" ? "monnify" : "paystack";
+        const url = process.env[envVar] ||
+          `${String(process.env.APP_URL || "http://localhost:4000").replace(/\/$/, "")}/api/v1/payments/${callbackPath}/callback`;
+        // The provider must be able to send the customer back: a localhost or plain-http address only works on a dev machine.
         if (process.env.NODE_ENV === "production" && !/^https:\/\//i.test(url)) {
           throw new HttpError(503, "Card payments are not configured. Please try again later.", undefined, "SERVICE_UNAVAILABLE" as any);
         }
@@ -309,7 +315,7 @@ export class PaymentService {
       if (!previous || ["processed", "ignored"].includes(previous.processingStatus)) return { received: true, duplicate: true };
       event = previous;
     }
-    if (parsed.eventType !== "charge.success" || !parsed.reference) {
+    if (!provider.isSuccessEvent(parsed.eventType) || !parsed.reference) {
       event.processingStatus = "ignored";
       event.processedAt = new Date();
       await event.save();
@@ -478,6 +484,7 @@ export class PaymentService {
     const orderKey = String(order.publicId || order.id);
     const paymentKey = String(payment.publicId || payment._id);
     const confirmedAt = paidAt || new Date();
+    const actorId = payment.gateway === "monnify" ? "MONNIFY_WEBHOOK" : "PAYSTACK_WEBHOOK";
     let activated = false;
 
     const session = await mongoose.startSession();
@@ -522,7 +529,7 @@ export class PaymentService {
             { _id: order._id, commerceStatus: CommerceOrderStatus.AWAITING_DELIVERY_FEE },
             {
               $set: { podFeePaid: true, commerceStatus: nextStatus, status: nextLegacy, commercePaymentStatus: CommercePaymentStatus.DUE_AT_HANDOVER },
-              $push: { timeline: timelineEntry(nextStatus, "PAYSTACK_WEBHOOK", { note: autoApprove ? "Delivery fee paid; approved automatically" : "Delivery fee paid; awaiting review" }) },
+              $push: { timeline: timelineEntry(nextStatus, actorId, { note: autoApprove ? "Delivery fee paid; approved automatically" : "Delivery fee paid; awaiting review" }) },
             },
             { session },
           );
@@ -554,7 +561,7 @@ export class PaymentService {
                 commercePaymentStatus: outstanding ? CommercePaymentStatus.DUE_AT_HANDOVER : CommercePaymentStatus.CONFIRMED,
                 paymentStatus: outstanding ? PaymentStatus.PENDING : PaymentStatus.SUCCESSFUL,
               },
-              $push: { timeline: timelineEntry("HANDOVER_PAYMENT_CONFIRMED", "PAYSTACK_WEBHOOK") },
+              $push: { timeline: timelineEntry("HANDOVER_PAYMENT_CONFIRMED", actorId) },
             },
             { session },
           );
@@ -567,7 +574,7 @@ export class PaymentService {
             },
             {
               $set: { status: ShipmentStatus.RELEASE_APPROVED, releaseStatus: "RELEASE_APPROVED" },
-              $push: { trackingEvents: { status: ShipmentStatus.RELEASE_APPROVED, at: new Date(), actorId: "PAYSTACK_WEBHOOK", note: "Verified handover payment" } },
+              $push: { trackingEvents: { status: ShipmentStatus.RELEASE_APPROVED, at: new Date(), actorId, note: "Verified handover payment" } },
               $inc: { version: 1 },
             },
             { session },
@@ -594,7 +601,7 @@ export class PaymentService {
               paymentStatus: PaymentStatus.SUCCESSFUL,
               status: OrderStatus.APPROVED_FOR_FULFILMENT,
             },
-            $push: { timeline: timelineEntry(CommerceOrderStatus.APPROVED_FOR_FULFILMENT, "PAYSTACK_WEBHOOK") },
+            $push: { timeline: timelineEntry(CommerceOrderStatus.APPROVED_FOR_FULFILMENT, actorId) },
           },
           { session },
         );
@@ -602,7 +609,7 @@ export class PaymentService {
           // The customer paid for an order that was already cancelled: money was collected, nothing is owed
           // to fulfil, so open a refund exception for finance instead of silently keeping it.
           await IntegrationException.updateOne(
-            { provider: 'paystack', reference: String(payment.transactionRef || paymentKey), type: 'status', status: 'open' },
+            { provider: payment.gateway || 'paystack', reference: String(payment.transactionRef || paymentKey), type: 'status', status: 'open' },
             { $setOnInsert: { paymentId: String(payment._id), orderId: orderKey, details: { message: 'Payment confirmed after the order was cancelled. Refund the customer.' } } },
             { upsert: true, session },
           ).catch(() => undefined);
@@ -744,10 +751,11 @@ export class PaymentService {
     }, order.userId ? { accountId: String(order.userId), admin: true } : { admin: true });
   }
 
-  capability() {
+  async capability() {
+    const provider = await defaultProviderName();
     return {
-      provider: "paystack",
-      prepaid: Boolean(process.env.PAYSTACK_SECRET_KEY),
+      provider,
+      prepaid: paymentProvider(provider).readiness().configured,
       payAtHandover: true,
       tokenization: false,
     };
@@ -777,7 +785,7 @@ export class PaymentService {
     if (!Number.isSafeInteger(amountMinor) || amountMinor < 1 || amountMinor > captured) {
       throw new HttpError(409, 'Refund exceeds the captured payment balance', undefined, 'REFUND_LIMIT_EXCEEDED');
     }
-    if (!payment.transactionRef || String(payment.gateway) !== 'paystack') {
+    if (!payment.transactionRef || !['paystack', 'monnify'].includes(String(payment.gateway))) {
       throw new HttpError(409, 'This captured payment cannot be refunded through its provider', undefined, 'PAYMENT_METHOD_NOT_ALLOWED');
     }
     if (!options.alreadyReserved) {

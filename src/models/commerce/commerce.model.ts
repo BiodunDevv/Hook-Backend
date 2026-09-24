@@ -95,7 +95,7 @@ export interface CommerceSettings extends BaseEntity {
   negotiationQuoteMinutes: number;
   negotiationAzureWordingEnabled: boolean;
   paymentProviders: Array<{
-    provider: "paystack";
+    provider: "paystack" | "monnify";
     enabled: boolean;
     displayOrder: number;
     isDefault: boolean;
@@ -127,7 +127,7 @@ export interface CommercePolicyVersion extends BaseEntity {
 }
 
 export interface PaymentWebhookEvent extends BaseEntity {
-  provider: "paystack";
+  provider: "paystack" | "monnify";
   providerEventId: string;
   payloadHash: string;
   eventType: string;
@@ -164,7 +164,7 @@ export interface CommerceOutboxEvent extends BaseEntity {
 }
 
 export interface IntegrationException extends BaseEntity {
-  provider: "paystack";
+  provider: "paystack" | "monnify";
   type:
     | "signature"
     | "reference"
@@ -348,7 +348,7 @@ const policySchema = createSchema<CommercePolicyVersion>({
 });
 policySchema.index({ type: 1, version: 1 }, { unique: true });
 const webhookSchema = createSchema<PaymentWebhookEvent>({
-  provider: { type: String, enum: ["paystack"], required: true },
+  provider: { type: String, enum: ["paystack", "monnify"], required: true },
   providerEventId: { type: String, required: true },
   payloadHash: { type: String, required: true },
   eventType: { type: String, required: true },
@@ -395,7 +395,7 @@ outboxSchema.index(
   { unique: true },
 );
 const exceptionSchema = createSchema<IntegrationException>({
-  provider: { type: String, enum: ["paystack"], default: "paystack" },
+  provider: { type: String, enum: ["paystack", "monnify"], default: "paystack" },
   type: {
     type: String,
     enum: [

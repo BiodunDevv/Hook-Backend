@@ -12,6 +12,8 @@ const view = (banner: any) => ({
   linkTarget: banner.linkTarget || '',
   placement: banner.placement,
   tone: banner.tone,
+  colorBg: banner.colorBg || null,
+  colorFg: banner.colorFg || null,
   isActive: banner.isActive,
   sortOrder: banner.sortOrder,
   startsAt: banner.startsAt || null,
@@ -47,6 +49,19 @@ export class AdminBannersController {
     publishConfigChanged('banners');
     sendSuccess(res, { deleted: true });
   };
+
+  /** Sets sortOrder from the given order, ten apart — the same scroll order the marquee plays them in. */
+  reorder = async (req: Request, res: Response) => {
+    const ids: string[] = req.body.ids;
+    const rows = await Banner.find({ _id: { $in: ids }, deletedAt: { $exists: false } }).select('_id').lean();
+    if (rows.length !== ids.length) throw new HttpError(400, 'One or more banners could not be found', undefined, 'VALIDATION_ERROR');
+    await Banner.bulkWrite(ids.map((id, index) => ({
+      updateOne: { filter: { _id: id }, update: { $set: { sortOrder: (index + 1) * 10 } } },
+    })));
+    await auditAdminAction(req, 'banner.reorder', 'banner', ids[0], { count: ids.length });
+    publishConfigChanged('banners');
+    sendSuccess(res, { reordered: ids.length });
+  };
 }
 
 /** Public: only banners that are on, inside their schedule, for the placement. */
@@ -62,5 +77,5 @@ export async function publicBanners(req: Request, res: Response) {
       { $or: [{ endsAt: { $exists: false } }, { endsAt: null }, { endsAt: { $gt: now } }] },
     ],
   }).sort({ sortOrder: 1, createdAt: -1 }).limit(10).lean();
-  sendSuccess(res, banners.map((banner: any) => ({ id: String(banner._id), text: banner.text, imageUrl: banner.imageUrl || '', tone: banner.tone, linkType: banner.linkType || 'none', linkTarget: banner.linkTarget || '' })));
+  sendSuccess(res, banners.map((banner: any) => ({ id: String(banner._id), text: banner.text, imageUrl: banner.imageUrl || '', tone: banner.tone, colorBg: banner.colorBg || null, colorFg: banner.colorFg || null, linkType: banner.linkType || 'none', linkTarget: banner.linkTarget || '' })));
 }

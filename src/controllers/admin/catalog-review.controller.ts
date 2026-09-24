@@ -4,7 +4,7 @@ import { routeParam } from '@lib/api-utils';
 import { CatalogReviewService } from '@services/catalog.service';
 import { recordAudit } from '@services/platform-audit.service';
 import { sendSuccess } from '@utils/http';
-import { presentSubmission } from '@services/catalog-presentation.service';
+import { presentSubmission, presentSubmissions } from '@services/catalog-presentation.service';
 import { adminReviewCache } from '@lib/ttl-cache';
 
 function stateScope(req: Request) {
@@ -18,7 +18,7 @@ export class AdminCatalogReviewController {
   dashboard = async (req: Request, res: Response) => sendSuccess(res, await this.review.dashboard(stateScope(req)));
   list = async (req: Request, res: Response) => {
     const result = await this.review.list(req.query, stateScope(req));
-    sendSuccess(res, { ...result, data: await Promise.all(result.data.map(presentSubmission)) });
+    sendSuccess(res, { ...result, data: await presentSubmissions(result.data) });
   };
   detail = async (req: Request, res: Response) => sendSuccess(
     res,

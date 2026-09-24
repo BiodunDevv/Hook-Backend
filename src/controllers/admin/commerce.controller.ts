@@ -352,8 +352,19 @@ export class AdminCommerceController {
   paymentProviders = async (_req: Request, res: Response) => {
     const settings = await CommerceSettings.findOne({ key: 'commerce' }).select('paymentProviders updatedAt').lean();
     const readiness = paymentProviderReadiness();
-    const configured = settings?.paymentProviders || [
+    const saved = settings?.paymentProviders?.length ? settings.paymentProviders : [
       { provider: 'paystack' as const, enabled: true, displayOrder: 1, isDefault: true },
+    ];
+    // Every provider the backend actually knows about is shown, not only ones
+    // already written to settings — a newly registered provider (e.g. Monnify
+    // added this session) appears right away, disabled and non-default until
+    // an admin explicitly turns it on, rather than staying invisible until a
+    // separate data migration runs.
+    const configured = [
+      ...saved,
+      ...readiness
+        .filter((item) => !saved.some((entry) => entry.provider === item.provider))
+        .map((item, index) => ({ provider: item.provider, enabled: false, isDefault: false, displayOrder: saved.length + index + 1 })),
     ];
     sendSuccess(res, {
       providers: configured.map((entry) => ({ ...entry, ...readiness.find((item) => item.provider === entry.provider) })),
@@ -367,7 +378,7 @@ export class AdminCommerceController {
     const readiness = paymentProviderReadiness();
     for (const entry of req.body.providers) {
       if (entry.enabled && !readiness.find((item) => item.provider === entry.provider)?.configured) {
-        throw new HttpError(409, 'Paystack is missing required configuration', undefined, 'PAYMENT_PROVIDER_UNAVAILABLE');
+        throw new HttpError(409, `${entry.provider} is missing required configuration`, undefined, 'PAYMENT_PROVIDER_UNAVAILABLE');
       }
     }
     const updated = await CommerceSettings.findOneAndUpdate(

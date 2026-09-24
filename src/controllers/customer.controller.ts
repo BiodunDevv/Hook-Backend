@@ -313,7 +313,7 @@ export class CustomerController {
   };
 
   paymentMethodCapability = async (_req: Request, res: Response) => {
-    sendSuccess(res, this.payments.capability());
+    sendSuccess(res, await this.payments.capability());
   };
 
   notificationPreferences = async (req: Request, res: Response) =>

@@ -64,6 +64,9 @@ export async function connectDatabase() {
       await mongoose.connect(uri, {
         autoIndex: process.env.NODE_ENV !== 'production',
         serverSelectionTimeoutMS,
+        // A dropped connection should fail a query immediately, not queue it silently until a client-side
+        // timeout — consistent with the fail-fast retry/backoff this function already does on initial connect.
+        bufferCommands: false,
       });
       break;
     } catch (error) {

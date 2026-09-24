@@ -17,6 +17,7 @@ import mongoose, { isValidObjectId } from "mongoose";
 import { createCommerceNotification } from "@services/commerce-notification.service";
 import { restoreOrderIncentives } from "@services/order-restoration.service";
 import { appendTimeline, notifyStatus, timelineEntry } from "@lib/order-timeline";
+import { defaultProviderName } from "@services/payments/provider-registry";
 
 function orderIdentity(value: string) {
   return isValidObjectId(value)
@@ -169,7 +170,7 @@ export class PodService {
         if (!moved.modifiedCount) return false;
         await Payment.updateOne(
           { orderId: order.id },
-          { $set: { paymentMethod: "card", gateway: "paystack", commerceStatus: CommercePaymentStatus.PENDING } },
+          { $set: { paymentMethod: "card", gateway: await defaultProviderName(), commerceStatus: CommercePaymentStatus.PENDING } },
           { session },
         );
         return true;

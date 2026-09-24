@@ -79,6 +79,36 @@ export function createApp() {
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     res.redirect(302, returnUrl.toString());
   });
+  // Monnify signs clientSecret + the exact request bytes, so this route must also run
+  // before the global JSON parser, same reasoning as the Paystack route above.
+  app.post(`${apiPrefix}/webhooks/monnify`, express.raw({ type: 'application/json', limit: '256kb' }), async (req, res, next) => {
+    try {
+      const { PaymentService } = await import('@services/payment.service');
+      const signature = String(req.header('monnify-signature') || '');
+      sendSuccess(res, await new PaymentService().webhook('monnify', req.body as Buffer, signature, req.requestId));
+    } catch (error) { next(error); }
+  });
+  app.get(`${apiPrefix}/payments/monnify/callback`, (req, res) => {
+    const reference = String(req.query.paymentReference || '');
+    if (!/^[A-Za-z0-9._=-]{1,120}$/.test(reference)) {
+      return sendError(
+        res,
+        400,
+        'VALIDATION_ERROR',
+        'A valid payment reference is required',
+      );
+    }
+    const configuredReturnUrl = String(process.env.PAYSTACK_APP_RETURN_URL || '');
+    const returnUrl = new URL(
+      configuredReturnUrl.startsWith('hook://')
+        ? configuredReturnUrl
+        : 'hook://payments/return',
+    );
+    returnUrl.searchParams.set('reference', reference);
+    returnUrl.searchParams.set('source', 'monnify');
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    res.redirect(302, returnUrl.toString());
+  });
   app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '1mb' }));
   app.use(express.urlencoded({ extended: true, limit: process.env.FORM_BODY_LIMIT || '1mb' }));
   app.use(sanitizeRequest);

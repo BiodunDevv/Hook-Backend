@@ -5,7 +5,7 @@ import { MarketAssociateCatalogService } from '@services/catalog.service';
 import { recordAudit } from '@services/platform-audit.service';
 import { routeParam } from '@lib/api-utils';
 import { sendCreated, sendSuccess } from '@utils/http';
-import { presentSubmission } from '@services/catalog-presentation.service';
+import { presentSubmission, presentSubmissions } from '@services/catalog-presentation.service';
 
 export class MarketAssociateCatalogController {
   private readonly catalog = new MarketAssociateCatalogService();
@@ -16,7 +16,7 @@ export class MarketAssociateCatalogController {
 
   list = async (req: Request, res: Response) => {
     const result = await this.catalog.list(req.user!.sub, req.query);
-    sendSuccess(res, { ...result, data: await Promise.all(result.data.map(presentSubmission)) });
+    sendSuccess(res, { ...result, data: await presentSubmissions(result.data) });
   };
 
   detail = async (req: Request, res: Response) => {

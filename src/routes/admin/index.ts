@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { AdminCategoriesController } from "@controllers/admin/categories.controller";
 import { AdminCouponsController } from "@controllers/admin/coupons.controller";
+import { AdminSavedViewsController } from "@controllers/admin/saved-views.controller";
 import { AdminLogisticsProvidersController } from "@controllers/admin/logistics-providers.controller";
 import { AdminDashboardController } from "@controllers/admin/dashboard.controller";
 import { AdminOverviewController } from "@controllers/admin/overview.controller";
@@ -97,6 +98,7 @@ export function createAdminRouter() {
   const search = new AdminSearchController();
   const categories = new AdminCategoriesController();
   const coupons = new AdminCouponsController();
+  const savedViews = new AdminSavedViewsController();
   const logisticsProviders = new AdminLogisticsProvidersController();
   const operations = new AdminOperationsController();
   const commerce = new AdminCommerceController();
@@ -228,6 +230,13 @@ export function createAdminRouter() {
     validateBody(categoryCreateSchema),
     asyncHandler(categories.create),
   );
+  // Registered before /categories/:id so "reorder" is never read as an id.
+  router.patch(
+    "/categories/reorder",
+    requirePermission("categories.manage"),
+    validateBody(z.object({ ids: z.array(z.string().min(3).max(80)).min(2).max(200) }).strict()),
+    asyncHandler(categories.reorder),
+  );
   router.get(
     "/categories/:id",
     requirePermission("categories.view"),
@@ -322,6 +331,28 @@ export function createAdminRouter() {
     "/coupons/:id",
     requirePermission("coupons.manage"),
     asyncHandler(coupons.remove),
+  );
+
+  // ── Saved views (per-admin, per-page filter presets) ─────────────────────
+  router.get(
+    "/saved-views",
+    requirePermission("products.view"),
+    asyncHandler(savedViews.list),
+  );
+  router.post(
+    "/saved-views",
+    requirePermission("products.view"),
+    validateBody(z.object({
+      page: z.string().trim().min(1).max(40),
+      name: z.string().trim().min(1).max(80),
+      params: z.record(z.string(), z.string()),
+    }).strict()),
+    asyncHandler(savedViews.create),
+  );
+  router.delete(
+    "/saved-views/:id",
+    requirePermission("products.view"),
+    asyncHandler(savedViews.remove),
   );
 
   // ── Products ───────────────────────────────────────────────────────────
@@ -793,6 +824,8 @@ export function createAdminRouter() {
     linkTarget: z.string().trim().max(120).optional(),
     placement: z.enum(['home', 'category', 'all']).optional(),
     tone: z.enum(['gold', 'dark', 'green', 'red']).optional(),
+    colorBg: z.string().trim().regex(/^#[0-9A-Fa-f]{6}$/).nullable().optional(),
+    colorFg: z.string().trim().regex(/^#[0-9A-Fa-f]{6}$/).nullable().optional(),
     isActive: z.boolean().optional(),
     sortOrder: z.coerce.number().int().min(0).max(999).optional(),
     startsAt: z.coerce.date().nullable().optional(),
@@ -800,6 +833,8 @@ export function createAdminRouter() {
   }).strict();
   router.get('/banners', requirePermission('settings.view'), asyncHandler(banners.list));
   router.post('/banners', requirePermission('settings.manage'), validateBody(bannerBody), asyncHandler(banners.create));
+  // Registered before /banners/:id so "reorder" is never read as an id.
+  router.patch('/banners/reorder', requirePermission('settings.manage'), validateBody(z.object({ ids: z.array(z.string().min(3).max(80)).min(2).max(200) }).strict()), asyncHandler(banners.reorder));
   router.patch('/banners/:id', requirePermission('settings.manage'), validateBody(bannerBody.partial()), asyncHandler(banners.update));
   router.delete('/banners/:id', requirePermission('settings.manage'), asyncHandler(banners.remove));
   router.get('/legal/:type', requirePermission('settings.view'), asyncHandler(legalContent.get));

@@ -19,8 +19,9 @@ export class AdminSettingsController {
   };
 
   update = async (req: Request, res: Response) => {
-    settings = { ...settings, ...req.body };
-    await auditAdminAction(req, 'settings.update', 'settings', 'platform', { fields: Object.keys(req.body) });
+    const { reason, ...fields } = req.body;
+    settings = { ...settings, ...fields };
+    await auditAdminAction(req, 'settings.update', 'settings', 'platform', { fields: Object.keys(fields), reason });
     publishConfigChanged('commerce');
     sendSuccess(res, { ...settings, updatedAt: new Date().toISOString() });
   };

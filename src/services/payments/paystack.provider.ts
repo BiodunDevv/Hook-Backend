@@ -112,6 +112,10 @@ export class PaystackProvider implements PaymentProvider {
     return match ? { providerReference: String(match.id || input.reference) } : undefined;
   }
 
+  isSuccessEvent(eventType: string) {
+    return eventType === "charge.success";
+  }
+
   parseWebhook(rawBody: Buffer, signature: string) {
     const expected = createHmac("sha512", this.secret())
       .update(rawBody)

@@ -19,12 +19,15 @@ export interface Notification extends BaseEntity {
 }
 
 const NotificationSchema = createSchema<Notification>({
-  userId: { type: String, required: true, index: true },
+  // No single-field index on userId, type or isRead: every query on any of them (see notification.service.ts,
+  // notification-dispatch.service.ts) is always scoped to userId too, so the compound indexes below already
+  // cover them — a separate single-field index would only add write overhead with no query it uniquely serves.
+  userId: { type: String, required: true },
   title: { type: String, required: true },
   body: { type: String, required: true },
-  type: { type: String, default: 'general', index: true },
+  type: { type: String, default: 'general' },
   data: { type: Object },
-  isRead: { type: Boolean, default: false, index: true },
+  isRead: { type: Boolean, default: false },
   readAt: { type: Date },
   eventKey: { type: String, unique: true, sparse: true, index: true },
   group: { type: String },

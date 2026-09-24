@@ -59,7 +59,7 @@ export class AdminCouponsController {
   create = async (req: Request, res: Response) => {
     const { reason, ...input } = req.body;
     const coupon: any = await this.coupons.create(input, req.user!.sub);
-    await this.audit(req, 'coupon.create', String(coupon.publicId || coupon.id), reason || `Created coupon ${coupon.code}`);
+    await this.audit(req, 'coupon.create', String(coupon.publicId || coupon.id), reason);
     publishConfigChanged('coupons');
     sendCreated(res, coupon);
   };
@@ -67,7 +67,7 @@ export class AdminCouponsController {
   update = async (req: Request, res: Response) => {
     const { reason, ...input } = req.body;
     const coupon: any = await this.coupons.update(routeParam(req.params.id), input);
-    await this.audit(req, 'coupon.update', String(coupon?.publicId || coupon?.id), reason || `Updated coupon ${coupon?.code}`);
+    await this.audit(req, 'coupon.update', String(coupon?.publicId || coupon?.id), reason);
     publishConfigChanged('coupons');
     sendSuccess(res, coupon);
   };

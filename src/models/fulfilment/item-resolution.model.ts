@@ -27,6 +27,7 @@ export interface ItemResolution extends BaseEntity {
   adjustmentStatus?: 'NOT_REQUIRED' | 'PENDING' | 'CONFIRMED' | 'FAILED';
   adjustmentPaymentReference?: string;
   adjustmentAuthorizationUrl?: string;
+  adjustmentProvider?: "paystack" | "monnify";
   adjustmentProviderReference?: string;
   adjustmentProcessedAt?: Date;
   idempotencyKey: string;
@@ -54,6 +55,7 @@ const schema = createSchema<ItemResolution>({
   adjustmentStatus: { type: String, enum: ['NOT_REQUIRED', 'PENDING', 'CONFIRMED', 'FAILED'] },
   adjustmentPaymentReference: { type: String, unique: true, sparse: true, index: true },
   adjustmentAuthorizationUrl: { type: String },
+  adjustmentProvider: { type: String, enum: ["paystack", "monnify"] },
   adjustmentProviderReference: { type: String },
   adjustmentProcessedAt: { type: Date },
   idempotencyKey: { type: String, required: true, unique: true, index: true },

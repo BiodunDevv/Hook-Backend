@@ -13,6 +13,9 @@ export interface Banner extends BaseEntity {
   linkTarget?: string;
   placement: BannerPlacement;
   tone: BannerTone;
+  /** A custom colour instead of one of the four fixed tones. When set, these win over `tone` at render time. */
+  colorBg?: string;
+  colorFg?: string;
   isActive: boolean;
   sortOrder: number;
   startsAt?: Date;
@@ -27,6 +30,8 @@ const bannerSchema = createSchema<Banner>({
   linkTarget: { type: String, trim: true },
   placement: { type: String, enum: ['home', 'category', 'all'], default: 'home', index: true },
   tone: { type: String, enum: ['gold', 'dark', 'green', 'red'], default: 'gold' },
+  colorBg: { type: String, trim: true },
+  colorFg: { type: String, trim: true },
   isActive: { type: Boolean, default: true, index: true },
   sortOrder: { type: Number, default: 0 },
   startsAt: { type: Date },

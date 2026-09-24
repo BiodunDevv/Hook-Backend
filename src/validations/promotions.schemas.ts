@@ -2,6 +2,9 @@ import { z } from 'zod';
 
 const moneyMinor = z.coerce.number().int().nonnegative().max(10_000_000_000);
 const reason = z.string().trim().min(3).max(500).optional();
+// Coupons affect what every customer pays, so — unlike the optional `reason` above,
+// which other rows in this file still use — an audit reason is mandatory here.
+const couponReason = z.string().trim().min(5).max(500);
 
 export const logisticsProviderCreateSchema = z.object({
   code: z.string().trim().min(2).max(40),
@@ -28,7 +31,7 @@ export const couponCreateSchema = z.object({
   totalUsageLimit: z.coerce.number().int().positive().optional(),
   perUserLimit: z.coerce.number().int().positive().default(1),
   status: z.enum(['active', 'paused']).default('active'),
-  reason,
+  reason: couponReason,
 }).strict().superRefine(validateCouponShape);
 
 export const couponUpdateSchema = z.object({
@@ -43,7 +46,7 @@ export const couponUpdateSchema = z.object({
   totalUsageLimit: z.coerce.number().int().positive().optional(),
   perUserLimit: z.coerce.number().int().positive().optional(),
   status: z.enum(['active', 'paused']).optional(),
-  reason,
+  reason: couponReason,
 }).strict().superRefine(validateCouponShape);
 
 /**

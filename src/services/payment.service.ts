@@ -120,10 +120,7 @@ export class PaymentService {
       payment.commerceStatus === CommercePaymentStatus.PROCESSING
     )
       return this.publicPayment(payment);
-    // The provider was fixed at Payment-creation time (checkout.service.ts / pod.service.ts /
-    // fulfilment.service.ts) via the then-current default; honour whatever is already stored
-    // rather than re-resolving the default here, so a payment always initializes against the
-    // gateway its own record says it belongs to.
+    // Honour the gateway already stored on the payment rather than re-resolving the default, so it initializes against the provider it was created against.
     const providerName = (payment.gateway || "paystack") as ProviderName;
     const initialized = await paymentProvider(providerName).initialize({
       reference: payment.transactionRef,
@@ -157,9 +154,7 @@ export class PaymentService {
       initializedAt: new Date(),
       reference: initialized.reference,
     };
-    // Payment and order move to PROCESSING together, and only from a state
-    // that has not already been confirmed: a webhook that lands while this
-    // request is still talking to the provider must not be overwritten.
+    // Payment and order move to PROCESSING together, and only from a non-confirmed state, so a concurrent webhook can't be overwritten.
     const session = await mongoose.startSession();
     let moved = false;
     try {
@@ -216,9 +211,7 @@ export class PaymentService {
       userId: customerId,
     }).lean({ virtuals: true });
     if (!order) throw new HttpError(404, "Payment not found");
-    // The success screen shows what was paid, what it earned, and when it
-    // should arrive, so return those here rather than making it fetch the
-    // whole order separately just to render a confirmation.
+    // Return payment, earnings and delivery estimate together so the success screen doesn't need a separate order fetch.
     const earned = order.userId
       ? await CreditLedger.findOne({
           userId: String(order.userId),
@@ -241,12 +234,7 @@ export class PaymentService {
     };
   }
 
-  /**
-   * Self-heal fallback for the primary checkout path, which has no PaymentAttempt
-   * record. Re-verifies a still-PROCESSING payment against the provider so
-   * confirmation does not depend solely on the webhook arriving. Never throws —
-   * this backs a status poll, not the audited webhook path.
-   */
+  /** Self-heal fallback that re-verifies a still-PROCESSING payment against the provider so confirmation doesn't depend solely on the webhook; never throws. */
   private async verifyByReference(payment: any): Promise<{ confirmed: boolean }> {
     if (payment.commerceStatus === CommercePaymentStatus.CONFIRMED) return { confirmed: true };
     if (!payment.transactionRef) return { confirmed: false };
@@ -272,11 +260,7 @@ export class PaymentService {
     return { confirmed: true };
   }
 
-  /**
-   * Safety net for a webhook that never arrived or failed permanently: finds
-   * payments still PROCESSING after a grace period and re-verifies them with
-   * the provider through the same guarded confirmation path.
-   */
+  /** Safety net for a missing webhook: finds payments still PROCESSING after a grace period and re-verifies them with the provider. */
   async reconcileStalePayments(limit = 20) {
     const stale = await Payment.find({
       commerceStatus: CommercePaymentStatus.PROCESSING,
@@ -307,10 +291,7 @@ export class PaymentService {
       });
     } catch (error: any) {
       if (!isDuplicateKeyError(error)) throw error;
-      // Only a fully handled delivery is a true duplicate. One that failed or
-      // died mid-way ("received"/"failed") must be reprocessed on Paystack's
-      // retry, otherwise the payment would never confirm. Reprocessing is
-      // safe: confirmPayment is a guarded, idempotent transaction.
+      // Only a fully handled delivery is a true duplicate; one that failed or died mid-way must be reprocessed, which is safe since confirmPayment is idempotent.
       const previous = await PaymentWebhookEvent.findOne({ provider: providerName, providerEventId: parsed.providerEventId });
       if (!previous || ["processed", "ignored"].includes(previous.processingStatus)) return { received: true, duplicate: true };
       event = previous;
@@ -321,11 +302,7 @@ export class PaymentService {
       await event.save();
       return { received: true, ignored: true };
     }
-    // Substitution top-ups deliberately do not use an Order Payment record:
-    // they are a narrowly scoped price adjustment on an already-paid order.
-    // Route them through the fulfilment service so a successful webhook can
-    // atomically apply the approved replacement without re-activating or
-    // re-crediting the original order.
+    // Substitution top-ups have no Payment record; route them through the fulfilment service to apply the replacement without re-activating the order.
     const { fulfilmentService } = await import('@services/fulfilment.service');
     const substitution = await fulfilmentService.verifySubstitutionTopUp(parsed.reference, parsed.providerEventId);
     if (substitution.matched) {
@@ -407,10 +384,7 @@ export class PaymentService {
     }
   }
 
-  /**
-   * Gives a Pay on Delivery customer their online delivery fee back when the order is cancelled before it was
-   * dispatched. After dispatch the fee is kept (it paid for a courier trip). Safe to call twice.
-   */
+  /** Refunds a Pay on Delivery customer's online delivery fee if the order is cancelled before dispatch; safe to call twice. */
   async refundDeliveryFee(orderId: string) {
     try {
       const shipmentStarted = await Shipment.exists({ orderId, status: { $nin: [ShipmentStatus.CANCELLED] } } as any);
@@ -457,17 +431,7 @@ export class PaymentService {
     return { confirmed: true };
   }
 
-  /**
-   * The single place a payment becomes confirmed. Every DB write that must
-   * agree (payment, links, order, shipment, Hook credit, outbox) commits in one
-   * transaction; everything else (referral, notification, email, realtime)
-   * is written to the outbox and delivered, with retries, after the commit.
-   *
-   * Replay-safe: the payment transition is a guarded update, so a duplicate
-   * webhook, a status poll and a manual verify racing each other produce one
-   * effect. A payment confirmed by the old non-atomic code, whose order was
-   * never activated, is repaired on the next call.
-   */
+  /** The single place a payment becomes confirmed; core writes commit in one transaction and side effects go through the outbox, replay-safe against races. */
   private async confirmPayment(
     payment: any,
     providerId?: string,
@@ -512,8 +476,7 @@ export class PaymentService {
           { session },
         );
 
-        // Pay on Delivery, first step: the online delivery fee. It moves the order into review, or straight to
-        // approval when the admin allows it, the order is not high value and the customer is in good standing.
+        // Pay on Delivery's first step, the online delivery fee, moves the order into review or straight to approval if eligible.
         if (handover && !payment.fulfilmentGroupId) {
           if (!transitioned) return;
           const review = (order.podReview as any) || {};
@@ -589,8 +552,7 @@ export class PaymentService {
           return;
         }
 
-        // Prepaid: activate the order the first time, or repair one left
-        // inactive by a confirmation that predates this transaction.
+        // Prepaid: activate the order the first time, or repair one left inactive by an earlier confirmation.
         const activate = await Order.updateOne(
           // A cancelled order must never be brought back to life by a payment that lands late.
           { _id: order._id, commercePaymentStatus: { $ne: CommercePaymentStatus.CONFIRMED }, commerceStatus: { $ne: CommerceOrderStatus.CANCELLED } },
@@ -606,8 +568,7 @@ export class PaymentService {
           { session },
         );
         if (!activate.modifiedCount && order.commerceStatus === CommerceOrderStatus.CANCELLED) {
-          // The customer paid for an order that was already cancelled: money was collected, nothing is owed
-          // to fulfil, so open a refund exception for finance instead of silently keeping it.
+          // The order was already cancelled when payment landed, so open a refund exception for finance instead of silently keeping the money.
           await IntegrationException.updateOne(
             { provider: payment.gateway || 'paystack', reference: String(payment.transactionRef || paymentKey), type: 'status', status: 'open' },
             { $setOnInsert: { paymentId: String(payment._id), orderId: orderKey, details: { message: 'Payment confirmed after the order was cancelled. Refund the customer.' } } },
@@ -617,8 +578,7 @@ export class PaymentService {
         }
         if (!transitioned && !activate.modifiedCount) return;
         if (order.userId) {
-          // Hook credit is pure DB work keyed on the order, so it commits with
-          // the payment and the success screen can show it immediately.
+          // Hook credit is pure DB work keyed on the order, so it commits with the payment and shows immediately.
           await this.credits.earnOnOrder({
             userId: order.userId,
             orderId: orderKey,
@@ -645,8 +605,7 @@ export class PaymentService {
       await session.endSession();
     }
 
-    // Best-effort immediacy only; the outbox consumer delivers the same
-    // update if this process dies here.
+    // Best-effort immediacy only; the outbox consumer delivers the same update if this process dies here.
     if (activated) {
       wakeOutbox();
       const fresh = await Order.findById(order._id).lean({ virtuals: true });
@@ -665,12 +624,7 @@ export class PaymentService {
     };
   }
 
-  /**
-   * Outbox consumer for PAYMENT_CONFIRMED_EFFECTS: referral bonus, customer
-   * notification and email. Each step is keyed (ledger key, notification
-   * eventKey), so a replay after a partial run is harmless. Errors propagate
-   * so the outbox retries and, eventually, dead-letters for review.
-   */
+  /** Outbox consumer for PAYMENT_CONFIRMED_EFFECTS: referral bonus, notification and email, each keyed so a replay is harmless. */
   async deliverPaymentConfirmedEffects(event: { payload: Record<string, any> }) {
     const { orderId, paymentId, flow } = event.payload;
     const order = await Order.findOne(identity(String(orderId))).lean({ virtuals: true }) as any;
@@ -701,8 +655,7 @@ export class PaymentService {
       });
       return;
     }
-    // A referrer's bonus is only released once the person they referred has
-    // actually paid for something, which is what stops signup farming.
+    // A referrer's bonus is only released once the referred person has actually paid, which prevents signup farming.
     if (await this.referrals.isFirstPaidOrder(order.userId, String(order._id))) {
       await this.referrals.qualify(order.userId, String(order.publicId || order._id));
     }
@@ -761,16 +714,7 @@ export class PaymentService {
     };
   }
 
-  /**
-   * Issues a provider refund exactly once per idempotency key.
-   *
-   * The amount is reserved on the payment with a guarded atomic update BEFORE
-   * the provider is called, so two concurrent refunds cannot both pass the
-   * balance check. A definitive provider rejection releases the reservation.
-   * An ambiguous one (timeout, network error, 5xx) keeps it and throws
-   * PROVIDER_OUTCOME_UNKNOWN: the money may have moved, so the caller must
-   * reconcile with reconcileRefund() rather than call the provider again.
-   */
+  /** Issues a provider refund exactly once per idempotency key, reserving the amount atomically first so concurrent refunds can't double-spend the balance. */
   async refund(
     paymentIdentifier: string,
     amountMinor: number,

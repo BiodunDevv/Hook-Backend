@@ -53,10 +53,7 @@ export class AdminOrdersController {
         ? req.query.search.toLowerCase()
         : undefined;
     const where: Record<string, any> = {};
-    // "active" and "completed" are the two coarse views the Orders page
-    // offers; everything else is an exact status match. Completed is the
-    // inverse of active rather than DELIVERED alone, so cancelled and
-    // refunded orders remain reachable from one of the two tabs.
+    // "active"/"completed" are coarse views; completed is the inverse of active (not just DELIVERED) so cancelled/refunded orders stay reachable.
     const TERMINAL_STATUSES = [
       OrderStatus.DELIVERED,
       OrderStatus.CANCELLED,
@@ -149,11 +146,7 @@ export class AdminOrdersController {
     sendSuccess(res, await this.statsData());
   };
 
-  /**
-   * Resolves an order by any of its identifiers, honouring the caller's state
-   * scope. A staff member outside the order's State gets a 404 rather than a
-   * 403, so the existence of orders elsewhere is not disclosed.
-   */
+  /** Resolves an order by any of its identifiers, scoped to the caller; out-of-scope orders 404 rather than 403 to avoid disclosing their existence. */
   private orderQuery(req: Request) {
     const identifier = routeParam(req.params.id);
     const identity = isValidObjectId(identifier)
@@ -183,14 +176,7 @@ export class AdminOrdersController {
     sendSuccess(res, publicOrder(await this.enrichOrder(order)));
   };
 
-  /**
-   * Corrects delivery details on a live order.
-   *
-   * addressSnapshot is documented as immutable fulfilment information, so a
-   * correction is appended to the timeline rather than silently overwriting
-   * history — staff downstream need to see that the destination changed and
-   * why, not just find different data than they read yesterday.
-   */
+  /** Corrects delivery details on a live order, appending to the timeline rather than silently overwriting addressSnapshot history. */
   updateDelivery = async (req: Request, res: Response) => {
     const order = await Order.findOne(this.orderQuery(req));
     if (!order) throw new HttpError(404, "Order not found");
@@ -232,10 +218,7 @@ export class AdminOrdersController {
     sendSuccess(res, publicOrder(await this.enrichOrder(order.toJSON())));
   };
 
-  /**
-   * Splits an order into several deliveries. Staff choose which items travel
-   * together; the service re-prorates every money line across the new groups.
-   */
+  /** Splits an order into several deliveries; the service re-prorates every money line across the new groups. */
   split = async (req: Request, res: Response) => {
     const order = await Order.findOne(this.orderQuery(req)).select("publicId").lean();
     if (!order) throw new HttpError(404, "Order not found");
@@ -249,11 +232,7 @@ export class AdminOrdersController {
     sendSuccess(res, publicOrder(await this.enrichOrder(fresh)));
   };
 
-  /**
-   * Cancels an order on the customer's behalf and gives back everything it
-   * consumed — Hook credit spent, the coupon use, and any coin the order earned
-   * — via the same restoration path a customer cancellation uses.
-   */
+  /** Cancels an order on the customer's behalf and restores everything it consumed via the same path a customer cancellation uses. */
   cancel = async (req: Request, res: Response) => {
     const order = await Order.findOne(this.orderQuery(req));
     if (!order) throw new HttpError(404, "Order not found");
@@ -263,8 +242,7 @@ export class AdminOrdersController {
       throw new HttpError(409, "A delivered order cannot be cancelled", undefined, "INVALID_STATE_TRANSITION");
     }
 
-    // Cancelling a paid order would return credit and the coupon but leave the customer's cash uncollected-and-unrefunded,
-    // and leave fulfilment tasks and shipments running. Paid orders go through a refund, not a plain cancel.
+    // A paid order must go through a refund, not a plain cancel, so cash isn't left uncollected and fulfilment keeps running.
     const paid = ["CONFIRMED", "PAID"].includes(String(order.commercePaymentStatus || "").toUpperCase());
     if (paid) {
       throw new HttpError(409, "This order is already paid. Refund it first; a paid order cannot be cancelled directly.", undefined, "INVALID_STATE_TRANSITION");
@@ -278,8 +256,7 @@ export class AdminOrdersController {
     order.timeline = appendTimeline(order, CommerceOrderStatus.CANCELLED, req.user!.sub, { actorType: "ADMIN", reason });
     await order.save();
 
-    // Coin, coupon and earn all come back. Idempotent and never throws, so a
-    // restoration failure cannot leave the order stuck un-cancelled.
+    // Idempotent and never throws, so a restoration failure cannot leave the order stuck un-cancelled.
     await restoreOrderIncentives(String(order._id));
     // Pay on Delivery: an order cancelled before dispatch returns the delivery fee the customer paid online.
     if (order.commercePaymentMethod === "PAY_AT_HANDOVER") await new PaymentService().refundDeliveryFee(String(order._id));

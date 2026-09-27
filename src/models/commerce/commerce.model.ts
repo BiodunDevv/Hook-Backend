@@ -424,8 +424,7 @@ const exceptionSchema = createSchema<IntegrationException>({
   resolvedAt: { type: Date },
   deletedAt: { type: Date },
 });
-// One open exception per (provider, reference, type): a webhook Paystack keeps
-// retrying used to add a fresh row on every attempt. Resolved rows are exempt.
+// One open exception per (provider, reference, type), so retried webhooks don't add a fresh row each attempt; resolved rows are exempt.
 exceptionSchema.index(
   { provider: 1, reference: 1, type: 1 },
   { unique: true, partialFilterExpression: { status: "open", reference: { $type: "string" } } },

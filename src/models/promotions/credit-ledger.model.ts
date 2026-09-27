@@ -7,7 +7,8 @@ export type CreditEntryType =
   | 'order_spend'
   | 'order_refund'
   | 'order_earn'
-  | 'admin_adjustment';
+  | 'admin_adjustment'
+  | 'waitlist_bonus';
 
 /**
  * Append-only. A user's balance is the sum of amountMinor over their entries,
@@ -29,7 +30,7 @@ const schema = createSchema<CreditLedger>({
   userId: { type: String, required: true, index: true },
   type: {
     type: String,
-    enum: ['welcome_bonus', 'referral_signup', 'referral_bonus', 'order_spend', 'order_refund', 'order_earn', 'admin_adjustment'],
+    enum: ['welcome_bonus', 'referral_signup', 'referral_bonus', 'order_spend', 'order_refund', 'order_earn', 'admin_adjustment', 'waitlist_bonus'],
     required: true,
     index: true,
   },

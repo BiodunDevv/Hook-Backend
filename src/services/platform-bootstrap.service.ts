@@ -46,6 +46,9 @@ const domains: Record<string, string[]> = {
   'catalog.availability': ['view', 'manage', 'confirm'],
   coupons: ['view', 'manage'],
   credits: ['view', 'adjust'],
+  waitlist: ['view', 'manage'],
+  communications: ['send'],
+  faq: ['view', 'manage'],
 };
 
 export const PLATFORM_PERMISSION_KEYS = Object.entries(domains)
@@ -123,11 +126,12 @@ const financePermissions = [
   'fulfilment.view', 'logistics.view', 'logistics.manage', 'returns.view', 'returns.review',
   'finance.refunds.view', 'finance.refunds.process',
   'coupons.view', 'coupons.manage', 'credits.view', 'credits.adjust',
+  'waitlist.view', 'waitlist.manage',
 ];
 
 const roles = [
   { key: 'SUPER_ADMIN', name: 'Super Admin', scope: ScopeType.GLOBAL, permissions: PLATFORM_PERMISSION_KEYS },
-  { key: 'OPERATIONS_LEAD', name: 'Operations Lead', scope: ScopeType.MULTI_STATE, permissions: [...operationsPermissions, ...orderOperations, ...commerceOperations, ...marketVendorOperations, 'staff.view'] },
+  { key: 'OPERATIONS_LEAD', name: 'Operations Lead', scope: ScopeType.MULTI_STATE, permissions: [...operationsPermissions, ...orderOperations, ...commerceOperations, ...marketVendorOperations, 'staff.view', 'communications.send'] },
   { key: 'STATE_OPERATIONS_MANAGER', name: 'State Operations Manager', scope: ScopeType.SINGLE_STATE, permissions: [...operationsPermissions, ...orderOperations, ...commerceOperations, ...marketVendorOperations] },
   {
     key: 'COMMERCIAL_MANAGER',

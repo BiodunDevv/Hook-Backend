@@ -147,8 +147,7 @@ class RealtimeService {
         socket.data.identity = await authenticateSocket(socket);
         next();
       } catch (error) {
-        // Public sockets are useful for catalog invalidation, but an invalid
-        // credential must never be downgraded to a private identity.
+        // An invalid credential must never be downgraded to a public identity.
         if (tokenFromSocket(socket)) {
           next(error instanceof Error ? error : new Error('Socket authentication failed'));
           return;
@@ -220,11 +219,7 @@ class RealtimeService {
     return this.io;
   }
 
-  /**
-   * The read caches in this process are cleared whenever an event says the
-   * underlying data changed. With several API instances an event raised on one
-   * node must clear the caches on all of them, hence broadcastInvalidation().
-   */
+  /** Clears this process's read caches; broadcastInvalidation() propagates that to the other API nodes. */
   private invalidateLocalCaches(type: string) {
     if (type === 'catalog.updated' || type === 'home.updated') {
       sharedCache.noteInvalidated('catalog');
@@ -278,10 +273,7 @@ class RealtimeService {
     }
   }
 
-  /**
-   * For processes with no HTTP server (the worker): lets them publish events
-   * that reach sockets connected to the API nodes, through the Redis adapter.
-   */
+  /** For processes with no HTTP server (the worker): publishes events to API-node sockets through the Redis adapter. */
   attachEmitterOnly() {
     if (this.io) return this.io;
     this.io = new SocketIOServer();
@@ -300,9 +292,7 @@ class RealtimeService {
     if (!this.io) return;
     const rooms = new Set<string>();
     if (targets.public || event.type === 'home.updated' || event.type === 'catalog.updated') rooms.add('public');
-    // Scoped staff receive the event through their state/Hub rooms. The
-    // global admin room is reserved for genuinely global invalidations so a
-    // state- or Hub-scoped account cannot observe another scope's changes.
+    // The global admin room is reserved for genuinely global invalidations, so a scoped account can't observe other scopes' changes.
     const scopedState = targets.stateId || payload.scope?.stateId;
     const scopedHub = targets.hubId || payload.scope?.hubId;
     if (targets.admin || event.type.startsWith('admin.')) {
@@ -319,8 +309,7 @@ class RealtimeService {
   }
 
   close() {
-    // The worker's emitter-only server has no HTTP engine, and close() on it throws.
-    // Socket.IO's close() is async and rejects here, so swallow both forms.
+    // The worker's emitter-only server has no HTTP engine, so close() can throw or reject; swallow both forms.
     try { void Promise.resolve(this.io?.close()).catch(() => undefined); } catch { /* nothing to close */ }
     this.io = undefined;
     for (const client of this.redisClients) client.quit().catch(() => client.disconnect());
@@ -349,11 +338,7 @@ class RealtimeService {
 
 export const realtime = new RealtimeService();
 
-/**
- * Something an admin configures that customers see (delivery prices and
- * coverage, couriers, coupons, commerce settings, legal text) changed. Apps
- * refetch the matching data straight away instead of waiting for a refresh.
- */
+/** Signals that admin-configured customer-facing data changed, so apps refetch it immediately instead of waiting for a refresh. */
 export type ConfigScope = 'delivery' | 'logistics' | 'commerce' | 'legal' | 'coupons' | 'banners';
 export function publishConfigChanged(scope: ConfigScope) {
   realtime.emit({ type: 'config.updated', entityId: scope, data: { scope } }, { public: true, admin: true });

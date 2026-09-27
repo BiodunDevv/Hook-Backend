@@ -18,6 +18,21 @@ export interface WelcomeEmailPayload {
   name?: string;
 }
 
+export interface WaitlistMessageEmailPayload {
+  email: string;
+  name?: string;
+  subject: string;
+  message: string;
+  unsubscribeUrl: string;
+}
+
+export interface BroadcastMessageEmailPayload {
+  email: string;
+  name?: string;
+  subject: string;
+  message: string;
+}
+
 export interface AccountInvitationEmailPayload {
   email: string;
   name: string;

@@ -1,11 +1,4 @@
-/**
- * Seeds placeholder Terms of Service, Privacy Policy and Returns Policy content so
- * /policy are never empty. Upserts by `type`, so re-running this is safe and
- * will NOT overwrite content an admin has already edited via the Legal
- * Content settings page (only inserts when a document doesn't exist yet).
- *
- * Usage: node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/seed-legal-content.ts
- */
+/** Seeds placeholder Terms/Privacy/Returns content; upserts by `type` so it never overwrites an admin's already-edited document. */
 import dotenv from 'dotenv';
 import { connectDatabase, disconnectDatabase } from '@config/data-source';
 import { LegalContent } from '@models/platform/legal-content.model';

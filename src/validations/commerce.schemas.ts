@@ -120,13 +120,14 @@ export const paymentProviderSettingsSchema = z.object({
   reason: z.string().trim().min(5).max(500),
 }).strict();
 
+// Sender identity (brevoFromEmail/brevoFromName) is env-only (BREVO_FROM_EMAIL/BREVO_FROM_NAME) — not settable here.
 export const emailSettingsSchema = z.object({
   supportEmail: z.string().trim().email().optional(),
   hookOpsEmail: z.string().trim().email().optional(),
-  brevoFromEmail: z.string().trim().email().optional(),
-  brevoFromName: z.string().trim().min(1).max(80).optional(),
   appName: z.string().trim().min(1).max(80).optional(),
   appUrl: z.string().trim().url().optional(),
+  // Where "Help & Support" opens; falls back to a mailto: to supportEmail when unset.
+  supportUrl: z.string().trim().url().optional(),
   reason: z.string().trim().min(5).max(500),
 }).strict();
 

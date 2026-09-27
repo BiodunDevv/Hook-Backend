@@ -118,14 +118,7 @@ async function assertStaffScope(actor: Actor, stateId?: string, hubId?: string) 
   if (hubId && actor.hubIds?.length && !actor.hubIds.includes(hubId)) throw new HttpError(403, 'The requested Hub is outside your scope', undefined, 'SCOPE_DENIED');
 }
 
-/**
- * FulfilmentTask/Shipment/ReturnRequest/etc. store marketId, hubId, and
- * marketAssociateId as denormalized strings (not Mongoose refs — see the
- * schema), so admin views showing them raw display bare ObjectIds instead of
- * names. This batch-resolves every id referenced across a set of records in
- * three queries total (not one query per record) and returns lookup maps
- * keyed by both _id and publicId, since callers store either form.
- */
+/** Batch-resolves market/hub/marketAssociate/order ids (stored as denormalized strings) into names, in three queries total, keyed by both _id and publicId. */
 /** Order statuses that mean "somewhere inside fulfilment". */
 const FULFILMENT_ORDER_STATUSES = [
   CommerceOrderStatus.APPROVED_FOR_FULFILMENT,
@@ -196,10 +189,7 @@ function otherDetails(item: { selectedVariants?: Record<string, string>; variant
     .map(([key, value]) => `${key.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase())}: ${value}`);
 }
 
-/**
- * A failed or refused Pay on Delivery parcel counts against the customer. After the admin-set number of refusals
- * they lose the Pay on Delivery option until an admin restores it. The delivery fee they paid is not refunded.
- */
+/** A failed/refused Pay on Delivery parcel counts against the customer; after the admin-set limit they lose the option until an admin restores it. */
 async function recordPodRefusal(orderId: string, session?: import('mongoose').ClientSession) {
   const order = (await Order.findById(orderId).select('userId commercePaymentMethod').session(session ?? null).lean()) as { userId?: string; commercePaymentMethod?: string } | null;
   if (!order?.userId || order.commercePaymentMethod !== 'PAY_AT_HANDOVER') return;
@@ -256,11 +246,7 @@ export class FulfilmentService {
     }
   }
 
-  /**
-   * Runs DB-only work in one transaction. The callback may be re-run on a
-   * transient conflict, so it must not send email, publish events or call a
-   * provider; do those after this returns.
-   */
+  /** Runs DB-only work in one transaction; the callback may be re-run on conflict, so email/events/provider calls must happen after this returns. */
   private async atomically<T>(work: (session: mongoose.ClientSession) => Promise<T>): Promise<T> {
     const session = await mongoose.startSession();
     try {

@@ -114,12 +114,7 @@ function paymentProfile(input: any): VendorPaymentProfile | undefined {
   };
 }
 
-/**
- * `eventKey` makes the in-app notification idempotent — re-triggering the
- * same availability issue (e.g. a retry, or the escalation loop revisiting
- * a product before its next run) upserts the same row instead of spamming
- * a duplicate. Falls back to a plain create when no key is given.
- */
+/** `eventKey` makes the in-app notification idempotent, upserting the same row instead of spamming a duplicate; falls back to a plain create when no key is given. */
 async function notifyAccount(accountId: string, title: string, body: string, data: Record<string, unknown>, eventKey?: string) {
   const [account] = await Promise.all([
     User.findById(accountId).select('email firstName').lean(),
@@ -686,9 +681,7 @@ export class MarketVendorService {
       const marketAssociates = await MarketAssociateProfile.find({ _id: { $in: assignments.map((item) => item.marketAssociateId) }, status: 'active' }).select('accountId').lean();
       accounts = marketAssociates.map((item) => item.accountId);
     }
-    // catalogVersion increments on every availability-state transition, so
-    // keying on it scopes the dedup to this specific check cycle — a later,
-    // genuinely new availability issue on the same product still notifies.
+    // catalogVersion increments on every availability-state transition, so keying on it scopes the dedup to this check cycle without blocking a later, genuinely new issue.
     const eventKeyBase = `availability:${product.publicId || product._id}:${product.catalogVersion || 1}`;
     await Promise.all(accounts.map((accountIdValue) => notifyAccount(
       accountIdValue,

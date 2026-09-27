@@ -3,6 +3,7 @@ import { CommerceSettings } from '@models/commerce/commerce.model';
 import { calculateHookCoinEarnMinor } from '@lib/hook-coin';
 import { createCommerceNotification } from '@services/commerce-notification.service';
 import { CreditLedger, type CreditEntryType } from '@models/promotions/credit-ledger.model';
+import { WaitlistEntry } from '@models/promotions/waitlist-entry.model';
 import { HttpError } from '@utils/http';
 import { User } from '@models/users/user.model';
 
@@ -24,24 +25,16 @@ export class CreditService {
     return Math.max(0, Number(row?.total || 0));
   }
 
-  /**
-   * Every new customer starts with a credit balance. Keyed on the user id, so
-   * the four different account-creation paths (password signup, Google, Apple,
-   * legacy OTP) can all call this without risking a double grant.
-   */
+  /** Keyed on the user id so every signup path (password, Google, Apple, legacy OTP) can call this without risking a double grant. */
   async grantWelcomeBonus(userId: string) {
-    // Guard on the entry TYPE rather than only the idempotency key: the
-    // backfill script credits existing accounts under its own key, so a
-    // key-only check would pay those users a second time the first time they
-    // pass through a signup path.
+    // Also the one funnel point to settle a waitlist entry for this email.
+    await this.grantWaitlistBonus(userId).catch(() => undefined);
+    // Guard on the entry TYPE, not just the idempotency key, since the backfill script credits existing accounts under its own key.
     const existing = await CreditLedger.findOne({ userId, type: 'welcome_bonus' })
       .select('amountMinor')
       .lean();
 
-    // The notification is announced separately from the credit. A user
-    // credited by the backfill script already has the ledger row but was
-    // never told about it, so returning early here would leave them
-    // permanently unaware of their balance.
+    // Announce separately: a user credited by the backfill script has the ledger row but was never told about it.
     if (existing) {
       await this.announceWelcomeBonus(userId, Number(existing.amountMinor));
       return undefined;
@@ -63,6 +56,53 @@ export class CreditService {
     return entry;
   }
 
+  /** Settles a waitlist entry for this user, if any, marking it redeemed and granting credit only once. */
+  private async grantWaitlistBonus(userId: string) {
+    const user = await User.findById(userId).select('email').lean();
+    const email = String(user?.email || '').toLowerCase();
+    if (!email) return;
+    const entry = await WaitlistEntry.findOne({ email, deletedAt: { $exists: false } });
+    if (!entry) return;
+    if (!entry.redeemedByUserId) {
+      entry.redeemedByUserId = userId;
+      entry.redeemedAt = new Date();
+    }
+    const amountMinor = Number(entry.pendingCreditMinor || 0);
+    if (amountMinor > 0 && !entry.creditGrantedAt) {
+      await this.record({
+        userId,
+        type: 'waitlist_bonus',
+        amountMinor,
+        idempotencyKey: `waitlist:${userId}`,
+        note: entry.giftReason || 'Waitlist launch credit',
+      });
+      entry.creditGrantedAt = new Date();
+      await this.notify(userId, `credit:waitlist:${userId}`, {
+        title: 'You have Hook credit to spend',
+        body: `We added ${formatNaira(amountMinor)} Hook credit to your account as a thank-you for joining the waitlist.`,
+      });
+    }
+    await entry.save();
+  }
+
+  /** A manual, admin-initiated grant; the caller-supplied idempotencyKey prevents a double-submitted form from double-granting. */
+  async grantAdminCredit(input: { userId: string; amountMinor: number; reason: string; actorId?: string; idempotencyKey: string; type?: CreditEntryType }) {
+    if (input.amountMinor <= 0) throw new HttpError(400, 'Amount must be greater than zero', undefined, 'VALIDATION_ERROR');
+    const entry = await this.record({
+      userId: input.userId,
+      type: input.type || 'admin_adjustment',
+      amountMinor: input.amountMinor,
+      idempotencyKey: input.idempotencyKey,
+      actorId: input.actorId,
+      note: input.reason,
+    });
+    await this.notify(input.userId, `credit:admin:${input.idempotencyKey}`, {
+      title: 'Hook credit added to your account',
+      body: `${formatNaira(input.amountMinor)} Hook credit was added to your account.`,
+    });
+    return entry;
+  }
+
   /** Idempotent on eventKey, so calling it repeatedly posts only one. */
   async announceWelcomeBonus(userId: string, amountMinor: number) {
     if (amountMinor <= 0) return;
@@ -72,12 +112,7 @@ export class CreditService {
     });
   }
 
-  /**
-   * Credit movements are otherwise invisible until someone opens the wallet,
-   * so each one posts a notification. createCommerceNotification() dedupes on
-   * eventKey, which mirrors the ledger's own idempotency — a replayed grant
-   * cannot produce a second notification.
-   */
+  /** Posts a notification for a credit movement; dedupes on eventKey so a replayed grant can't double-notify. */
   private async notify(userId: string, eventKey: string, copy: { title: string; body: string }) {
     await createCommerceNotification({
       eventKey,
@@ -89,13 +124,7 @@ export class CreditService {
     }).catch(() => undefined);
   }
 
-  /**
-   * Returns a share of the order back as Hook credit once payment is confirmed.
-   *
-   * Credited at payment rather than delivery so the success screen can show a
-   * figure that is already true. Keyed on the order, so a replayed Paystack
-   * webhook — which does happen — cannot credit the same order twice.
-   */
+  /** Credits a share of the order back at payment, keyed on the order so a replayed Paystack webhook can't credit it twice. */
   async earnOnOrder(
     input: { userId: string; orderId: string; subtotalMinor: number },
     session?: ClientSession,
@@ -121,8 +150,7 @@ export class CreditService {
       idempotencyKey: `earn:${input.orderId}`,
       note: 'Earned from an order',
     }, session);
-    // Inside a transaction the notification is left to the outbox consumer so
-    // the commit never waits on, or is undone by, a notification failure.
+    // Inside a transaction, the notification is left to the outbox consumer so the commit doesn't depend on it.
     if (!session) await this.announceEarn(input.userId, input.orderId, amountMinor);
     return entry;
   }
@@ -135,11 +163,7 @@ export class CreditService {
     });
   }
 
-  /**
-   * Reverses an earn when the order it rewarded is cancelled. Posts a negative
-   * entry rather than deleting the original, so the ledger stays append-only
-   * and the history still shows what happened.
-   */
+  /** Reverses an earn on order cancellation by posting a negative entry, keeping the ledger append-only. */
   async reverseEarn(input: { userId: string; orderId: string }, session?: ClientSession) {
     const earned = await CreditLedger.findOne({
       userId: input.userId,
@@ -168,10 +192,7 @@ export class CreditService {
     return Math.min(Math.max(percent, 0), 100);
   }
 
-  /**
-   * How much of this order credits may cover: the balance, capped at a share
-   * of the subtotal so a large balance cannot wipe out a small order.
-   */
+  /** Caps spendable credit at a share of the subtotal so a large balance cannot wipe out a small order. */
   async spendableFor(userId: string, subtotalMinor: number) {
     const [balance, percent] = await Promise.all([this.balance(userId), this.spendCapPercent()]);
     const cap = Math.floor((subtotalMinor * percent) / 100);
@@ -186,11 +207,7 @@ export class CreditService {
       .lean({ virtuals: true });
   }
 
-  /**
-   * Writes one ledger entry. The unique idempotencyKey is what makes a retried
-   * webhook or a replayed checkout confirm safe — a duplicate write is
-   * swallowed rather than double-crediting.
-   */
+  /** Writes one ledger entry; the unique idempotencyKey makes a retried webhook or replayed checkout confirm safe. */
   async record(input: {
     userId: string;
     type: CreditEntryType;
@@ -202,8 +219,7 @@ export class CreditService {
     note?: string;
   }, session?: ClientSession) {
     if (session) {
-      // A duplicate-key error would abort the surrounding transaction, so
-      // check for the replay first; the unique index still backstops a race.
+      // Check for the replay first since a duplicate-key error would abort the transaction; the unique index backstops a race.
       const existing = await CreditLedger.findOne({ idempotencyKey: input.idempotencyKey })
         .session(session)
         .lean({ virtuals: true });
@@ -227,12 +243,10 @@ export class CreditService {
   ) {
     if (input.amountMinor <= 0) return undefined;
     const key = `spend:${input.idempotencyKey}`;
-    // A replay of an already-booked spend must succeed even though the balance
-    // has since dropped by that very spend.
+    // A replay of an already-booked spend must succeed even though the balance has since dropped by that very spend.
     const already = await CreditLedger.findOne({ idempotencyKey: key }).session(session ?? null).lean({ virtuals: true });
     if (already) return already;
-    // Touch the customer's own document first: inside a transaction two spends for one customer then
-    // conflict on it and the second retries against the reduced balance, so credit cannot be spent twice.
+    // Touch the customer's document first so two concurrent spends conflict on it and the second retries against the reduced balance.
     if (session) await User.updateOne({ _id: input.userId }, { $inc: { creditSpendCounter: 1 } }, { session, strict: false });
     const balance = await this.balance(input.userId, session);
     if (balance < input.amountMinor) {

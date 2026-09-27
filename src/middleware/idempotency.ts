@@ -3,33 +3,13 @@ import type { NextFunction, Request, Response } from 'express';
 import { IdempotencyRecord } from '@models/platform/idempotency-record.model';
 import { HttpError, isDuplicateKeyError } from '@utils/http';
 
-/**
- * Shared idempotency for retryable mutations.
- *
- * A request is identified by (actor, operation, Idempotency-Key). The first
- * one runs and its response is stored; a retry with the same key and body gets
- * that response back without running the handler again. The same key with a
- * different body is a client bug and is rejected. A concurrent duplicate gets
- * 409 OPERATION_IN_PROGRESS rather than a second execution.
- *
- * Tiers:
- *  - 'financial'  (T1) money or irreversible effects; key required when enforced
- *  - 'consequential' (T2) key required when enforced
- *  - 'crud' (T3)  key honoured if sent, never required
- *
- * "Required" is enforced by default (see idempotencyEnforced()). Endpoints keep their own
- * business-level key checks either way.
- */
+/** Shared idempotency for retryable mutations, keyed on (actor, operation, Idempotency-Key), with tiers financial/consequential/crud controlling whether a key is required. */
 type Tier = 'financial' | 'consequential' | 'crud';
 
 const LEASE_MS = 60_000;
 const TTL_MS = 24 * 60 * 60_000;
 
-/**
- * Required keys are enforced by default. IDEMPOTENCY_ENFORCE=false turns it
- * into a warning header, for a rollout where older clients that do not send
- * keys are still in the field.
- */
+/** Required keys are enforced by default; IDEMPOTENCY_ENFORCE=false turns it into a warning header for older clients still in the field. */
 export function idempotencyEnforced() {
   return process.env.IDEMPOTENCY_ENFORCE !== 'false';
 }
@@ -69,12 +49,7 @@ function keyFrom(req: Request) {
 export function withIdempotency(options: {
   operation: string;
   tier: Tier;
-  /**
-   * What "the same request" means, when the whole body is too strict. Checkout
-   * confirm passes a fresh single-use preview token on every attempt, so a
-   * retry of the same checkout has a different body; it identifies itself by
-   * route params only and the service matches the key to the existing order.
-   */
+  /** What "the same request" means when the whole body is too strict (e.g. checkout confirm's fresh single-use preview token). */
   fingerprint?: (req: Request) => unknown;
 }) {
   return async (req: Request, res: Response, next: NextFunction) => {
@@ -120,8 +95,7 @@ export function withIdempotency(options: {
           res.setHeader('Retry-After', '2');
           throw new HttpError(409, 'This request is already being processed', undefined, 'OPERATION_IN_PROGRESS');
         }
-        // The first attempt died without finishing. Take over its lease; the
-        // handler is idempotent by construction, so re-running is safe.
+        // The first attempt died without finishing; take over its lease since re-running is safe.
         const reclaimed = await IdempotencyRecord.findOneAndUpdate(
           { ...identity, state: 'in_progress', lockedUntil: { $lt: now } },
           { $set: { lockedUntil: new Date(now.getTime() + LEASE_MS) } },
@@ -138,9 +112,7 @@ export function withIdempotency(options: {
       const originalJson = res.json.bind(res);
       res.json = ((body: unknown) => {
         const status = res.statusCode;
-        // Only successes are remembered. A failed attempt (validation, a
-        // changed balance, a 5xx) releases the key so the client can fix the
-        // request and retry; the handlers themselves are idempotent.
+        // Only successes are remembered; a failed attempt releases the key so the client can fix the request and retry.
         const settle = status >= 300
           ? IdempotencyRecord.deleteOne({ _id: recordId })
           : IdempotencyRecord.updateOne({ _id: recordId }, { $set: { state: 'completed', statusCode: status, responseBody: body } });

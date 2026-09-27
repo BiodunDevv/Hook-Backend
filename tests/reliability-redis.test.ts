@@ -121,8 +121,7 @@ test('bullmq: a burst of outbox wake-ups collapses into one pending job', opts, 
   for (let i = 0; i < 8; i += 1) wakeOutbox();
   const conn = createBullConnection();
   const queue = new Queue('hook-jobs', { connection: conn, prefix: bullPrefix() });
-  // The remote Redis can be slow to receive the adds, so wait for the first one
-  // to land (up to 8s) instead of guessing a fixed delay, then let the rest settle.
+  // The remote Redis can be slow to receive the adds, so wait for the first one to land (up to 8s) instead of guessing a fixed delay.
   let counts = await queue.getJobCounts('waiting', 'delayed', 'active');
   for (let i = 0; i < 16 && counts.waiting + counts.delayed + counts.active === 0; i += 1) {
     await sleep(500);

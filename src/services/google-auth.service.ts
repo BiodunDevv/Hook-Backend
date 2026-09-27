@@ -3,11 +3,7 @@ import { HttpError } from '@utils/http';
 
 const googleClient = new OAuth2Client();
 
-/**
- * The native Google Sign-In SDK issues ID tokens whose audience is the **Web**
- * client ID, not the platform client ID — so the web client must be accepted
- * alongside the iOS/Android ones for mobile sign-in to verify.
- */
+/** The native Google Sign-In SDK issues ID tokens audienced to the Web client ID, not the platform one, so the web client must be accepted alongside iOS/Android for mobile sign-in to verify. */
 function configuredAudiences() {
   return [
     process.env.GOOGLE_WEB_CLIENT_ID,

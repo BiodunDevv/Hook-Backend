@@ -12,13 +12,7 @@ function stateScope(req: Request) {
   return req.user?.scopeType === ScopeType.GLOBAL ? undefined : req.user?.assignedStateIds;
 }
 
-/**
- * Product lifecycle/negotiation-rules/availability actions, now mounted under
- * /admin/products/:id/* alongside the rest of Product Inventory. The dashboard,
- * list, detail, preview, content and pricing endpoints this controller used to
- * expose were retired with the standalone Commercial Catalog page — Product
- * Inventory's own list/detail/edit routes replace them.
- */
+/** Product lifecycle/negotiation-rules/availability actions, now mounted under /admin/products/:id/* since the standalone Commercial Catalog page (and its other endpoints) was retired in favor of Product Inventory. */
 export class AdminCommercialCatalogController {
   private readonly catalog = new CommercialCatalogService();
   private readonly availability = new CatalogAvailabilityService();

@@ -2,6 +2,9 @@ import { Router } from "express";
 import { AdminCategoriesController } from "@controllers/admin/categories.controller";
 import { AdminCouponsController } from "@controllers/admin/coupons.controller";
 import { AdminSavedViewsController } from "@controllers/admin/saved-views.controller";
+import { AdminWaitlistController } from "@controllers/admin/waitlist.controller";
+import { AdminCommunicationsController } from "@controllers/admin/communications.controller";
+import { AdminFaqController } from "@controllers/admin/faq.controller";
 import { AdminLogisticsProvidersController } from "@controllers/admin/logistics-providers.controller";
 import { AdminDashboardController } from "@controllers/admin/dashboard.controller";
 import { AdminOverviewController } from "@controllers/admin/overview.controller";
@@ -43,6 +46,13 @@ import {
   adminRefundReviewSchema,
   deletionUpdateSchema,
   refundSchema,
+  adminGiftCreditSchema,
+  waitlistBroadcastSchema,
+  waitlistGiftSchema,
+  communicationsPreviewSchema,
+  communicationsSendSchema,
+  faqCreateSchema,
+  faqUpdateSchema,
 } from "@validations/common.schemas";
 import {
   lifecycleReasonSchema,
@@ -99,6 +109,9 @@ export function createAdminRouter() {
   const categories = new AdminCategoriesController();
   const coupons = new AdminCouponsController();
   const savedViews = new AdminSavedViewsController();
+  const waitlist = new AdminWaitlistController();
+  const communications = new AdminCommunicationsController();
+  const faqs = new AdminFaqController();
   const logisticsProviders = new AdminLogisticsProvidersController();
   const operations = new AdminOperationsController();
   const commerce = new AdminCommerceController();
@@ -216,6 +229,12 @@ export function createAdminRouter() {
     "/users/:id/hard-delete",
     requireSuperAdmin,
     asyncHandler(users.hardDelete),
+  );
+  router.post(
+    "/users/:id/gift-credit",
+    requirePermission("credits.adjust"),
+    validateBody(adminGiftCreditSchema),
+    asyncHandler(users.giftCredit),
   );
 
   // ── Categories (taxonomy managed through explicit catalog permissions) ──
@@ -354,6 +373,65 @@ export function createAdminRouter() {
     requirePermission("products.view"),
     asyncHandler(savedViews.remove),
   );
+
+  // ── Waitlist ───────────────────────────────────────────────────────────
+  router.get(
+    "/waitlist",
+    requirePermission("waitlist.view"),
+    asyncHandler(waitlist.list),
+  );
+  router.delete(
+    "/waitlist/:id",
+    requirePermission("waitlist.manage"),
+    asyncHandler(waitlist.remove),
+  );
+  router.post(
+    "/waitlist/broadcast",
+    requirePermission("waitlist.manage"),
+    validateBody(waitlistBroadcastSchema),
+    asyncHandler(waitlist.broadcast),
+  );
+  router.post(
+    "/waitlist/gift",
+    requirePermission("waitlist.manage"),
+    validateBody(waitlistGiftSchema),
+    asyncHandler(waitlist.gift),
+  );
+
+  // ── Communications (targeted push/email/inbox broadcasts) ───────────────
+  router.get(
+    "/communications",
+    requirePermission("communications.send"),
+    asyncHandler(communications.list),
+  );
+  router.get(
+    "/communications/search-users",
+    requirePermission("communications.send"),
+    asyncHandler(communications.searchUsers),
+  );
+  router.post(
+    "/communications/preview",
+    requirePermission("communications.send"),
+    validateBody(communicationsPreviewSchema),
+    asyncHandler(communications.preview),
+  );
+  router.post(
+    "/communications/send",
+    requirePermission("communications.send"),
+    validateBody(communicationsSendSchema),
+    asyncHandler(communications.send),
+  );
+  router.delete(
+    "/communications/:id",
+    requirePermission("communications.send"),
+    asyncHandler(communications.remove),
+  );
+
+  // ── FAQs (shown on /help and in the app) ────────────────────────────────
+  router.get("/faqs", requirePermission("faq.view"), asyncHandler(faqs.list));
+  router.post("/faqs", requirePermission("faq.manage"), validateBody(faqCreateSchema), asyncHandler(faqs.create));
+  router.patch("/faqs/:id", requirePermission("faq.manage"), validateBody(faqUpdateSchema), asyncHandler(faqs.update));
+  router.delete("/faqs/:id", requirePermission("faq.manage"), asyncHandler(faqs.remove));
 
   // ── Products ───────────────────────────────────────────────────────────
   router.get(

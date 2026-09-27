@@ -185,13 +185,7 @@ export class AdminCommerceController {
     });
     sendSuccess(res, result);
   };
-  /**
-   * Paginated payments with the order and customer resolved.
-   *
-   * The previous version returned a bare, unpaginated 100 rows carrying only
-   * the payment's own fields, so the admin table could not show who a payment
-   * was from or what it was for without an N+1 fetch per row.
-   */
+  /** Paginated payments with the order and customer resolved, avoiding an N+1 fetch per row. */
   payments = async (req: Request, res: Response) => {
     const page = Math.max(Number(req.query.page) || 1, 1);
     const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
@@ -199,8 +193,7 @@ export class AdminCommerceController {
     if (req.query.status && req.query.status !== 'all') query.commerceStatus = req.query.status;
     if (req.query.provider && req.query.provider !== 'all') query.gateway = req.query.provider;
     if (typeof req.query.search === 'string' && req.query.search.trim()) {
-      // Anchored and escaped: an unanchored user-supplied pattern would scan
-      // the whole collection, and a stray "(" would throw.
+      // Anchored and escaped: unanchored would scan the whole collection, and a stray "(" would throw.
       const safe = req.query.search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       query.$or = [
         { publicId: new RegExp(`^${safe}`, 'i') },
@@ -242,11 +235,7 @@ export class AdminCommerceController {
     sendSuccess(res, { data, total, page, limit, totalPages: Math.max(Math.ceil(total / limit), 1) });
   };
 
-  /**
-   * One payment with everything needed to answer "who is this from, by what
-   * method, and what happened" — the order, the customer, and every provider
-   * attempt in time order.
-   */
+  /** One payment with the order, the customer, and every provider attempt in time order. */
   paymentDetail = async (req: Request, res: Response) => {
     const identifier = routeParam(req.params.id);
     const payment = await Payment.findOne(
@@ -355,11 +344,7 @@ export class AdminCommerceController {
     const saved = settings?.paymentProviders?.length ? settings.paymentProviders : [
       { provider: 'paystack' as const, enabled: true, displayOrder: 1, isDefault: true },
     ];
-    // Every provider the backend actually knows about is shown, not only ones
-    // already written to settings — a newly registered provider (e.g. Monnify
-    // added this session) appears right away, disabled and non-default until
-    // an admin explicitly turns it on, rather than staying invisible until a
-    // separate data migration runs.
+    // Every provider the backend knows about is shown, not only ones already in settings, so a newly registered one appears disabled rather than staying invisible.
     const configured = [
       ...saved,
       ...readiness
@@ -495,8 +480,7 @@ export class AdminCommerceController {
   };
 
   updateHookCoinSettings = async (req: Request, res: Response) => {
-    // Only the keys actually sent are written, so a PATCH of one field cannot
-    // reset the others to their defaults.
+    // Only the keys actually sent are written, so a PATCH of one field cannot reset the others to their defaults.
     const { reason, ...fields } = req.body as Record<string, unknown>;
     const changes = Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined));
     const updated = await CommerceSettings.findOneAndUpdate(

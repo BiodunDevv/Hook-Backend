@@ -3,11 +3,7 @@ import { findStaleInvitations, purgeUnacceptedAccount } from '@services/stale-in
 
 const execute = process.argv.includes('--execute');
 
-/**
- * Removes accounts that were invited but never accepted and are now dead: a user with no profile (a failed create) or
- * one whose invitation was cancelled. Their emails become free to invite again. Pending invitations still waiting on
- * a reply are left alone.
- */
+/** Removes dead invited-but-never-accepted accounts (failed create or cancelled invitation) so their emails can be reused; pending invitations are left alone. */
 async function main() {
   await connectDatabase();
   const stale = await findStaleInvitations();

@@ -2,8 +2,7 @@ import { z } from 'zod';
 
 const moneyMinor = z.coerce.number().int().nonnegative().max(10_000_000_000);
 const reason = z.string().trim().min(3).max(500).optional();
-// Coupons affect what every customer pays, so — unlike the optional `reason` above,
-// which other rows in this file still use — an audit reason is mandatory here.
+// Coupons affect what every customer pays, so unlike the optional `reason` above, an audit reason is mandatory here.
 const couponReason = z.string().trim().min(5).max(500);
 
 export const logisticsProviderCreateSchema = z.object({
@@ -49,10 +48,7 @@ export const couponUpdateSchema = z.object({
   reason: couponReason,
 }).strict().superRefine(validateCouponShape);
 
-/**
- * `value` means different things per type, so the bounds differ: a percentage
- * above 100 would pay the customer, and a fixed amount of zero is a no-op.
- */
+/** `value`'s bounds differ by type: a percentage above 100 would pay the customer, and a fixed amount of zero is a no-op. */
 function validateCouponShape(
   data: { type?: string; value?: number; startsAt?: Date; endsAt?: Date },
   ctx: z.RefinementCtx,

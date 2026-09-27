@@ -48,6 +48,9 @@ export const PUBLIC_ID_PREFIXES = {
   couponRedemption: 'CRD',
   referral: 'REF',
   itemResolution: 'IRS',
+  waitlistEntry: 'WTL',
+  broadcast: 'BRC',
+  faq: 'FAQ',
 } as const;
 
 export type PublicIdDomain = keyof typeof PUBLIC_ID_PREFIXES;

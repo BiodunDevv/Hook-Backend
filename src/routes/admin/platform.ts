@@ -100,6 +100,7 @@ const partnerSchema = z.object({
   stateId: z.string().min(1),
   cityId: z.string().min(1),
   zoneId: z.string().optional(),
+  marketId: z.string().optional(),
   address: z.string().trim().min(5).max(500),
   coordinates,
   contact: z.record(z.string(), z.unknown()),
@@ -243,6 +244,11 @@ export function createPlatformAdminRouter() {
   router.post('/partners/:id/reactivate', validateBody(lifecycleSchema), asyncHandler(controller.partnerStatus));
   router.post('/partners/:id/resend-invitation', asyncHandler(controller.resendPartnerInvitation));
   router.post('/partners/:id/cancel-invitation', validateBody(lifecycleSchema), asyncHandler(controller.cancelPartnerInvitation));
+  router.post('/partners/:id/archive', validateBody(lifecycleSchema), asyncHandler(controller.archivePartner));
+  router.post('/partners/:id/restore', validateBody(lifecycleSchema), asyncHandler(controller.restorePartner));
+  router.post('/partners/:id/revoke-sessions', validateBody(lifecycleSchema), asyncHandler(controller.revokePartnerSessions));
+  router.delete('/partners/:id', requireSuperAdmin, validateBody(deleteAccountSchema), asyncHandler(controller.deletePartner));
+  router.get('/partners/:id/analytics', asyncHandler(controller.partnerAnalytics));
 
   router.get('/market-associates', asyncHandler(controller.listMarketAssociates));
   router.post('/market-associates', validateBody(marketAssociateSchema), asyncHandler(controller.createMarketAssociate));

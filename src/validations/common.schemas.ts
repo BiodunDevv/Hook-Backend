@@ -207,14 +207,9 @@ export const adminProductUpdateSchema = productBaseSchema.extend({
     ProductStatus.UNPUBLISHED,
     ProductStatus.DISABLED,
   ]).optional(),
-  // Which market vendor supplies this product. Admin-only reassignment —
-  // create doesn't take it, since a product's vendor is normally set by a
-  // Market Associate's own submission. An empty string clears the link
-  // ("no vendor for this product"); the controller resolves it to null.
+  // Admin-only reassignment of the supplying market vendor; an empty string clears the link.
   sourceMarketVendorId: z.string().trim().max(80).optional(),
-  // Required only when a price field actually changes from its stored value —
-  // enforced in the controller, which is the only place that can compare
-  // against what the product currently has (this schema has no access to it).
+  // Required only when a price field changes, which the controller enforces since this schema can't see the stored value.
   reason: z.string().trim().min(5).max(500).optional(),
 }).partial().superRefine(validateNegotiationFloor);
 
@@ -348,8 +343,7 @@ export const giftCreateSchema = z.object({
 });
 export const giftClaimSchema = z.object({ token: z.string().min(32) });
 export const boothInventorySchema = z.object({ productIds: z.array(idSchema).max(500) });
-// Account deletion. Ownership is proven with a password, or with an emailed
-// code for accounts that signed in with Google/Apple and so have no password.
+// Account deletion: ownership is proven with a password, or an emailed code for passwordless Google/Apple accounts.
 const ownerProof = {
   password: z.string().min(1).max(200).optional(),
   code: z.string().regex(/^\d{6}$/, 'Enter the 6-digit code').optional(),
@@ -370,11 +364,52 @@ export const publicDeletionCancelSchema = z.union([
   z.object({ token: z.string().min(20).max(200) }).strict(),
   publicDeletionProofSchema,
 ]);
+export const waitlistJoinSchema = z.object({
+  email: emailField,
+  name: z.string().trim().min(2).max(120),
+  // A ticked consent checkbox so the landing page cannot join people without asking them first.
+  consent: z.literal(true, { message: 'Consent to be contacted is required to join the waitlist' }),
+}).strict();
+export const waitlistBroadcastSchema = z.object({
+  subject: z.string().trim().min(3).max(150),
+  message: z.string().trim().min(3).max(5000),
+  targetIds: z.array(z.string().trim().min(3).max(80)).max(5000).optional(),
+}).strict();
+export const waitlistGiftSchema = z.object({
+  amountMinor: z.coerce.number().int().positive().max(100_000_000),
+  reason: z.string().trim().min(5).max(300),
+  targetIds: z.array(z.string().trim().min(3).max(80)).max(5000).optional(),
+}).strict();
+export const adminGiftCreditSchema = z.object({
+  amountMinor: z.coerce.number().int().positive().max(100_000_000),
+  reason: z.string().trim().min(5).max(300),
+  idempotencyKey: z.string().trim().min(10).max(160),
+}).strict();
+const communicationsAudienceSchema = z.union([
+  z.object({ segment: z.literal('customers') }).strict(),
+  z.object({ segment: z.literal('market_associates'), stateIds: z.array(z.string().trim().min(1).max(80)).max(60).optional() }).strict(),
+  z.object({ segment: z.literal('staff'), roleKey: z.string().trim().min(1).max(80).optional() }).strict(),
+  z.object({ userIds: z.array(z.string().trim().min(3).max(80)).min(1).max(5000) }).strict(),
+]);
+export const communicationsPreviewSchema = z.object({
+  audience: communicationsAudienceSchema,
+}).strict();
+export const communicationsSendSchema = z.object({
+  title: z.string().trim().min(3).max(150),
+  body: z.string().trim().min(3).max(2000),
+  channels: z.array(z.enum(['push', 'email', 'inbox'])).min(1).max(3),
+  audience: communicationsAudienceSchema,
+}).strict();
+export const faqCreateSchema = z.object({
+  question: z.string().trim().min(3).max(200),
+  answer: z.string().trim().min(3).max(2000),
+  order: z.coerce.number().int().min(0).max(10000).optional(),
+  isActive: z.boolean().optional(),
+}).strict();
+export const faqUpdateSchema = faqCreateSchema.partial();
 export const deletionUpdateSchema = z
   .object({
-    // Pause freezes automatic erasure; cancel restores the account; erase_now
-    // skips the remaining cooling-off (for a verified legal request) and still
-    // refuses while orders or refunds are in progress.
+    // erase_now skips the remaining cooling-off for a verified legal request, but still refuses mid-order or mid-refund.
     action: z.enum(['pause', 'resume', 'cancel', 'erase_now']).optional(),
     // Older admin builds send a status instead of an action.
     status: z.enum(['identity_verified', 'cooling_off', 'approved', 'anonymized', 'cancelled']).optional(),

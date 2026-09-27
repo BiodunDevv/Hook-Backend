@@ -44,11 +44,7 @@ type SubmissionInput = {
   version?: number;
 };
 
-// Mirrors submissionApproveAsProductSchema (src/validations/catalog.schemas.ts):
-// approving a submission now takes the same field set as Product Inventory's
-// own "New Product" form, plus the ProductSubmission's own optimistic-
-// concurrency version. reason/fields stay optional — an admin completing the
-// remaining product info isn't required to also type a review note.
+// Mirrors submissionApproveAsProductSchema; reason/fields stay optional since completing product info doesn't require a review note.
 type ApproveAsProductInput = {
   title: string;
   description?: string;

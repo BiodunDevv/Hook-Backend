@@ -14,11 +14,7 @@ export interface AccessContext {
 }
 
 export async function resolveAccessContext(accountId: string, knownUser?: any): Promise<AccessContext> {
-  // `knownUser` is req.user, which carries neither isActive nor accountStatus
-  // — the auth middleware has already verified both and does not pass them on.
-  // Trusting it for the liveness check below made isActiveAccount() read
-  // `undefined` and reject every live account, so re-read when those fields
-  // are absent rather than treating missing as inactive.
+  // `knownUser` (req.user) omits isActive/accountStatus, so re-read from the DB when those fields are absent rather than treating missing as inactive.
   const canTrustKnownUser =
     knownUser && (knownUser.isActive !== undefined || knownUser.accountStatus !== undefined);
   const [user, staff] = await Promise.all([
@@ -28,9 +24,7 @@ export async function resolveAccessContext(accountId: string, knownUser?: any): 
   if (!user || !isActiveAccount(user)) {
     throw new HttpError(401, 'Account is not active', undefined, 'TOKEN_INVALID');
   }
-  // Older seeded super-admin accounts may predate StaffProfile. Keep the
-  // recovery authority usable while the next full seed repairs the profile;
-  // an existing suspended or disabled profile still fails closed below.
+  // Older seeded super-admin accounts may predate StaffProfile; keep recovery authority usable until the next full seed repairs the profile.
   if (!staff && user.role === 'super_admin') {
     const superAdminRole = await Role.findOne({ key: 'SUPER_ADMIN', isActive: true }).lean();
     return {

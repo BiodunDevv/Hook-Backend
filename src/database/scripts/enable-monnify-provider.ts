@@ -3,18 +3,7 @@ import { CommerceSettings } from '@models/commerce/commerce.model';
 
 const execute = process.argv.includes('--execute');
 
-/**
- * Adds Monnify to CommerceSettings.paymentProviders as the default provider,
- * keeping Paystack enabled but no longer default. New checkouts will pick it
- * up via defaultProviderName(); existing Payment/PaymentAttempt rows are
- * untouched, since they already carry their own `gateway`/`provider` value
- * set at creation time and always dispatch through that, not this setting.
- *
- * Run this only after MONNIFY_API_KEY / MONNIFY_SECRET_KEY / MONNIFY_CONTRACT_CODE
- * are configured and readiness() reports Monnify as configured — flipping the
- * default before that would send new checkouts to a provider that can't
- * actually initialize a payment.
- */
+/** Makes Monnify the default payment provider (Paystack stays enabled as fallback); run only after Monnify's env vars are configured, or new checkouts will hit a provider that can't initialize a payment. */
 async function main() {
   await connectDatabase();
   const settings = await CommerceSettings.findOne({ key: 'commerce' }).select('paymentProviders');

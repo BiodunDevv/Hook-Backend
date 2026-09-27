@@ -22,13 +22,7 @@ async function runOnce(job: JobDefinition) {
   }
 }
 
-/**
- * Development / single-process fallback. With Redis configured each tick is
- * claimed with a lock shared with the BullMQ worker, so running both is safe:
- * whichever fires first runs it. Without Redis nothing can stop two API
- * instances both running each job, so production runs `npm run worker`
- * instead and leaves this off.
- */
+/** Development/single-process fallback; with Redis configured, a shared lock with the BullMQ worker makes running both safe, but without Redis production must leave this off and use `npm run worker` instead. */
 export function startInProcessJobs() {
   for (const job of JOBS) {
     if (job.everyMs) {

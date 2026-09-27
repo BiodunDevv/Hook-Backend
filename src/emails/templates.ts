@@ -14,8 +14,10 @@ import {
   OtpEmailPayload,
   PaymentConfirmedEmailPayload,
   RefundEmailPayload,
+  BroadcastMessageEmailPayload,
   SubmissionDecisionEmailPayload,
   VendorDecisionEmailPayload,
+  WaitlistMessageEmailPayload,
   WelcomeEmailPayload,
 } from './email.types';
 
@@ -24,8 +26,7 @@ const templateDirs = [
   path.join(process.cwd(), 'src', 'emails', 'templates'),
 ];
 
-// Template files are static content bundled with the app and never change at runtime, so once read they are kept
-// in memory — without this, every single email render re-read its template from disk synchronously.
+// Cached in memory since templates never change at runtime; avoids a synchronous disk read on every email render.
 const templateFileCache = new Map<string, string>();
 
 function readTemplateFile(fileName: string) {
@@ -44,13 +45,7 @@ function readTemplateFile(fileName: string) {
 
 const emailStyles = readTemplateFile('base.css');
 
-/**
- * Set once per send by EmailService before any render*Template() call, from
- * the DB-backed admin Email Configuration settings. Kept as a plain module
- * variable (not threaded through all 19 render functions' signatures) so
- * baseValues() stays synchronous — EmailService is the only place that needs
- * to know settings are DB-backed at all.
- */
+/** Set once per send by EmailService from the DB-backed Email Configuration settings, kept as a module variable so baseValues() stays synchronous. */
 let resolvedEmailSettings: { appName?: string; appUrl?: string; supportEmail?: string } = {};
 
 export function setResolvedEmailSettings(values: { appName?: string; appUrl?: string; supportEmail?: string }) {
@@ -77,9 +72,7 @@ function money(value = 0) {
 function renderTemplate(fileName: string, values: Record<string, unknown>) {
   const html = readTemplateFile(fileName);
   return html
-    // Triple braces inject trusted, internally-generated markup (e.g. the
-    // order line-item rows built by orderLinesHtml below). Never use this
-    // for values that originate from user input.
+    // Triple braces inject trusted, internally-generated markup; never use this for user-supplied values.
     .replace(/\{\{\{\s*([a-zA-Z0-9_]+)\s*\}\}\}/g, (_match, key) => String(values[key] ?? ''))
     .replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_match, key) => {
       if (key === 'emailStyles') return emailStyles;
@@ -87,14 +80,10 @@ function renderTemplate(fileName: string, values: Record<string, unknown>) {
     });
 }
 
-/**
- * Builds the itemised recap rows. Every value is escaped here because the
- * result is injected raw via the triple-brace token.
- */
+/** Builds the itemised recap rows; every value is escaped since the result is injected raw via the triple-brace token. */
 function orderLinesHtml(lines?: OrderEmailLine[]) {
   if (!lines?.length) return '';
-  // Laid out as a table, not flex: Outlook and several webmail clients drop
-  // flex entirely, which would stack the thumbnail above the title.
+  // Laid out as a table, not flex: Outlook and several webmail clients drop flex entirely and would stack the thumbnail above the title.
   return lines
     .map((line) => {
       const thumb = line.imageUrl
@@ -115,10 +104,7 @@ function optionalRowHtml(label: string, value?: number) {
   return `<div class="row"><span class="label">${escapeHtml(label)}</span><span class="value">${escapeHtml(money(value))}</span></div>`;
 }
 
-/**
- * The dark delivery block. Rendered whole (or not at all) because the template
- * engine only substitutes values — it has no conditionals.
- */
+/** The dark delivery block, rendered whole or not at all since the template engine only substitutes values and has no conditionals. */
 function deliveryBlockHtml(payload: { deliveryAddress?: string; expectedDeliveryDate?: string; appUrl: string }) {
   if (!payload.deliveryAddress && !payload.expectedDeliveryDate) return '';
   const columns = [
@@ -175,6 +161,41 @@ export function welcomeEmailTemplate(payload: WelcomeEmailPayload) {
     subject: 'Welcome to Hook',
     html: renderTemplate('welcome.html', baseValues({ name: payload.name || 'there' })),
     text: `Welcome to Hook${payload.name ? `, ${payload.name}` : ''}.`,
+  };
+}
+
+/** An admin-composed message to a waitlist entry; the free-text body is escaped and turned into paragraphs rather than trusted as HTML. */
+export function waitlistMessageEmailTemplate(payload: WaitlistMessageEmailPayload) {
+  const messageHtml = payload.message
+    .split(/\n{2,}/)
+    .map((paragraph) => `<p class="lead">${escapeHtml(paragraph).replace(/\n/g, '<br>')}</p>`)
+    .join('');
+  return {
+    subject: payload.subject,
+    html: renderTemplate('waitlist-message.html', baseValues({
+      name: payload.name || 'there',
+      subject: payload.subject,
+      messageHtml,
+      unsubscribeUrl: payload.unsubscribeUrl,
+    })),
+    text: `${payload.message}\n\nNo longer want these emails? Unsubscribe: ${payload.unsubscribeUrl}`,
+  };
+}
+
+/** An admin-composed message to an existing account (Communications page) — no unsubscribe link, since this only reaches accounts that already exist, not a marketing list. */
+export function broadcastMessageEmailTemplate(payload: BroadcastMessageEmailPayload) {
+  const messageHtml = payload.message
+    .split(/\n{2,}/)
+    .map((paragraph) => `<p class="lead">${escapeHtml(paragraph).replace(/\n/g, '<br>')}</p>`)
+    .join('');
+  return {
+    subject: payload.subject,
+    html: renderTemplate('broadcast-message.html', baseValues({
+      name: payload.name || 'there',
+      subject: payload.subject,
+      messageHtml,
+    })),
+    text: payload.message,
   };
 }
 
@@ -258,10 +279,7 @@ export function hookNewOrderEmailTemplate(payload: OrderEmailPayload) {
   };
 }
 
-/**
- * Sent when a payment link is created, so a customer who abandons checkout has
- * the link in their inbox rather than only in the app session that created it.
- */
+/** Sent when a payment link is created, so a customer who abandons checkout still has the link in their inbox. */
 export function orderAwaitingPaymentEmailTemplate(payload: OrderEmailPayload & { paymentUrl: string }) {
   return {
     subject: `Complete your payment for ${payload.orderCode}`,
@@ -442,10 +460,7 @@ export function availabilityDigestEmailTemplate(payload: AvailabilityDigestEmail
   };
 }
 
-/**
- * One layout, five moods. Every value is escaped by renderTemplate except the
- * two triple-brace blocks below, which are built here from escaped parts.
- */
+/** One layout, five moods; every value is escaped by renderTemplate except the triple-brace blocks, built here from escaped parts. */
 export function accountDeletionEmailTemplate(payload: AccountDeletionEmailPayload) {
   const date = payload.scheduledFor || 'the scheduled date';
   const cancelButton = payload.cancelUrl

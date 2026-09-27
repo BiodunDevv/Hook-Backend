@@ -23,20 +23,7 @@ import { restoreOrderIncentives } from '@services/order-restoration.service';
 import { AccountDeletionService, formatDeletionDate, sha256 } from '@services/account-deletion.service';
 import { nextPublicId } from '@services/public-id.service';
 
-/**
- * Permanently removes a customer's personal data once their cooling-off window
- * ends. It runs from the worker and is built to be interrupted:
- *
- *  - the request is claimed atomically (cooling_off -> erasing), so two workers
- *    never erase the same person;
- *  - every step is idempotent and recorded in `erasureSteps`, so a crash resumes
- *    where it stopped instead of repeating or skipping work;
- *  - the "still blocked?" check runs before anything destructive, so an order
- *    that started after the request defers erasure instead of being erased.
- *
- * KEPT, with identity removed: orders, order items, payments, refunds, the Hook
- * Coin ledger and audit logs. These are financial records Hook must retain.
- */
+/** Permanently removes a customer's personal data after the cooling-off window, atomically claimed and resumable step-by-step; financial records (orders, payments, refunds, ledger, audit logs) are kept with identity removed. */
 
 const STALE_ERASURE_MS = 10 * 60_000;
 const DEFER_MS = 24 * 60 * 60_000;
@@ -230,9 +217,7 @@ export class AccountErasureService {
 
   /** Orders stay for financial records; who they were for and where they went do not. */
   private async scrubOrders(userId: string) {
-    // A $set of an object literal MERGES into the existing sub-document, which
-    // would leave the email, phone and street in place. So build the clean
-    // versions into temporary fields, drop the originals, then move them back.
+    // A $set of an object literal merges into the existing sub-document, so build clean versions into temp fields, drop the originals, then move them back.
     await Order.updateMany({ userId } as any, [
       {
         $set: {

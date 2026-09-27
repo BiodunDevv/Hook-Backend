@@ -59,12 +59,7 @@ export async function updatePreferences(userId: string, patch: { groups?: Partia
   return next;
 }
 
-/**
- * The one way to notify a customer about something scheduled or announced.
- * Transactional types always go out. Engagement types are held back when the
- * customer switched the group off, when it is quiet hours (the caller retries
- * on its next run), or when today's or this week's cap is used up.
- */
+/** The one way to notify a customer; transactional types always go out, while engagement types are held back by preference, quiet hours, or the daily/weekly cap. */
 export async function dispatchNotification(input: {
   type: string;
   userId: string;

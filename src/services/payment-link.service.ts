@@ -69,8 +69,7 @@ export class PaymentLinkService {
       createdBy: customerId,
     });
     const url = `${paymentOrigin()}/payment/${token}`;
-    // Fire-and-forget: the customer must still get their link back even if
-    // the mail fails, and the raw token only exists here.
+    // Fire-and-forget: the customer must still get their link back even if the mail fails.
     void this.emailAwaitingPayment(order, customerId, url, Number(payment.amountMinor || 0));
     return {
       id: link.publicId,

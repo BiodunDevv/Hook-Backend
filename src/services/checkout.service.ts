@@ -96,18 +96,7 @@ export class CheckoutService {
   private credits = new CreditService();
   private logisticsProviders = new LogisticsProviderService();
 
-  /**
-   * The single source of truth for checkout money. preview() and confirm()
-   * both call this, so the totals confirm re-derives can never drift from the
-   * ones the customer was quoted — the exact-equality revalidation below
-   * depends on that.
-   *
-   * Order of operations: a coupon discounts the item subtotal (so it also
-   * lowers the VAT basis, which is "product_subtotal") unless it is a
-   * free-delivery coupon, which discounts the shipping line instead. Credits
-   * come off last, capped at a share of the subtotal, and never take the
-   * payable below zero.
-   */
+  /** Single source of truth for checkout money — preview() and confirm() both call this so totals never drift; coupons discount the subtotal (or the delivery fee, if free-delivery), and credits apply last, capped, never below zero. */
   private async calculateMoney(input: {
     customerId: string;
     subtotalMinor: number;
@@ -147,10 +136,7 @@ export class CheckoutService {
       0,
       input.subtotalMinor - itemDiscountMinor + vatMinor + deliveryFeeMinor + podSurchargeMinor,
     );
-    // Credits are a prepayment instrument: they come off what Hook collects
-    // up front. On Pay at Handover there is nothing to collect up front, so
-    // there is nothing for them to reduce — they stay in the wallet instead
-    // of silently vanishing against a cash-on-delivery total.
+    // Credits are a prepayment instrument, so they don't apply on Pay at Handover — there's nothing collected up front for them to reduce.
     const creditsEligible = input.paymentMethod === CommercePaymentMethod.PREPAID;
     const creditsAppliedMinor = input.useCredits && creditsEligible
       ? Math.min(
@@ -400,8 +386,7 @@ export class CheckoutService {
     );
     // A State can ask for a higher (or lower) minimum than the global one.
     const podMinimumMinor = Number((deliveryState as any).podMinimumOrderMinor ?? settings.podMinimumOrderMinor ?? 3_000_000);
-    // The minimum is judged on what the order really comes to (goods after discount, VAT and delivery), not on goods alone.
-    // The Pay on Delivery surcharge and Hook credit are left out so choosing either never changes eligibility.
+    // The minimum is judged on the order's real value (goods after discount, VAT and delivery) — the POD surcharge and Hook credit are excluded so choosing either never changes eligibility.
     const orderValueMinor = Math.max(0, subtotalMinor - (coupon?.appliesToDelivery ? 0 : couponDiscountMinor) + vatMinor + deliveryFeeMinor);
     const podEnabled = Boolean(
       settings.podEnabled &&
@@ -491,8 +476,7 @@ export class CheckoutService {
           input.paymentMethod === CommercePaymentMethod.PAY_AT_HANDOVER,
         feeDueNowMinor: podFeeDueNowMinor,
         surchargeMinor: podSurchargeMinor,
-        // A paid fee approves the order on its own when the admin allows it, the order is not high value
-        // and the customer is in good standing. Anything else keeps the manual confirmation call.
+        // A paid fee auto-approves the order when the admin allows it, it isn't high value, and the customer is in good standing; anything else keeps the manual confirmation call.
         autoApprove: isPod && settings.podAutoApproveEnabled !== false && !highValue,
       },
       podSurchargeMinor,
@@ -633,15 +617,12 @@ export class CheckoutService {
       (sum, line) => sum + Number(line.totalPriceMinor),
       0,
     );
-    // calculateMoney() takes the GROSS delivery fee and applies any
-    // free-delivery coupon itself, so this must be the pre-discount figure
-    // that was quoted — preview.deliveryFeeMinor is already net of it.
+    // calculateMoney() applies any free-delivery coupon itself, so this must be the pre-discount gross fee — preview.deliveryFeeMinor is already net of it.
     let currentGrossDeliveryFeeMinor = Number(
       (preview.deliveryPricing as any)?.feeMinor ?? preview.deliveryFeeMinor,
     );
     if (preview.logisticsProviderId) {
-      // Re-resolve the courier: an admin may have withdrawn it since the quote.
-      // The courier no longer sets the price; the delivery State does.
+      // Re-resolve the courier in case an admin withdrew it since the quote; the delivery State sets the price, not the courier.
       await this.logisticsProviders.getSelectable(String(preview.logisticsProviderId));
     }
     if (preview.deliveryMethod === DeliveryMethod.HOME_DELIVERY) {
@@ -670,9 +651,7 @@ export class CheckoutService {
       );
     }
 
-    // Re-run the same money math the quote used. This re-validates the coupon
-    // as a side effect, so one that expired or hit its cap in the meantime
-    // throws here rather than silently under-charging.
+    // Re-run the same money math the quote used; this also re-validates the coupon so an expired/capped one throws instead of under-charging.
     const currentMoney = await this.calculateMoney({
       customerId: actor.customerId,
       subtotalMinor: currentSubtotalMinor,
@@ -710,10 +689,7 @@ export class CheckoutService {
     let allocatedDiscount = 0;
     let allocatedCredits = 0;
     const previewSubtotal = Math.max(Number(preview.subtotalMinor), 1);
-    // Every money line is split across per-state groups by subtotal share,
-    // with the remainder landing on the last group so the parts always sum
-    // back to the whole. Discounts and credits need the same treatment as VAT
-    // and delivery, or per-group settlement drifts from the order total.
+    // Money lines are split across per-state groups by subtotal share, remainder on the last group, so discounts/credits stay consistent with VAT/delivery and parts sum to the order total.
     const share = (total: number, groupSubtotal: number, allocated: number, isLast: boolean) =>
       isLast ? total - allocated : Math.floor((total * groupSubtotal) / previewSubtotal);
     const groupPlans = effectiveGroups.map((group, index) => {
@@ -871,14 +847,9 @@ export class CheckoutService {
             creditsAppliedShareMinor: Number(preview.creditsAppliedMinor || 0),
             paymentPublicId: ids.payment,
           }]).map((group) => {
-            // Charge the discounted figure: the coupon and any credits the
-            // customer applied come off what the gateway actually collects.
-            // A free-delivery coupon is already inside the delivery fee (it is stored net), so
-            // only an item-level coupon comes off the subtotal; subtracting both would
-            // discount the delivery twice and under-charge the payment.
+            // Charge the discounted figure: item-level coupon and credits come off what the gateway collects; a free-delivery coupon is already netted into the delivery fee, so subtracting it again would double-discount.
             const itemDiscountShareMinor = currentMoney.coupon?.appliesToDelivery ? 0 : group.couponDiscountShareMinor;
-            // On Pay on Delivery the delivery fee and surcharge were paid online up front, so the amount left
-            // to pay at the door covers only the goods and their VAT.
+            // On Pay on Delivery, the fee and surcharge were paid online, so what's left at the door covers only the goods and VAT.
             const payableMinor = Math.max(
               0,
               group.subtotalMinor
@@ -981,11 +952,7 @@ export class CheckoutService {
         );
         if (!previewUpdate.modifiedCount)
           throw new HttpError(409, "Checkout preview has already been used", undefined, "CHECKOUT_PREVIEW_INVALID");
-        // Coupon use, Hook credit debit and the follow-up notification commit
-        // with the order. They used to run after the commit with errors
-        // swallowed, so a failure silently gave a discount that was never
-        // booked. Now any failure rolls the whole checkout back. Both are
-        // keyed on the caller's idempotencyKey, so a retried confirm is a no-op.
+        // Coupon redemption and credit debit commit with the order (previously ran after commit with errors swallowed); both are keyed on idempotencyKey so a retried confirm is a no-op.
         if (preview.couponId && Number(preview.couponDiscountMinor || 0) > 0) {
           await this.coupons.redeem({
             couponId: String(preview.couponId),
@@ -1017,8 +984,7 @@ export class CheckoutService {
         }], session);
       });
     } catch (error) {
-      // A concurrent confirm with the same key lost the unique-index race (or
-      // hit a write conflict). Return the winner's order instead of an error.
+      // A concurrent confirm with the same key lost the unique-index race (or hit a write conflict); return the winner's order instead of erroring.
       if (isDuplicateKeyError(error) || (error as any)?.hasErrorLabel?.("TransientTransactionError")) {
         const winner = await Order.findOne({ idempotencyKey }).lean({ virtuals: true });
         if (winner && winner.userId === actor.customerId) return this.orderResult(winner.id);
@@ -1035,11 +1001,7 @@ export class CheckoutService {
     return result;
   }
 
-  /**
-   * Outbox consumer for ORDER_CREATED_EFFECTS. Runs after the checkout
-   * transaction commits; the notification is keyed on the order, so a replay
-   * cannot notify twice, and a failure retries instead of being swallowed.
-   */
+  /** Outbox consumer for ORDER_CREATED_EFFECTS, run after the checkout transaction commits; keyed on the order so a replay can't double-notify and failures retry. */
   async deliverOrderCreatedEffects(event: { payload: Record<string, any> }) {
     const { orderId, customerId, paymentMethod, stateId } = event.payload;
     if (!customerId) return;

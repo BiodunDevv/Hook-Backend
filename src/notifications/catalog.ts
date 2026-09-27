@@ -1,12 +1,4 @@
-/**
- * Every notification Hook can send, defined once: who it is for, which group
- * a customer can switch off, how it is limited, where tapping it goes, and
- * what it says. Copy lives here so wording is consistent and easy to review.
- *
- * Transactional notifications (orders, payments, security) are never limited
- * or switched off. Engagement notifications (reminders, discovery) respect the
- * customer's preferences, quiet hours and frequency caps.
- */
+/** Every notification Hook can send, defined once, with copy kept here for consistent wording; transactional notifications are never limited or switched off, unlike engagement ones. */
 export type NotificationGroup = 'orders' | 'account' | 'credit' | 'reminders' | 'discovery';
 export type NotificationPriority = 'transactional' | 'engagement';
 
@@ -35,6 +27,8 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationDefinition> = {
   account_activated: T('account', 'home'),
   security_new_device: T('account', 'devices'),
   password_changed: T('account', 'security'),
+  // Admin-composed messages, treated as transactional so an important announcement is never suppressed by a cooldown.
+  admin_broadcast: T('account', 'notifications'),
   address_missing: E('reminders', 'addresses', 24 * 14),
 
   // Discovery

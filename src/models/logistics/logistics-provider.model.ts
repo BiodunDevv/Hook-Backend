@@ -1,11 +1,6 @@
 import { BaseEntity, createModel, createSchema } from '@models/base.model';
 
-/**
- * A courier the customer can pick at checkout (GIG, GUO, DHL...), managed by
- * admin rather than hardcoded. Distinct from LogisticsProviderName in
- * services/logistics/logistics-provider.ts, which names the runtime booking
- * adapters — this is the customer-facing list and its flat delivery fee.
- */
+/** Admin-managed courier the customer can pick at checkout; distinct from LogisticsProviderName, which names the runtime booking adapters. */
 export interface LogisticsProvider extends BaseEntity {
   publicId: string;
   code: string;

@@ -44,11 +44,7 @@ function timelineFor(order: any, shipment?: any) {
     .map((event: any) => ({ status: String(event.status || ''), at: event.at || event.createdAt }))
     .filter((event: any) => event.status);
   const occurred = new Map(events.map((event: any) => [event.status, event.at]));
-  // A delivery's own shipment events override the order-level ones. Without
-  // this, every group read the same order.timeline and two deliveries at
-  // different stages rendered byte-identical ladders. The order-level entries
-  // are still the right source for the pre-dispatch stages (payment,
-  // sourcing), which genuinely happen once for the whole order.
+  // A delivery's own shipment events override the order-level ones so multiple deliveries don't render identical ladders.
   for (const event of shipment?.trackingEvents || []) {
     const status = String(event.status || '').toUpperCase();
     if (status && event.at) occurred.set(status, event.at);
@@ -299,8 +295,7 @@ export class OrderService {
         couponCode: order.couponCode,
         couponDiscountMinor: Number(order.couponDiscountMinor || 0),
         creditsAppliedMinor: Number(order.creditsAppliedMinor || 0),
-        // The courier the customer picked and paid for at checkout. Stored on
-        // the order since checkout but never exposed to them until now.
+        // The courier the customer picked and paid for at checkout, never exposed to them until now.
         logisticsProvider: order.logisticsProviderSnapshot
           ? { code: (order.logisticsProviderSnapshot as any).code, name: (order.logisticsProviderSnapshot as any).name }
           : undefined,
@@ -328,20 +323,14 @@ export class OrderService {
     const deliveryFeeMinor = Number(order.deliveryFeeMinor ?? Math.round(Number(order.deliveryFee || 0) * 100));
     const safeItems = items.map(safeItem);
     const deliveries = (fulfilmentGroups.length ? fulfilmentGroups : [{ publicId: 'legacy', sourceStateId: order.sourceStateId, status: order.commerceStatus || order.status }]).map((group: any, index: number) => {
-      // Match on the group first, then fall back to the State only while a
-      // single group exists there. There is deliberately no "if there is just
-      // one shipment, use it" fallback: with several groups that handed the
-      // same shipment — and so the same tracking reference — to every delivery.
+      // Match on the group first, falling back to the State only when a single group exists there.
       const shipment = shipments.find((entry: any) => entry.fulfilmentGroupId === group.publicId)
         || (fulfilmentGroups.length <= 1
           ? shipments.find((entry: any) => String(entry.sourceStateId) === String(group.sourceStateId))
           : undefined);
       const shipmentStatus = String(shipment?.status || '').toUpperCase();
       const trackingVisible = DISPATCHED_SHIPMENT_STATUSES.has(shipmentStatus);
-      // Ungrouped items belong to no delivery in particular. Attributing them
-      // to every group (the old `!item.fulfilmentGroupId ||` clause) made each
-      // delivery appear to contain the whole order. They are only safe to show
-      // when there is a single delivery to show them in.
+      // Ungrouped items are only safe to show when there is a single delivery to attribute them to.
       const groupItems = items
         .filter((item: any) => (item.fulfilmentGroupId ? item.fulfilmentGroupId === group.publicId : fulfilmentGroups.length <= 1))
         .map(safeItem);
@@ -354,19 +343,14 @@ export class OrderService {
         eta: shipment?.estimatedDeliveryAt,
         items: groupItems,
         payment: payment ? { status: payment.commerceStatus || payment.status, amountMinor: Number(payment.amountMinor || 0) } : undefined,
-        // Pin `status` too, not just `commerceStatus` — timelineFor falls back
-        // to it, which would otherwise leak the order-wide status into a group
-        // that has not reached it yet.
+        // Pin `status` too, not just `commerceStatus`, to avoid leaking the order-wide status into a group that hasn't reached it yet.
         timeline: timelineFor(
           { ...order, commerceStatus: shipment?.status || group.status, status: shipment?.status || group.status },
           shipment,
         ),
         shipment: shipment ? {
           provider: trackingVisible ? shipment.provider : undefined,
-          // The courier the customer actually chose and paid for. `provider`
-          // above is the internal booking adapter, so it would read "manual"
-          // to someone who paid GIG's fee. Shown as soon as it is known, not
-          // gated on dispatch — knowing who will deliver is useful earlier.
+          // The courier the customer actually chose and paid for, not the internal booking adapter in `provider`.
           courierName: shipment.courierName,
           courierCode: shipment.courierCode,
           substitutedFrom: shipment.substitutedFrom,
@@ -409,8 +393,7 @@ export class OrderService {
       couponCode: order.couponCode,
       couponDiscountMinor: Number(order.couponDiscountMinor || 0),
       creditsAppliedMinor: Number(order.creditsAppliedMinor || 0),
-        // The courier the customer picked and paid for at checkout. Stored on
-        // the order since checkout but never exposed to them until now.
+        // The courier the customer picked and paid for at checkout, never exposed to them until now.
         logisticsProvider: order.logisticsProviderSnapshot
           ? { code: (order.logisticsProviderSnapshot as any).code, name: (order.logisticsProviderSnapshot as any).name }
           : undefined,
@@ -432,10 +415,7 @@ export class OrderService {
     const order = await this.getCustomerOrder(owner, id);
     const stored = await Order.findOne({ $or: [{ publicId: order.id }, { orderCode: order.id }], userId: owner.userId });
     if (!stored || !order.canCancel) throw new HttpError(409, 'This order can no longer be cancelled', undefined, 'INVALID_STATE_TRANSITION');
-    // One transaction: the guarded status flip, released payment links and
-    // restored Hook credit / coupon either all happen or none do. The guard
-    // means a payment that confirms while this request runs wins, instead of
-    // the cancel overwriting a paid order.
+    // One transaction so the status flip, released payment links, and restored credit/coupon all happen or none do.
     const session = await mongoose.startSession();
     let saved: any;
     try {
@@ -526,11 +506,7 @@ export class OrderService {
   }
 }
 
-/**
- * Cancels prepaid orders nobody paid for, so the credit and coupon they held are
- * given back. An order still mid-payment (PROCESSING) is left alone. Idempotent:
- * the status guard means a payment that lands meanwhile wins over the expiry.
- */
+/** Cancels prepaid orders nobody paid for and returns the credit/coupon they held, leaving orders still mid-payment alone. */
 export async function expireUnpaidOrders(now = new Date()) {
   const hours = Math.max(1, Number(process.env.UNPAID_ORDER_EXPIRY_HOURS || 24));
   const cutoff = new Date(now.getTime() - hours * 3_600_000);

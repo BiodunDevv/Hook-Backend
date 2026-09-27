@@ -12,8 +12,10 @@ import {
   OtpEmailPayload,
   PaymentConfirmedEmailPayload,
   RefundEmailPayload,
+  BroadcastMessageEmailPayload,
   SubmissionDecisionEmailPayload,
   VendorDecisionEmailPayload,
+  WaitlistMessageEmailPayload,
   WelcomeEmailPayload,
 } from './email.types';
 import {
@@ -39,6 +41,8 @@ import {
   vendorApprovedEmailTemplate,
   vendorNewOrderEmailTemplate,
   vendorRejectedEmailTemplate,
+  broadcastMessageEmailTemplate,
+  waitlistMessageEmailTemplate,
   welcomeEmailTemplate,
 } from './templates';
 import { getEmailSettings } from '@services/email-settings.service';
@@ -157,6 +161,18 @@ export class EmailService {
   async sendWelcome(payload: WelcomeEmailPayload) {
     await this.loadSettings();
     const template = welcomeEmailTemplate(payload);
+    return this.send({ to: payload.email, ...template });
+  }
+
+  async sendWaitlistMessage(payload: WaitlistMessageEmailPayload) {
+    await this.loadSettings();
+    const template = waitlistMessageEmailTemplate(payload);
+    return this.send({ to: payload.email, ...template });
+  }
+
+  async sendBroadcastMessage(payload: BroadcastMessageEmailPayload) {
+    await this.loadSettings();
+    const template = broadcastMessageEmailTemplate(payload);
     return this.send({ to: payload.email, ...template });
   }
 

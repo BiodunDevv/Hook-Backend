@@ -9,11 +9,7 @@ dotenv.config({ quiet: true });
 const execute = process.argv.includes('--execute');
 const slugify = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 
-/**
- * Spreads the seeded catalogue evenly across every active Market so each
- * market storefront has products, in a stable order (re-running gives the same
- * assignment). Each product also takes one of that Market's suppliers.
- */
+/** Spreads the seeded catalogue evenly across every active Market in a stable order, so re-running gives the same assignment. */
 async function main() {
   await connectDatabase();
   const markets = await Market.find({ status: 'active', deletedAt: { $exists: false } }).sort({ createdAt: 1 }).select('name stateId').lean();

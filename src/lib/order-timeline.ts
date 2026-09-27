@@ -1,21 +1,6 @@
 import { Order } from '@models/orders/order.model';
 
-/**
- * The single way to append an order timeline entry.
- *
- * Before this existed, 16 transition sites wrote the timeline inline using two
- * different idioms — `updateOne` + `$push` in the fulfilment service, and
- * whole-array reassignment on a loaded document in the payment/POD services —
- * and two different actor keys (`actor` vs `actorType`). The reader
- * (`timelineFor()`) only consumes `status` and `at`, so the divergence was
- * invisible, but it meant there was no single place to hang the per-step
- * customer email off.
- *
- * Both idioms remain necessary: a caller that already holds a hydrated
- * document and is about to `save()` it must not issue a competing write, so
- * `timelineEntry()` builds the entry for that case while `pushOrderTimeline()`
- * performs the write for callers that only have an id.
- */
+/** The single way to append an order timeline entry, replacing the two divergent idioms transition sites used to write inline. */
 
 export type TimelineActor = string | { accountId?: string; id?: string } | undefined;
 
@@ -30,19 +15,12 @@ export function timelineEntry(status: string, actor?: TimelineActor, extra?: Rec
   return { status: String(status).toUpperCase(), actor: actorId(actor), at: new Date(), ...(extra || {}) };
 }
 
-/**
- * Appends to a document already in memory, returning the new array. Use with
- * the reassignment idiom: `order.timeline = appendTimeline(order, ...)`.
- */
+/** Appends to a document already in memory, returning the new array, for the reassignment idiom `order.timeline = appendTimeline(order, ...)`. */
 export function appendTimeline(order: { timeline?: Array<Record<string, unknown>> }, status: string, actor?: TimelineActor, extra?: Record<string, unknown>) {
   return [...(order.timeline || []), timelineEntry(status, actor, extra)];
 }
 
-/**
- * Writes the entry directly for callers holding only an order id. Returns the
- * entry so a caller can pass it to the notification/email side without
- * rebuilding it (and so the timestamps match exactly).
- */
+/** Writes the entry directly for callers holding only an order id, and returns it so timestamps match exactly downstream. */
 export async function pushOrderTimeline(orderId: unknown, status: string, actor?: TimelineActor, extra?: Record<string, unknown>) {
   const entry = timelineEntry(status, actor, extra);
   await Order.updateOne({ _id: orderId }, { $push: { timeline: entry } });
@@ -50,11 +28,7 @@ export async function pushOrderTimeline(orderId: unknown, status: string, actor?
   return entry;
 }
 
-/**
- * Emails the customer about a transition. Imported lazily because the email
- * service reaches back into the order models, and a top-level import here
- * would close a require cycle through every service that writes a timeline.
- */
+/** Emails the customer about a transition; imported lazily to avoid a require cycle through every service that writes a timeline. */
 export async function notifyStatus(orderId: unknown, status: string) {
   await pushOrderStatus(orderId, status);
   try {

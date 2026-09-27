@@ -147,14 +147,12 @@ export class PodService {
         if (!moved.modifiedCount) return false;
         const payment = await Payment.updateOne({ orderId: order.id }, { $set: { commerceStatus: CommercePaymentStatus.DUE_AT_HANDOVER } }, { session });
         if (!payment.matchedCount) throw new HttpError(409, "Payment record is missing");
-        // Written with the approval, so an approved order can never be left
-        // without the event that starts fulfilment.
+        // Written with the approval so an approved order can never be left without the event that starts fulfilment.
         await this.payments.emitOrderApproved(order, session);
         return true;
       });
     } else if (decision === "PREPAYMENT_REQUIRED") {
-      // The delivery fee is already paid at this point, so the order cannot be turned into a fully prepaid one
-      // without splitting money the customer has already paid. Approve it or cancel it (the fee is refunded).
+      // Already paid the delivery fee at this point, so it can't be turned into a fully prepaid order without splitting money already paid.
       if ((order as any).podFeePaid)
         throw new HttpError(409, "The delivery fee is already paid. Approve this order, or cancel it to refund the fee.", undefined, "INVALID_STATE_TRANSITION");
       await this.transition(order, async (session, guard) => {
@@ -187,13 +185,11 @@ export class PodService {
           $push: { timeline: timelineEntry(CommerceOrderStatus.CANCELLED, actorId, { reason }) },
         }, { session });
         if (!moved.modifiedCount) return false;
-        // Same restoration as a customer-initiated cancellation, inside the
-        // same transaction so a failure cannot leave credits spent.
+        // Same restoration as a customer-initiated cancellation, inside the same transaction so a failure cannot leave credits spent.
         await restoreOrderIncentives(String(order._id), session);
         return true;
       });
-      // A customer-initiated cancellation has its own dedicated email; an
-      // operations rejection had none until now.
+      // A customer-initiated cancellation has its own dedicated email; an operations rejection had none until now.
       if (cancelled) {
         await notifyStatus(String(order._id), CommerceOrderStatus.CANCELLED);
         // Cancelled before dispatch: the online delivery fee goes back to the customer.
@@ -230,11 +226,7 @@ export class PodService {
     return (fresh || order).toJSON();
   }
 
-  /**
-   * Runs one decision in a transaction, guarded on the status the decision was
-   * made against. Two operators (or a double click) deciding the same order
-   * cannot both succeed, and a decided order cannot be re-decided.
-   */
+  /** Runs one decision in a transaction guarded on the prior status, so two operators can't both decide the same order. */
   private async transition(
     order: any,
     apply: (session: mongoose.ClientSession, guard: Record<string, unknown>) => Promise<boolean>,

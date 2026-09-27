@@ -10,6 +10,9 @@ import { sendSuccess } from '@utils/http';
 import { CommerceSettings } from '@models/commerce/commerce.model';
 import { publicProduct } from '@lib/public-resource';
 import { DEFAULT_RETURNS_POLICY_HTML } from '@lib/legal-defaults';
+import { WaitlistService } from '@services/waitlist.service';
+import { getEmailSettings } from '@services/email-settings.service';
+import { Faq } from '@models/platform/faq.model';
 
 const routeParam = (value: string | string[] | undefined) =>
   Array.isArray(value) ? value[0] : value || '';
@@ -57,6 +60,19 @@ const LEGAL_DEFAULT_TITLES: Record<string, string> = {
 };
 
 export class PublicController {
+  private readonly waitlist = new WaitlistService();
+
+  joinWaitlist = async (req: Request, res: Response) => {
+    const result = await this.waitlist.join(req.body);
+    sendSuccess(res, result);
+  };
+
+  /** Clicked directly from an email, so this renders a plain confirmation page rather than JSON. */
+  unsubscribeWaitlist = async (req: Request, res: Response) => {
+    const { unsubscribed } = await this.waitlist.unsubscribe(routeParam(req.params.token));
+    res.status(200).type('html').send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Unsubscribed</title><style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#FAFAF8;color:#17140f;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;padding:24px}main{max-width:420px;text-align:center}h1{font-size:22px;margin:0 0 8px}p{color:#6b6355;line-height:1.6}</style></head><body><main><h1>${unsubscribed ? "You're unsubscribed" : 'Link not recognized'}</h1><p>${unsubscribed ? "You won't receive any more emails from Hook's waitlist. If you already have a Hook account, this doesn't affect it." : 'This unsubscribe link is invalid or has already been used.'}</p></main></body></html>`);
+  };
+
   getLegalContent = async (req: Request, res: Response) => {
     const type = routeParam(req.params.type);
     if (type !== 'terms' && type !== 'privacy' && type !== 'returns') {
@@ -148,6 +164,18 @@ export class PublicController {
   };
 
   /** What customers earn and are given in Hook credit, as the admin has set it. */
+  // Single source of truth for "Help & Support" across every client, signed in or not.
+  support = async (_req: Request, res: Response) => {
+    const settings = await getEmailSettings();
+    sendSuccess(res, { supportEmail: settings.supportEmail, supportUrl: settings.supportUrl, helpCenterUrl: settings.helpCenterUrl });
+  };
+
+  // Admin-managed questions shown on the /help page and in the app.
+  faqs = async (_req: Request, res: Response) => {
+    const data = await Faq.find({ isActive: true }).sort({ order: 1, createdAt: 1 }).select('publicId question answer').lean();
+    sendSuccess(res, data.map((faq) => ({ id: faq.publicId, question: faq.question, answer: faq.answer })));
+  };
+
   creditConfig = async (_req: Request, res: Response) => {
     const settings = await CommerceSettings.findOne({ key: 'commerce' })
       .select('orderEarnEnabled orderEarnPercent orderEarnMaxMinor creditSpendCapPercent welcomeBonusMinor referralSignupBonusMinor referralReferrerBonusMinor minimumCheckoutMinor')

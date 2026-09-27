@@ -9,6 +9,17 @@ import { HttpError } from "@utils/http";
 /** Monnify's transaction statuses that mean the money actually landed. */
 const PAID_STATUSES = new Set(["PAID", "OVERPAID"]);
 
+/** Monnify sends paidOn as "DD/MM/YYYY hh:mm:ss AM/PM", which `new Date()` cannot parse directly. */
+function parseMonnifyDate(value: unknown): Date | undefined {
+  const match = /^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})\s*(AM|PM)$/i.exec(String(value || ""));
+  if (!match) return undefined;
+  const [, day, month, year, rawHour, minute, second, meridiem] = match;
+  let hour = Number(rawHour) % 12;
+  if (meridiem.toUpperCase() === "PM") hour += 12;
+  const parsed = new Date(Number(year), Number(month) - 1, Number(day), hour, Number(minute), Number(second));
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+}
+
 export class MonnifyProvider implements PaymentProvider {
   readonly name = "monnify" as const;
   private readonly baseUrl =
@@ -91,16 +102,20 @@ export class MonnifyProvider implements PaymentProvider {
   }
 
   async verify(reference: string): Promise<ProviderTransaction> {
-    const response = await this.request(`/api/v2/transactions/${encodeURIComponent(reference)}`, { method: "GET" });
+    // /api/v2/transactions/{transactionReference} takes Monnify's own transaction
+    // reference (e.g. "MNFY|..."), not our merchant paymentReference — using it here
+    // silently 404s and a payment never leaves PROCESSING. The query endpoint accepts
+    // our own reference directly, which is all this class ever has on hand.
+    const response = await this.request(`/api/v2/merchant/transactions/query?paymentReference=${encodeURIComponent(reference)}`, { method: "GET" });
     const data = response.responseBody as Record<string, any>;
     const status = String(data?.paymentStatus || "");
     return {
       reference: String(data?.paymentReference || ""),
       status: PAID_STATUSES.has(status) ? "success" : status.toLowerCase(),
       amountMinor: Math.round(Number(data?.amountPaid || 0) * 100),
-      currency: String(data?.currencyCode || "").toUpperCase(),
+      currency: String(data?.currency || "").toUpperCase(),
       providerId: data?.transactionReference ? String(data.transactionReference) : undefined,
-      paidAt: data?.paidOn ? new Date(data.paidOn) : undefined,
+      paidAt: parseMonnifyDate(data?.paidOn),
       raw: data,
     };
   }

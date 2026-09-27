@@ -20,6 +20,11 @@ export type Permission =
   | 'coupons.manage'
   | 'credits.view'
   | 'credits.adjust'
+  | 'waitlist.view'
+  | 'waitlist.manage'
+  | 'communications.send'
+  | 'faq.view'
+  | 'faq.manage'
   | string;
 
 /**

@@ -43,14 +43,7 @@ async function activeCatalogRelations(categoryIdentifier: string, marketIdentifi
   return { category, market };
 }
 
-/**
- * Resolves the vendor an admin picked for a product's "Vendor" field to its
- * internal id, and confirms it actually belongs to the product's own market
- * — a vendor is only ever attached to one market, so cross-market assignment
- * would silently misrepresent who supplies the product. An empty string is
- * the deliberate "no vendor / None" selection and resolves to `undefined`,
- * clearing the field rather than leaving a stale reference.
- */
+/** Resolves the admin-picked vendor to its internal id and confirms it belongs to the product's own market; an empty string means "no vendor" and resolves to `undefined`. */
 async function resolveSourceVendor(identifier: unknown, marketObjectId: string) {
   const value = String(identifier ?? '').trim();
   if (!value) return undefined;
@@ -134,11 +127,7 @@ async function categoryManagersMap(): Promise<Map<string, any[]>> {
 }
 
 export class AdminProductsController {
-  /**
-   * Moves products into a new category in one step. This is how products that
-   * were filed under the old flat categories get their sub-category, and it
-   * clears their "needs a sub-category" flag.
-   */
+  /** Moves products into a new category in one step, clearing their "needs a sub-category" flag. */
   recategorise = async (req: Request, res: Response) => {
     const ids: string[] = req.body.productIds;
     const category = await categoryService.assertAssignable(String(req.body.categoryId));
@@ -226,8 +215,7 @@ export class AdminProductsController {
       categoryMap.set(String(_id), value);
       if (category.publicId) categoryMap.set(String(category.publicId), value);
     });
-    // One batch each for the parent categories and the markets, so a 100-row page stays a handful of queries.
-    // Neither depends on the other, so they run concurrently instead of as two sequential round trips.
+    // One batch each for parent categories and markets, run concurrently since neither depends on the other.
     const parentIds = [...new Set((categories as any[]).map((category) => String(category.parentId || '')).filter(Boolean))];
     const marketIds = [...new Set((rows as any[]).map((product) => String(product.marketId || '')).filter((value) => /^[a-f\d]{24}$/i.test(value)))];
     const [parents, marketRows] = await Promise.all([
@@ -287,8 +275,7 @@ export class AdminProductsController {
     const { category, market } = await activeCatalogRelations(req.body.categoryId, req.body.marketId);
     const body = { ...req.body };
     delete body.vendorId;
-    // Both identifiers come from the same reserved sequence: publicId is the
-    // durable internal key, hookId the human-facing alias shown in the UI.
+    // Both identifiers come from the same reserved sequence: publicId is the durable internal key, hookId the human-facing alias.
     const productPublicId = await nextPublicId('product');
     const isPublished = body.status === ProductStatus.PUBLISHED;
     if (isPublished) assertAdminPublishReady(body);
@@ -344,15 +331,13 @@ export class AdminProductsController {
     updates.categoryId = category._id.toString();
     updates.marketId = market._id.toString();
     updates.sourceStateId = market.stateId;
-    // Only touch the vendor link if the field was actually sent — omitting it
-    // leaves whatever vendor (or lack of one) the product already has.
+    // Only touch the vendor link if the field was actually sent — omitting it leaves the existing vendor as-is.
     if ('sourceMarketVendorId' in req.body) {
       updates.sourceMarketVendorId = await resolveSourceVendor(req.body.sourceMarketVendorId, market._id.toString());
     }
     if (updates.costPrice !== undefined) updates.basePriceMinor = Math.round(Number(updates.costPrice) * 100);
     if (updates.sellingPrice !== undefined) updates.sellingPriceMinor = Math.round(Number(updates.sellingPrice) * 100);
-    // Only fill in a default when negotiation isn't already configured — never
-    // override rules an admin set explicitly via the negotiation-rules editor.
+    // Only fill in a default when negotiation isn't already configured — never override rules an admin set explicitly.
     if (!product.negotiationRules?.enabled) {
       const negotiationRules = defaultNegotiationRules({
         sellingPriceMinor: updates.sellingPriceMinor ?? product.sellingPriceMinor,
@@ -433,13 +418,7 @@ export class AdminProductsController {
     sendSuccess(res, publicProduct(product as any));
   };
 
-  /**
-   * Soft delete only — a Product's id is still referenced by historical
-   * OrderItems/Negotiations, so the document is kept and just hidden from
-   * every admin/public query via deletedAt. Only allowed once a product is
-   * already Disabled, so nothing live or customer-visible can be deleted
-   * out from under an active listing.
-   */
+  /** Soft delete only, since a Product's id is still referenced by historical OrderItems/Negotiations; only allowed once the product is already Disabled. */
   remove = async (req: Request, res: Response) => {
     const products = adminRepos.products();
     const product = await products.findOne({ where: { id: routeParam(req.params.id) } });

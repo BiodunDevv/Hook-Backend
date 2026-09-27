@@ -20,7 +20,9 @@ afterEach(() => {
 
 function mockLoginThen(responses: Array<{ ok?: boolean; body: unknown }>) {
   let call = 0;
-  mock.method(globalThis, 'fetch', async () => {
+  const urls: string[] = [];
+  mock.method(globalThis, 'fetch', async (url: string) => {
+    urls.push(String(url));
     const step = responses[Math.min(call, responses.length - 1)];
     call += 1;
     return {
@@ -28,6 +30,7 @@ function mockLoginThen(responses: Array<{ ok?: boolean; body: unknown }>) {
       json: async () => step.body,
     } as Response;
   });
+  return urls;
 }
 
 test('parseWebhook accepts a correctly signed payload and rejects a tampered one', () => {
@@ -46,12 +49,12 @@ test('parseWebhook accepts a correctly signed payload and rejects a tampered one
   );
 });
 
-test('verify() maps PAID to a successful ProviderTransaction', async () => {
-  mockLoginThen([
+test('verify() queries by paymentReference (not the transactionReference-only path endpoint) and maps PAID to success', async () => {
+  const urls = mockLoginThen([
     { body: { requestSuccessful: true, responseBody: { accessToken: 'tok', expiresIn: 3600 } } },
     { body: { requestSuccessful: true, responseBody: {
-      paymentReference: 'REF-1', paymentStatus: 'PAID', amountPaid: 5000, currencyCode: 'ngn',
-      transactionReference: 'TXN-1', paidOn: '2026-01-01T00:00:00.000Z',
+      paymentReference: 'REF-1', paymentStatus: 'PAID', amountPaid: '5000.00', currency: 'NGN',
+      transactionReference: 'TXN-1', paidOn: '01/01/2026 01:02:03 PM',
     } } },
   ]);
   const provider = new MonnifyProvider();
@@ -60,13 +63,15 @@ test('verify() maps PAID to a successful ProviderTransaction', async () => {
   assert.equal(result.amountMinor, 500000);
   assert.equal(result.currency, 'NGN');
   assert.equal(result.providerId, 'TXN-1');
+  assert.equal(result.paidAt?.toISOString(), new Date(2026, 0, 1, 13, 2, 3).toISOString());
+  assert.match(urls[1], /\/api\/v2\/merchant\/transactions\/query\?paymentReference=REF-1$/);
 });
 
 test('verify() maps a non-paid status through without forcing "success"', async () => {
   mockLoginThen([
     { body: { requestSuccessful: true, responseBody: { accessToken: 'tok', expiresIn: 3600 } } },
     { body: { requestSuccessful: true, responseBody: {
-      paymentReference: 'REF-2', paymentStatus: 'PENDING', amountPaid: 0, currencyCode: 'ngn', transactionReference: 'TXN-2',
+      paymentReference: 'REF-2', paymentStatus: 'PENDING', amountPaid: '0.00', currency: 'NGN', transactionReference: 'TXN-2',
     } } },
   ]);
   const provider = new MonnifyProvider();

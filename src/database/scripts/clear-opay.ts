@@ -9,15 +9,7 @@ type Target = { label: string; model: AnyModel; filter: Record<string, unknown> 
 
 const execute = process.argv.includes('--execute');
 
-/**
- * Opay has been removed in favour of Paystack only. The provider class, its
- * webhook route, env vars and every "paystack" | "opay" union are already gone
- * from the code — this clears the data those paths left behind so nothing
- * references a provider the app can no longer talk to.
- *
- * The savedpaymentmethods collection is dropped wholesale rather than filtered:
- * its model hardcoded `provider: 'opay'`, so every row in it is Opay's.
- */
+/** Opay has been removed in favour of Paystack; this clears the data those removed code paths left behind. */
 async function main() {
   await connectDatabase();
 
@@ -40,8 +32,7 @@ async function main() {
     console.log(`  ${execute ? 'Deleted' : 'Would delete'} ${count} ${target.label}`);
   }
 
-  // Saved cards were Opay-tokenisation only; the model and its (unrouted)
-  // endpoints are gone, so the whole collection is orphaned.
+  // Saved cards were Opay-tokenisation only, and that model is gone, so the whole collection is orphaned.
   const savedMethods = mongoose.connection.collection('savedpaymentmethods');
   const savedCount = await savedMethods.countDocuments({}).catch(() => 0);
   if (savedCount) {

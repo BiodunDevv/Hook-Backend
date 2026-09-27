@@ -16,6 +16,7 @@ import {
   publicDeletionCodeSchema,
   publicDeletionProofSchema,
   publicDeletionRequestSchema,
+  waitlistJoinSchema,
 } from '@validations/common.schemas';
 
 // Deletion endpoints check passwords and are reachable without signing in, so
@@ -25,6 +26,7 @@ const targetEmail = (req: { body?: { email?: unknown } }) => `email:${sha256(Str
 const deletionByEmail = rateLimit('deletion-email', { windowMs: 15 * 60_000, max: 8, key: targetEmail, message: 'Too many attempts for this account. Please try again in a few minutes.' });
 const deletionByIp = rateLimit('deletion-ip', { windowMs: 15 * 60_000, max: 30, message: 'Too many attempts. Please try again in a few minutes.' });
 const deletionCodeByEmail = rateLimit('deletion-code-email', { windowMs: 15 * 60_000, max: 3, key: targetEmail, message: 'A code was sent recently. Please check your email or wait a few minutes.' });
+const waitlistByIp = rateLimit('waitlist-join', { windowMs: 60 * 60_000, max: 10, message: 'Too many attempts. Please try again later.' });
 
 export function createPublicRouter() {
   const router = Router();
@@ -33,8 +35,12 @@ export function createPublicRouter() {
   const paymentLinks = new PaymentLinkController();
   router.get('/public/app-release', asyncHandler(new AppReleasesController().publicPolicy));
 
+  router.post('/public/waitlist', waitlistByIp, validateBody(waitlistJoinSchema), asyncHandler(controller.joinWaitlist));
+  router.get('/public/waitlist/unsubscribe/:token', asyncHandler(controller.unsubscribeWaitlist));
   router.get('/public/legal/:type', asyncHandler(controller.getLegalContent));
   router.get('/public/credit-config', asyncHandler(controller.creditConfig));
+  router.get('/public/support', asyncHandler(controller.support));
+  router.get('/public/faqs', asyncHandler(controller.faqs));
   router.get('/public/parcels/:receipt', rateLimit('parcel-tracking', { windowMs: 60_000, max: 30, message: 'Too many lookups. Please wait a moment.' }), asyncHandler(new FulfilmentController().publicParcelTracking));
 
   const accountDeletion = new AccountDeletionController();

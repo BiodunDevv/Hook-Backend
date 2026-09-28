@@ -1,7 +1,7 @@
 {
   "name": "hook-api",
   "version": "1.0.0",
-  "description": "Hook \u2014 q-commerce fashion marketplace backend",
+  "description": "Hook — q-commerce fashion marketplace backend",
   "private": true,
   "scripts": {
     "build": "tsc && tsc-alias",
@@ -78,10 +78,12 @@
     "tsx": "^4.22.5",
     "typescript": "^6.0.3",
     "uuid": "^14.0.1",
+    "web-push": "^3.6.7",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@types/web-push": "^3.6.4",
     "eslint": "^10.5.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.6",

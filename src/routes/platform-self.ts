@@ -37,11 +37,37 @@ import { AppDataSource } from '@config/data-source';
 import { DeviceToken } from '@models/notifications/device-token.model';
 import { Notification } from '@models/notifications/notification.model';
 import { NotificationService } from '@services/notification.service';
+import { WebPushSubscription } from '@models/notifications/web-push-subscription.model';
+
+const webPushSubscribeSchema = z.object({
+  endpoint: z.string().url(),
+  keys: z.object({ p256dh: z.string().min(1), auth: z.string().min(1) }),
+});
 
 function mountNotificationRoutes(router: Router) {
   const notifications = new NotificationService(
     AppDataSource.getRepository(DeviceToken),
     AppDataSource.getRepository(Notification),
+  );
+  router.post(
+    '/push/subscribe',
+    validateBody(webPushSubscribeSchema),
+    asyncHandler(async (req, res) => {
+      await WebPushSubscription.findOneAndUpdate(
+        { endpoint: req.body.endpoint },
+        { $set: { userId: req.user!.sub, p256dh: req.body.keys.p256dh, auth: req.body.keys.auth, isActive: true, lastSeenAt: new Date() } },
+        { upsert: true },
+      );
+      sendSuccess(res, { subscribed: true });
+    }),
+  );
+  router.post(
+    '/push/unsubscribe',
+    validateBody(z.object({ endpoint: z.string().url() })),
+    asyncHandler(async (req, res) => {
+      await WebPushSubscription.updateOne({ endpoint: req.body.endpoint, userId: req.user!.sub }, { $set: { isActive: false } });
+      sendSuccess(res, { subscribed: false });
+    }),
   );
   router.get(
     '/notifications',

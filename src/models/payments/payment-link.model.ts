@@ -8,6 +8,8 @@ export interface PaymentLink extends BaseEntity {
   paymentId: string;
   orderId: string;
   fulfilmentGroupId?: string;
+  /** Set when this link pays a replacement-item top-up rather than a normal order/delivery payment. */
+  itemResolutionId?: string;
   customerId: string;
   provider: PaymentProviderName;
   amountMinor: number;
@@ -43,6 +45,7 @@ const paymentLinkSchema = createSchema<PaymentLink>({
   paymentId: { type: String, required: true, index: true },
   orderId: { type: String, required: true, index: true },
   fulfilmentGroupId: { type: String, index: true, sparse: true },
+  itemResolutionId: { type: String, index: true, sparse: true },
   customerId: { type: String, required: true, index: true },
   // The interface declared this but the schema did not, so Mongoose silently
   // dropped it on every link — leaving provider undefined and the hosted

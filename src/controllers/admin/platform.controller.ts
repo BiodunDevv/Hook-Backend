@@ -28,6 +28,7 @@ import { issueAccountInvitation, revokeAccountInvitations } from '@services/acco
 import { presentHubRecords, presentMarketRecords, presentPlatformRecords } from '@services/platform-presentation.service';
 import { publishRealtime } from '@services/realtime.service';
 import { MarketVendorService } from '@services/market-vendor.service';
+import { createCommerceNotification } from '@services/commerce-notification.service';
 import { isDuplicateKeyError, HttpError, sendCreated, sendSuccess } from '@utils/http';
 import { adminAccessCatalogCache, adminStaffCache } from '@lib/ttl-cache';
 
@@ -1283,6 +1284,14 @@ export class PlatformController {
       status === 'active' ? Promise.resolve() : revokeAccountSessions(partner.accountId, 'partner_suspended', req.user!.sub),
     ]);
     await recordAudit(req, { action: `partner.${status}`, entityType: 'partner', entityId: partner._id.toString(), entityPublicId: partner.publicId, stateId: partner.stateId, before: { status: partner.status }, after: { status }, reason: req.body.reason });
+    void createCommerceNotification({
+      eventKey: `partner:${partner.publicId}:${status}:${Date.now()}`,
+      userId: partner.accountId,
+      title: status === 'active' ? 'Your Partner account is active again' : 'Your Partner account was suspended',
+      body: status === 'active' ? 'You can sign in and resume taking custody of orders.' : String(req.body.reason || 'Contact Hook support for more information.'),
+      type: 'account_activated',
+      data: {},
+    });
     sendSuccess(res, { status });
   };
 
@@ -1346,6 +1355,14 @@ export class PlatformController {
       revokeAccountInvitations(partner.accountId),
     ]);
     await recordAudit(req, { action: 'partner.archived', entityType: 'partner', entityId: partner._id.toString(), entityPublicId: partner.publicId, stateId: partner.stateId, before: { status: partner.status }, after: { status: AccountStatus.DISABLED }, reason: req.body.reason });
+    void createCommerceNotification({
+      eventKey: `partner:${partner.publicId}:archived:${Date.now()}`,
+      userId: partner.accountId,
+      title: 'Your Partner account was archived',
+      body: String(req.body.reason || 'Contact Hook support if you believe this is a mistake.'),
+      type: 'account_activated',
+      data: {},
+    });
     sendSuccess(res, { status: AccountStatus.DISABLED });
   };
 
@@ -1360,6 +1377,14 @@ export class PlatformController {
       User.updateOne({ _id: partner.accountId }, { $set: { accountStatus: AccountStatus.ACTIVE, isActive: true }, $unset: { deletedAt: 1 } }),
     ]);
     await recordAudit(req, { action: 'partner.restored', entityType: 'partner', entityId: partner._id.toString(), entityPublicId: partner.publicId, stateId: partner.stateId, before: { status: partner.status }, after: { status: AccountStatus.ACTIVE }, reason: req.body.reason });
+    void createCommerceNotification({
+      eventKey: `partner:${partner.publicId}:restored:${Date.now()}`,
+      userId: partner.accountId,
+      title: 'Your Partner account was restored',
+      body: 'You can sign in and resume operating as a Hook Partner.',
+      type: 'account_activated',
+      data: {},
+    });
     sendSuccess(res, { status: AccountStatus.ACTIVE });
   };
 
@@ -1694,6 +1719,14 @@ export class PlatformController {
       status === 'active' ? Promise.resolve() : revokeAccountSessions(marketAssociate.accountId, 'marketassociate_suspended', req.user!.sub),
     ]);
     await recordAudit(req, { action: `marketassociate.${status}`, entityType: 'marketassociate', entityId: marketAssociate._id.toString(), entityPublicId: marketAssociate.publicId, before: { status: marketAssociate.status }, after: { status }, reason: req.body.reason });
+    void createCommerceNotification({
+      eventKey: `marketassociate:${marketAssociate.publicId}:${status}:${Date.now()}`,
+      userId: marketAssociate.accountId,
+      title: status === 'active' ? 'Your Market Associate account is active again' : 'Your Market Associate account was suspended',
+      body: status === 'active' ? 'You can sign in and resume taking assignments.' : String(req.body.reason || 'Contact Hook support for more information.'),
+      type: 'account_activated',
+      data: {},
+    });
     sendSuccess(res, { status });
   };
 
@@ -1719,6 +1752,14 @@ export class PlatformController {
       revokeAccountInvitations(marketAssociate.accountId),
     ]);
     await recordAudit(req, { action: 'marketassociate.archived', entityType: 'marketassociate', entityId: marketAssociate._id.toString(), entityPublicId: marketAssociate.publicId, before: { status: marketAssociate.status }, after: { status: AccountStatus.DISABLED }, reason: req.body.reason });
+    void createCommerceNotification({
+      eventKey: `marketassociate:${marketAssociate.publicId}:archived:${Date.now()}`,
+      userId: marketAssociate.accountId,
+      title: 'Your Market Associate account was archived',
+      body: String(req.body.reason || 'Contact Hook support if you believe this is a mistake.'),
+      type: 'account_activated',
+      data: {},
+    });
     sendSuccess(res, { status: AccountStatus.DISABLED });
   };
 
@@ -1733,6 +1774,14 @@ export class PlatformController {
       User.updateOne({ _id: marketAssociate.accountId }, { $set: { accountStatus: AccountStatus.ACTIVE, isActive: true }, $unset: { deletedAt: 1 } }),
     ]);
     await recordAudit(req, { action: 'marketassociate.restored', entityType: 'marketassociate', entityId: marketAssociate._id.toString(), entityPublicId: marketAssociate.publicId, before: { status: marketAssociate.status }, after: { status: AccountStatus.ACTIVE }, reason: req.body.reason });
+    void createCommerceNotification({
+      eventKey: `marketassociate:${marketAssociate.publicId}:restored:${Date.now()}`,
+      userId: marketAssociate.accountId,
+      title: 'Your Market Associate account was restored',
+      body: 'You can sign in and resume taking assignments.',
+      type: 'account_activated',
+      data: {},
+    });
     sendSuccess(res, { status: AccountStatus.ACTIVE });
   };
 

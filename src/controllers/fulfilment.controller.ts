@@ -24,7 +24,6 @@ export class FulfilmentController {
   marketAssociateItemIssue = async (req: Request, res: Response) => sendCreated(res, await fulfilmentService.marketAssociateItemIssue(req.user!.sub, routeParam(req.params.id), routeParam(req.params.orderItemId), req.body));
 
   controlTower = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.controlTower(actor(req), req.query as Record<string, unknown>));
-  fulfilmentOrders = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.fulfilmentOrders(actor(req), req.query as Record<string, unknown>));
   adminTaskDetail = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.adminTaskDetail(actor(req), routeParam(req.params.id)));
   proposeItemResolution = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.proposeItemResolution(actor(req), routeParam(req.params.id), req.body));
   assignmentMarketAssociates = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.assignmentMarketAssociates(actor(req), req.query as Record<string, unknown>));
@@ -67,4 +66,14 @@ export class FulfilmentController {
   adminShipments = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.shipments(actor(req), req.query as Record<string, unknown>));
   logisticsReadiness = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.logisticsReadiness(actor(req)));
   logisticsWebhook = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.logisticsWebhook(routeParam(req.params.provider), String(req.header('x-provider-event-id') || ''), req.body, String(req.header('x-provider-signature') || '')));
+
+  // Fez's own webhook contract (X-Signature/X-Timestamp headers, {orderNumber, status}
+  // body, no event id) doesn't fit the generic x-provider-* header scheme above, so it
+  // gets its own route rather than forcing a mismatched contract through the shared one.
+  fezWebhook = async (req: Request, res: Response) => {
+    const body = req.body as { orderNumber?: string; status?: string };
+    const eventId = `${body.orderNumber || ''}:${body.status || ''}`;
+    const timestamp = String(req.header('x-timestamp') || '');
+    sendSuccess(res, await fulfilmentService.logisticsWebhook('fez', eventId, body, String(req.header('x-signature') || ''), timestamp));
+  };
 }

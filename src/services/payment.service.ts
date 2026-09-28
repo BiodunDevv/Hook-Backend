@@ -32,6 +32,7 @@ import { publishRealtime } from "@services/realtime.service";
 import { timelineEntry } from "@lib/order-timeline";
 import { emitOutbox } from "@services/outbox.service";
 import { wakeOutbox } from "../jobs/wake";
+import { notifyStaffByPermission } from "@services/staff-notifications.service";
 
 /** True when the provider may have acted on the request even though it failed. */
 export function isAmbiguousProviderError(error: unknown) {
@@ -106,6 +107,8 @@ export class PaymentService {
       throw new HttpError(409, "Customer email is required for payment");
     const payment = await Payment.findOne({
       orderId: order.id,
+      // A substitution top-up's Payment also has no fulfilmentGroupId, so it must be excluded explicitly here — otherwise this could match the wrong Payment.
+      itemResolutionId: { $exists: false },
       ...(fulfilmentGroupIdentifier ? { fulfilmentGroupId: fulfilmentGroupIdentifier } : { fulfilmentGroupId: { $exists: false } }),
     });
     if (!payment)
@@ -199,7 +202,7 @@ export class PaymentService {
         userId: customerId,
       }).lean({ virtuals: true });
       if (!order) throw new HttpError(404, "Payment not found");
-      payment = await Payment.findOne({ orderId: order._id.toString() });
+      payment = await Payment.findOne({ orderId: order._id.toString(), itemResolutionId: { $exists: false } });
     }
     if (!payment?.orderId) throw new HttpError(404, "Payment not found");
     if (payment.commerceStatus === CommercePaymentStatus.PROCESSING) {
@@ -302,15 +305,6 @@ export class PaymentService {
       await event.save();
       return { received: true, ignored: true };
     }
-    // Substitution top-ups have no Payment record; route them through the fulfilment service to apply the replacement without re-activating the order.
-    const { fulfilmentService } = await import('@services/fulfilment.service');
-    const substitution = await fulfilmentService.verifySubstitutionTopUp(parsed.reference, parsed.providerEventId);
-    if (substitution.matched) {
-      event.processingStatus = "processed";
-      event.processedAt = new Date();
-      await event.save();
-      return { received: true, ...substitution };
-    }
     const attempt = await PaymentAttempt.findOne({ reference: parsed.reference });
     const payment = attempt ? await Payment.findById(attempt.paymentId) : await Payment.findOne({ transactionRef: parsed.reference });
     if (!payment?.orderId) {
@@ -372,7 +366,7 @@ export class PaymentService {
       // One open exception per (reference, type): Paystack retries a failing
       // webhook, and each retry used to write another row.
       const exceptionType = error?.message?.toLowerCase().includes("amount") ? "amount" : "status";
-      await IntegrationException.updateOne(
+      const exceptionResult = await IntegrationException.updateOne(
         { provider: providerName, reference: parsed.reference, type: exceptionType, status: "open" },
         {
           $set: { requestId, details: { code: error?.code, message: error?.message } },
@@ -380,6 +374,17 @@ export class PaymentService {
         },
         { upsert: true },
       ).catch(() => undefined);
+      // Only alert on the row actually being created — a retried webhook hitting
+      // the same open exception must not re-notify finance every time.
+      if (exceptionResult?.upsertedCount) {
+        const order = await Order.findById(payment.orderId).select("publicId sourceStateId").lean() as any;
+        await notifyStaffByPermission({
+          permission: "finance.refunds.view", stateId: order?.sourceStateId,
+          eventKeyPrefix: `payment-exception:${providerName}:${parsed.reference}:${exceptionType}`,
+          title: `Payment ${exceptionType} mismatch`, body: `${order?.publicId || payment.id} — ${providerName} webhook could not be reconciled: ${error?.message || 'unknown error'}`,
+          type: "order_updated", data: { orderId: order?.publicId, href: order?.publicId ? `/dashboard/orders/${order.publicId}` : undefined },
+        });
+      }
       throw error;
     }
   }
@@ -389,7 +394,7 @@ export class PaymentService {
     try {
       const shipmentStarted = await Shipment.exists({ orderId, status: { $nin: [ShipmentStatus.CANCELLED] } } as any);
       if (shipmentStarted) return { refunded: false, reason: "dispatched" as const };
-      const payment = await Payment.findOne({ orderId, fulfilmentGroupId: { $exists: false }, commerceStatus: CommercePaymentStatus.CONFIRMED });
+      const payment = await Payment.findOne({ orderId, fulfilmentGroupId: { $exists: false }, itemResolutionId: { $exists: false }, commerceStatus: CommercePaymentStatus.CONFIRMED });
       if (!payment) return { refunded: false, reason: "no_fee_paid" as const };
       const amountMinor = Number(payment.amountMinor || 0) - Number(payment.refundedAmount || 0);
       if (amountMinor < 1) return { refunded: false, reason: "already_refunded" as const };
@@ -402,7 +407,7 @@ export class PaymentService {
   }
 
   async approvePodPayment(orderId: string) {
-    const payment = await Payment.findOne({ orderId });
+    const payment = await Payment.findOne({ orderId, itemResolutionId: { $exists: false } });
     if (!payment) throw new HttpError(409, "Payment record is missing");
     payment.commerceStatus = CommercePaymentStatus.DUE_AT_HANDOVER;
     await payment.save();
@@ -438,6 +443,12 @@ export class PaymentService {
     paidAt?: Date,
     providerEventId?: string,
   ) {
+    // A replacement-item top-up is a Payment like any other for checkout purposes, but confirming
+    // it must never run the order-activation machinery below — it adjusts one item, not the order.
+    if (payment.itemResolutionId) {
+      await this.confirmSubstitutionPayment(payment, paidAt || new Date(), providerId, providerEventId);
+      return;
+    }
     const order = await Order.findById(payment.orderId);
     if (!order || !["PREPAID", "PAY_AT_HANDOVER"].includes(String(order.commercePaymentMethod)))
       throw new HttpError(409, "Payment cannot activate this Order");
@@ -450,6 +461,7 @@ export class PaymentService {
     const confirmedAt = paidAt || new Date();
     const actorId = payment.gateway === "monnify" ? "MONNIFY_WEBHOOK" : "PAYSTACK_WEBHOOK";
     let activated = false;
+    let paidAfterCancelled = false;
 
     const session = await mongoose.startSession();
     try {
@@ -569,11 +581,12 @@ export class PaymentService {
         );
         if (!activate.modifiedCount && order.commerceStatus === CommerceOrderStatus.CANCELLED) {
           // The order was already cancelled when payment landed, so open a refund exception for finance instead of silently keeping the money.
-          await IntegrationException.updateOne(
+          const exceptionResult = await IntegrationException.updateOne(
             { provider: payment.gateway || 'paystack', reference: String(payment.transactionRef || paymentKey), type: 'status', status: 'open' },
             { $setOnInsert: { paymentId: String(payment._id), orderId: orderKey, details: { message: 'Payment confirmed after the order was cancelled. Refund the customer.' } } },
             { upsert: true, session },
           ).catch(() => undefined);
+          if (exceptionResult?.upsertedCount) paidAfterCancelled = true;
           return;
         }
         if (!transitioned && !activate.modifiedCount) return;
@@ -610,7 +623,47 @@ export class PaymentService {
       wakeOutbox();
       const fresh = await Order.findById(order._id).lean({ virtuals: true });
       if (fresh) this.publishOrderUpdate(fresh);
+      if (fresh?.commerceStatus === CommerceOrderStatus.OPERATIONS_REVIEW) {
+        await notifyStaffByPermission({
+          permission: 'orders.edit', stateId: fresh.sourceStateId,
+          eventKeyPrefix: `order:${fresh.publicId}:operations-review`,
+          title: 'Order needs operations review', body: `${fresh.publicId} is awaiting review before it can be approved for fulfilment.`,
+          type: 'order_operations_review', data: { orderId: fresh.publicId, href: `/dashboard/orders/${fresh.publicId}` },
+        });
+      }
     }
+    if (paidAfterCancelled) {
+      await notifyStaffByPermission({
+        permission: 'finance.refunds.view', stateId: order.sourceStateId,
+        eventKeyPrefix: `payment-exception:${payment.gateway || 'paystack'}:${paymentKey}:paid-after-cancel`,
+        title: 'Payment landed on a cancelled order', body: `${orderKey} was already cancelled when this payment confirmed. Refund the customer.`,
+        type: 'order_updated', data: { orderId: orderKey, href: `/dashboard/orders/${orderKey}` },
+      });
+    }
+  }
+
+  /** Marks a replacement top-up's Payment CONFIRMED and applies the substitution — no order-activation transaction, since the order is already active. */
+  private async confirmSubstitutionPayment(payment: any, confirmedAt: Date, providerId?: string, providerEventId?: string) {
+    const transition = await Payment.updateOne(
+      { _id: payment._id, commerceStatus: { $ne: CommercePaymentStatus.CONFIRMED } },
+      {
+        $set: {
+          commerceStatus: CommercePaymentStatus.CONFIRMED,
+          status: PaymentStatus.SUCCESSFUL,
+          gatewayRef: providerId,
+          ...(providerEventId ? { providerEventId } : {}),
+          paidAt: confirmedAt,
+          amountSettled: payment.amount,
+        },
+      },
+    );
+    if (!transition.modifiedCount) return;
+    await PaymentLink.updateMany(
+      { paymentId: String(payment._id), status: { $in: ["active", "processing"] } },
+      { $set: { status: "paid", usedAt: new Date() } },
+    );
+    const { fulfilmentService } = await import('@services/fulfilment.service');
+    await fulfilmentService.confirmSubstitutionAdjustment(payment.itemResolutionId, providerId || providerEventId, confirmedAt);
   }
 
   private approvedPayload(order: any) {

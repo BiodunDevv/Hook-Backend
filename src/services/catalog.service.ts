@@ -25,6 +25,7 @@ import { HttpError } from '@utils/http';
 import { categoryService } from '@services/category.service';
 import { adminReviewCache } from '@lib/ttl-cache';
 import { defaultNegotiationRules } from '@lib/negotiation-defaults';
+import { notifyStaffByPermission } from '@services/staff-notifications.service';
 
 type SubmissionInput = {
   marketId: string;
@@ -413,6 +414,15 @@ export class MarketAssociateCatalogService {
       { returnDocument: 'after' },
     ).lean({ virtuals: true });
     if (!updated) throw new HttpError(409, 'Submission state changed before this action completed', undefined, 'SUBMISSION_STATE_CONFLICT');
+    await notifyStaffByPermission({
+      permission: 'catalog.submission.review',
+      stateId: updated.sourceStateId,
+      eventKeyPrefix: `submission:${updated.publicId}:submitted`,
+      title: 'New submission for review',
+      body: `${updated.basicTitle || 'A product'} was submitted by a Market Associate`,
+      type: 'order_updated',
+      data: { submissionId: updated.publicId, href: `/dashboard/catalog/submissions/${updated.publicId}` },
+    });
     return updated;
   }
 }

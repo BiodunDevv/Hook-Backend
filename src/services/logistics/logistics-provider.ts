@@ -1,5 +1,6 @@
 import { randomInt, randomUUID } from 'crypto';
 import { HttpError } from '@utils/http';
+import { FezLogisticsProvider } from './fez.provider';
 
 export type LogisticsProviderName = 'gig' | 'fez' | 'manual' | 'simulated' | 'other';
 
@@ -68,12 +69,16 @@ export function isLogisticsSimulationEnabled() {
   return process.env.NODE_ENV !== 'production' && process.env.LOGISTICS_SIMULATION_ENABLED === 'true';
 }
 
+export function isFezLogisticsEnabled() {
+  return process.env.LOGISTICS_FEZ_ENABLED === 'true';
+}
+
 export function logisticsReadiness() {
   return [
     { name: 'manual', enabled: true, mode: 'manual', reason: 'Audited manual booking is available.' },
     { name: 'simulated', enabled: isLogisticsSimulationEnabled(), mode: 'development-only', reason: 'Available only when NODE_ENV is non-production and LOGISTICS_SIMULATION_ENABLED=true.' },
     { name: 'gig', enabled: false, mode: 'provider', reason: 'Provider contract and credentials are not verified.' },
-    { name: 'fez', enabled: false, mode: 'provider', reason: 'Provider contract and credentials are not verified.' },
+    { name: 'fez', enabled: isFezLogisticsEnabled(), mode: 'provider', reason: isFezLogisticsEnabled() ? 'Live.' : 'Set LOGISTICS_FEZ_ENABLED=true and the FEZ_* credentials to enable.' },
   ];
 }
 
@@ -92,5 +97,6 @@ export function logisticsProvider(name: LogisticsProviderName): LogisticsProvide
     };
   }
   if (name === 'simulated' && isLogisticsSimulationEnabled()) return new SimulatedLogisticsProvider();
+  if (name === 'fez' && isFezLogisticsEnabled()) return new FezLogisticsProvider();
   return new DisabledLogisticsProvider(name);
 }

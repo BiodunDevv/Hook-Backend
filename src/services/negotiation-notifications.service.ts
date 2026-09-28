@@ -1,16 +1,14 @@
-import { AccountType, ScopeType } from '@lib/constants';
+import { AccountType } from '@lib/constants';
 import { User } from '@models/users/user.model';
 import { Negotiation } from '@models/negotiations/negotiation.model';
 import { Product } from '@models/products/product.model';
 import { Market } from '@models/platform/network.model';
 import { resolveAccessContext, type AccessContext } from './access-control.service';
 import { createCommerceNotification } from './commerce-notification.service';
+import { canReceiveStaffAlert } from './staff-notifications.service';
 
 export function canReceiveNegotiationAlert(access: AccessContext, stateId?: string, hubId?: string) {
-  if (!access.roleKeys.includes('SUPER_ADMIN') && !access.permissions.includes('ai_negotiation.view')) return false;
-  if (access.scopeType === ScopeType.GLOBAL) return true;
-  if (!stateId || !access.stateIds.includes(stateId)) return false;
-  return access.scopeType !== ScopeType.HUB || Boolean(hubId && access.hubIds.includes(hubId));
+  return canReceiveStaffAlert(access, 'ai_negotiation.view', stateId, hubId);
 }
 let processing = false;
 /** The pending bit is a durable session outbox, set atomically at creation.

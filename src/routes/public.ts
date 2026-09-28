@@ -33,6 +33,7 @@ export function createPublicRouter() {
   const controller = new PublicController();
   const marketVendors = new MarketAssociateMarketVendorController();
   const paymentLinks = new PaymentLinkController();
+  const fulfilment = new FulfilmentController();
   router.get('/public/app-release', asyncHandler(new AppReleasesController().publicPolicy));
 
   router.post('/public/waitlist', waitlistByIp, validateBody(waitlistJoinSchema), asyncHandler(controller.joinWaitlist));
@@ -41,7 +42,7 @@ export function createPublicRouter() {
   router.get('/public/credit-config', asyncHandler(controller.creditConfig));
   router.get('/public/support', asyncHandler(controller.support));
   router.get('/public/faqs', asyncHandler(controller.faqs));
-  router.get('/public/parcels/:receipt', rateLimit('parcel-tracking', { windowMs: 60_000, max: 30, message: 'Too many lookups. Please wait a moment.' }), asyncHandler(new FulfilmentController().publicParcelTracking));
+  router.get('/public/parcels/:receipt', rateLimit('parcel-tracking', { windowMs: 60_000, max: 30, message: 'Too many lookups. Please wait a moment.' }), asyncHandler(fulfilment.publicParcelTracking));
 
   const accountDeletion = new AccountDeletionController();
   router.post('/public/account-deletion/code', deletionByIp, validateBody(publicDeletionCodeSchema), deletionCodeByEmail, asyncHandler(accountDeletion.sendCode));

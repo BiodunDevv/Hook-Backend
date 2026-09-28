@@ -1,7 +1,8 @@
 import { createHash, randomBytes } from "crypto";
 import mongoose, { isValidObjectId } from "mongoose";
-import { CommercePaymentStatus } from "@lib/constants";
+import { CommercePaymentStatus, PaymentStatus } from "@lib/constants";
 import { CommerceSettings } from "@models/commerce/commerce.model";
+import { ItemResolution } from "@models/fulfilment/item-resolution.model";
 import { OrderItem } from "@models/orders/order-item.model";
 import { Order } from "@models/orders/order.model";
 import { OrderFulfilmentGroup } from "@models/orders/order-fulfilment-group.model";
@@ -18,7 +19,7 @@ function hash(value: string) {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function paymentOrigin() {
+export function paymentOrigin() {
   const configured = String(process.env.PAYMENT_WEB_ORIGIN || "https://hook-africa.vercel.app").replace(/\/$/, "");
   if (process.env.NODE_ENV === "production" && !configured.startsWith("https://")) {
     throw new HttpError(503, "Hosted payments are not configured", undefined, "PAYMENT_CONFIGURATION_ERROR");
@@ -42,6 +43,8 @@ export class PaymentLinkService {
     }
     const payment = await Payment.findOne({
       orderId: String(order._id),
+      // A substitution top-up's Payment also has no fulfilmentGroupId, so it must be excluded explicitly here — otherwise this could match the wrong Payment.
+      itemResolutionId: { $exists: false },
       ...(fulfilmentGroupId ? { fulfilmentGroupId } : { fulfilmentGroupId: { $exists: false } }),
     });
     if (!payment) throw new HttpError(409, "Order payment record is missing", undefined, "PAYMENT_RECORD_MISSING");
@@ -74,6 +77,65 @@ export class PaymentLinkService {
     return {
       id: link.publicId,
       url,
+      token,
+      expiresAt: link.expiresAt,
+      status: link.status,
+    };
+  }
+
+  /**
+   * The replacement-item top-up flow's equivalent of `create()`: same hosted
+   * page (/payment/{token}), same provider-choice and share/revoke semantics,
+   * just anchored to a synthetic Payment scoped by itemResolutionId instead
+   * of a fulfilmentGroupId — so the customer never sees a different checkout.
+   */
+  async createForSubstitution(customerId: string, issue: { publicId: string; adjustmentMinor: number }, order: { _id: unknown; currency?: string }) {
+    let payment = await Payment.findOne({ itemResolutionId: issue.publicId });
+    if (payment?.commerceStatus === CommercePaymentStatus.CONFIRMED) {
+      throw new HttpError(409, "This payment is already complete", undefined, "PAYMENT_ALREADY_CONFIRMED");
+    }
+    if (!payment) {
+      const paymentPublicId = await nextPublicId("payment");
+      payment = await Payment.create({
+        publicId: paymentPublicId,
+        orderId: String(order._id),
+        itemResolutionId: issue.publicId,
+        resourceType: "order",
+        transactionRef: `SUB-${paymentPublicId}`,
+        gateway: "paystack",
+        paymentMethod: "card",
+        amount: Number(issue.adjustmentMinor) / 100,
+        amountMinor: Number(issue.adjustmentMinor),
+        currency: order.currency || "NGN",
+        gatewayFee: 0,
+        amountSettled: 0,
+        status: PaymentStatus.PENDING,
+        commerceStatus: CommercePaymentStatus.PENDING,
+        refundedAmount: 0,
+      });
+    }
+    await PaymentLink.updateMany(
+      { paymentId: String(payment._id), status: { $in: ["active", "processing"] } },
+      { $set: { status: "revoked", revokedAt: new Date() } },
+    );
+    const token = randomBytes(32).toString("base64url");
+    const link = await PaymentLink.create({
+      publicId: await nextPublicId("paymentLink"),
+      tokenHash: hash(token),
+      paymentId: String(payment._id),
+      orderId: String(order._id),
+      itemResolutionId: issue.publicId,
+      customerId,
+      provider: "paystack",
+      amountMinor: Number(issue.adjustmentMinor),
+      currency: payment.currency || order.currency || "NGN",
+      status: "active",
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      createdBy: customerId,
+    });
+    return {
+      id: link.publicId,
+      url: `${paymentOrigin()}/payment/${token}`,
       token,
       expiresAt: link.expiresAt,
       status: link.status,
@@ -114,15 +176,21 @@ export class PaymentLinkService {
 
   async detail(token: string) {
     const link = await this.resolve(token);
-    const [order, payment, items, settings, group] = await Promise.all([
+    const isSubstitution = Boolean(link.itemResolutionId);
+    const [order, payment, items, settings, group, substitution] = await Promise.all([
       Order.findById(link.orderId).select("publicId orderCode commerceStatus commercePaymentStatus subtotalMinor vatRate vatMinor deliveryFeeMinor couponCode couponDiscountMinor creditsAppliedMinor totalMinor currency").lean(),
       Payment.findById(link.paymentId).select("publicId commerceStatus paidAt gateway amountMinor currency").lean(),
-      OrderItem.find({ orderId: link.orderId, ...(link.fulfilmentGroupId ? { fulfilmentGroupId: link.fulfilmentGroupId } : {}) })
-        .select("publicId productTitle productImage quantity selectedVariants unitPriceMinor totalPriceMinor currency")
-        .lean({ virtuals: true }),
+      isSubstitution
+        ? Promise.resolve([])
+        : OrderItem.find({ orderId: link.orderId, ...(link.fulfilmentGroupId ? { fulfilmentGroupId: link.fulfilmentGroupId } : {}) })
+          .select("publicId productTitle productImage quantity selectedVariants unitPriceMinor totalPriceMinor currency")
+          .lean({ virtuals: true }),
       CommerceSettings.findOne({ key: "commerce" }).select("paymentProviders").lean(),
       link.fulfilmentGroupId
         ? OrderFulfilmentGroup.findOne({ publicId: link.fulfilmentGroupId }).select("subtotalMinor vatShareMinor deliveryFeeShareMinor").lean()
+        : Promise.resolve(null),
+      isSubstitution
+        ? ItemResolution.findOne({ publicId: link.itemResolutionId }).select("proposal originalSnapshot").lean()
         : Promise.resolve(null),
     ]);
     if (!order || !payment) throw new HttpError(404, "Payment link not found");
@@ -135,24 +203,34 @@ export class PaymentLinkService {
       .filter((entry) => entry.enabled && readiness[entry.provider]?.configured)
       .sort((a, b) => a.displayOrder - b.displayOrder)
       .map((entry) => ({ provider: entry.provider, isDefault: entry.isDefault, mode: readiness[entry.provider].mode }));
+    const substitutionProposal = substitution?.proposal as Record<string, unknown> | undefined;
+    const substitutionItems = substitutionProposal ? [{
+      id: link.itemResolutionId,
+      title: String(substitutionProposal.productTitle || (substitution?.originalSnapshot as any)?.title || "Replacement item"),
+      imageUrl: (substitution?.originalSnapshot as any)?.image,
+      quantity: Number(substitutionProposal.quantity || 1),
+      selectedVariants: substitutionProposal.selectedVariants,
+      unitPriceMinor: link.amountMinor,
+      totalPriceMinor: link.amountMinor,
+    }] : [];
     return {
       id: link.publicId,
       status: payment.commerceStatus === CommercePaymentStatus.CONFIRMED ? "paid" : link.status,
       expiresAt: link.expiresAt,
-      purpose: link.fulfilmentGroupId ? "Delivery payment" : "Order payment",
+      purpose: isSubstitution ? "Item replacement" : link.fulfilmentGroupId ? "Delivery payment" : "Order payment",
       order: {
         id: order.publicId,
         reference: order.orderCode || order.publicId,
-        subtotalMinor: link.fulfilmentGroupId ? Number(group?.subtotalMinor || items.reduce((sum, item) => sum + Number(item.totalPriceMinor || 0), 0)) : Number(order.subtotalMinor || 0),
-        vatRate: Number(order.vatRate || 0),
-        vatMinor: link.fulfilmentGroupId ? Number(group?.vatShareMinor || 0) : Number(order.vatMinor || 0),
-        deliveryFeeMinor: link.fulfilmentGroupId ? Number(group?.deliveryFeeShareMinor || 0) : Number(order.deliveryFeeMinor || 0),
-        couponCode: link.fulfilmentGroupId ? undefined : order.couponCode,
-        couponDiscountMinor: link.fulfilmentGroupId ? 0 : Number(order.couponDiscountMinor || 0),
-        creditsAppliedMinor: link.fulfilmentGroupId ? 0 : Number(order.creditsAppliedMinor || 0),
+        subtotalMinor: isSubstitution ? link.amountMinor : link.fulfilmentGroupId ? Number(group?.subtotalMinor || items.reduce((sum, item) => sum + Number(item.totalPriceMinor || 0), 0)) : Number(order.subtotalMinor || 0),
+        vatRate: isSubstitution ? 0 : Number(order.vatRate || 0),
+        vatMinor: isSubstitution ? 0 : link.fulfilmentGroupId ? Number(group?.vatShareMinor || 0) : Number(order.vatMinor || 0),
+        deliveryFeeMinor: isSubstitution ? 0 : link.fulfilmentGroupId ? Number(group?.deliveryFeeShareMinor || 0) : Number(order.deliveryFeeMinor || 0),
+        couponCode: isSubstitution || link.fulfilmentGroupId ? undefined : order.couponCode,
+        couponDiscountMinor: isSubstitution || link.fulfilmentGroupId ? 0 : Number(order.couponDiscountMinor || 0),
+        creditsAppliedMinor: isSubstitution || link.fulfilmentGroupId ? 0 : Number(order.creditsAppliedMinor || 0),
         totalMinor: link.amountMinor,
         currency: link.currency,
-        items: items.map((item) => ({
+        items: isSubstitution ? substitutionItems : items.map((item) => ({
           id: item.publicId,
           title: item.productTitle,
           imageUrl: item.productImage,

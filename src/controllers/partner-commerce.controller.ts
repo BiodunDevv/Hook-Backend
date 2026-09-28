@@ -19,6 +19,7 @@ import { issueCustomerAccountSetup } from "@services/account-invitation.service"
 import { HttpError, sendCreated, sendSuccess } from "@utils/http";
 import { routeParam } from "@lib/api-utils";
 import { createCommerceNotification } from "@services/commerce-notification.service";
+import { notifyStaffByPermission } from "@services/staff-notifications.service";
 
 export class PartnerCommerceController {
   private cart = new CartService();
@@ -224,19 +225,26 @@ export class PartnerCommerceController {
     const customer = await this.resolveCustomer(
       routeParam(req.params.customerId),
     );
-    sendCreated(
-      res,
-      await this.checkout.confirm(
-        {
-          type: "partner",
-          actorId: req.user!.sub,
-          customerId: customer.id,
-          partnerId: partner.id,
-        },
-        req.body.previewToken,
-        String(req.header("idempotency-key") || ""),
-      ),
+    const result = await this.checkout.confirm(
+      {
+        type: "partner",
+        actorId: req.user!.sub,
+        customerId: customer.id,
+        partnerId: partner.id,
+      },
+      req.body.previewToken,
+      String(req.header("idempotency-key") || ""),
     );
+    sendCreated(res, result);
+    await notifyStaffByPermission({
+      permission: "orders.edit",
+      stateId: (result as { sourceStateId?: string }).sourceStateId,
+      eventKeyPrefix: `partner-order:${result.publicId}:created`,
+      title: "Partner created an order",
+      body: `${partner.name || "A Hook Partner"} started an order for a customer`,
+      type: "order_updated",
+      data: { orderId: result.publicId, href: `/dashboard/orders/${result.publicId}` },
+    });
   };
   orders = async (req: Request, res: Response) => {
     const partner = await this.partner(req.user!.sub);

@@ -260,6 +260,10 @@ export class CustomerController {
     });
   };
 
+  pendingApprovals = async (req: Request, res: Response) => {
+    sendSuccess(res, await this.orders.pendingApprovals(owner(req)));
+  };
+
   listOrders = async (req: Request, res: Response) => {
     sendSuccess(
       res,

@@ -23,18 +23,20 @@ import { OrderFulfilmentGroup } from '@models/orders/order-fulfilment-group.mode
 import { ItemResolution } from '@models/fulfilment/item-resolution.model';
 import { Payment } from '@models/payments/payment.model';
 import { Market, DispatchHub } from '@models/platform/network.model';
+import { OperationState } from '@models/platform/geography.model';
 import { HookPartner, MarketAssociateMarketAssignment, MarketAssociateProfile } from '@models/platform/operations-accounts.model';
 import { User } from '@models/users/user.model';
 import { PlatformAuditLog } from '@models/platform/audit-log.model';
 import { nextPublicId } from '@services/public-id.service';
 import { PaymentService } from '@services/payment.service';
-import { defaultProviderName, paymentProvider, type ProviderName } from '@services/payments/provider-registry';
+import { PaymentLinkService } from '@services/payment-link.service';
 import { createCommerceNotification } from '@services/commerce-notification.service';
-import { isLogisticsSimulationEnabled, logisticsProvider, logisticsReadiness } from '@services/logistics/logistics-provider';
+import { isLogisticsSimulationEnabled, isFezLogisticsEnabled, logisticsProvider, logisticsReadiness } from '@services/logistics/logistics-provider';
 import { publishRealtime } from '@services/realtime.service';
 import { EmailService } from '@emails/email.service';
 import { HttpError } from '@utils/http';
 import { timelineEntry, notifyStatus } from '@lib/order-timeline';
+import { notifyStaffByPermission } from '@services/staff-notifications.service';
 import { encryptPackageCredential, tryDecryptPackageCredential } from '@lib/package-credential-crypto';
 
 type Actor = { accountId: string; publicId?: string; stateIds?: string[]; hubIds?: string[]; accountType?: string };
@@ -78,10 +80,13 @@ function isDuplicateKey(error: unknown) {
   return Boolean(error && typeof error === 'object' && (error as any).code === 11000);
 }
 
-function logisticsSignature(provider: string, payload: Record<string, unknown>, signature: string) {
-  const secret = process.env[`LOGISTICS_${provider.toUpperCase()}_WEBHOOK_SECRET`];
+function logisticsSignature(provider: string, payload: Record<string, unknown>, signature: string, timestamp?: string) {
+  // Fez signs with the account's own secret-key (no separate webhook secret is issued), unlike other providers.
+  const secret = provider === 'fez' ? process.env.FEZ_SECRET_KEY : process.env[`LOGISTICS_${provider.toUpperCase()}_WEBHOOK_SECRET`];
   if (!secret || !signature) return false;
-  const expected = createHmac('sha256', secret).update(JSON.stringify(payload)).digest('hex');
+  // Fez signs orderNo + orderStatus + timestamp, not the JSON body, so it needs its own scheme.
+  const signedString = provider === 'fez' ? `${payload.orderNumber || ''}${payload.status || ''}${timestamp || ''}` : JSON.stringify(payload);
+  const expected = createHmac('sha256', secret).update(signedString).digest('hex');
   const provided = signature.replace(/^sha256=/i, '').trim();
   if (!/^[a-f\d]{64}$/i.test(provided)) return false;
   return timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(provided, 'hex'));
@@ -119,22 +124,6 @@ async function assertStaffScope(actor: Actor, stateId?: string, hubId?: string) 
 }
 
 /** Batch-resolves market/hub/marketAssociate/order ids (stored as denormalized strings) into names, in three queries total, keyed by both _id and publicId. */
-/** Order statuses that mean "somewhere inside fulfilment". */
-const FULFILMENT_ORDER_STATUSES = [
-  CommerceOrderStatus.APPROVED_FOR_FULFILMENT,
-  CommerceOrderStatus.IN_FULFILMENT,
-  CommerceOrderStatus.PARTIALLY_RECEIVED,
-  CommerceOrderStatus.READY_FOR_CONSOLIDATION,
-  CommerceOrderStatus.READY_FOR_DISPATCH,
-];
-
-/** The coarse stages the admin Orders tab filters by. */
-const STAGE_STATUSES: Record<string, CommerceOrderStatus[]> = {
-  sourcing: [CommerceOrderStatus.APPROVED_FOR_FULFILMENT, CommerceOrderStatus.IN_FULFILMENT],
-  hub: [CommerceOrderStatus.PARTIALLY_RECEIVED, CommerceOrderStatus.READY_FOR_CONSOLIDATION],
-  dispatch: [CommerceOrderStatus.READY_FOR_DISPATCH],
-};
-
 const QC_FAILURE_LABELS: Record<string, string> = { WRONG_PRODUCT: 'Wrong product', WRONG_SIZE: 'Wrong size', WRONG_COLOR: 'Wrong colour', DAMAGED: 'Damaged or defective', MISSING: 'Missing item', OTHER: 'Other' };
 
 async function resolveFulfilmentNames(records: Array<{ marketId?: string; hubId?: string; marketAssociateId?: string; orderId?: string }>) {
@@ -472,11 +461,9 @@ export class FulfilmentService {
     if (issue.status !== 'CUSTOMER_APPROVAL_PENDING') {
       if (issue.customerDecision === (body.decision === 'ACCEPT' ? 'ACCEPTED' : 'DECLINED')) {
         if (issue.status === 'PAYMENT_PENDING') {
-          if (!issue.adjustmentPaymentReference || !issue.adjustmentAuthorizationUrl) {
-            await this.initializeSubstitutionTopUp(issue, order, customerId);
-          } else {
-            await this.verifySubstitutionTopUp(String(issue.adjustmentPaymentReference)).catch(() => undefined);
-          }
+          // Idempotent either way: an already-active link is reused as-is (see createForSubstitution),
+          // and a payment that already confirmed via webhook has moved this issue past PAYMENT_PENDING already.
+          await this.initializeSubstitutionTopUp(issue, order, customerId);
           const refreshed = await ItemResolution.findById(issue._id);
           return refreshed?.toObject() || issue.toObject();
         }
@@ -494,7 +481,23 @@ export class FulfilmentService {
       issue.status = 'DECLINED'; issue.customerDecision = 'DECLINED'; issue.customerDecidedAt = new Date(); issue.version += 1;
       issue.history.push({ action: 'CUSTOMER_DECLINED', actorId: customerId, at: new Date() });
       await issue.save();
-      await this.publishOrderUpdate(issue.orderId);
+      const task = await taskByIdentifier(issue.taskId).catch(() => undefined);
+      const productTitle = String((issue.originalSnapshot as any)?.title || 'The item');
+      await notifyStaffByPermission({
+        permission: 'fulfilment.manage', stateId: task?.sourceStateId, hubId: task?.hubId,
+        eventKeyPrefix: `item-resolution:${issue.publicId}:declined`,
+        title: 'Replacement declined by customer', body: `${productTitle} needs a new resolution — the customer declined the proposed replacement.`,
+        type: 'item_resolution_declined', data: { taskId: task?.publicId, itemResolutionId: issue.publicId, href: task?.publicId ? `/dashboard/fulfilment/tasks/${task.publicId}` : undefined },
+      });
+      if (issue.reportedBy) void createCommerceNotification({
+        eventKey: `item-resolution:${issue.publicId}:declined:${issue.reportedBy}`,
+        userId: String(issue.reportedBy),
+        title: 'Replacement declined by customer',
+        body: `${productTitle} needs a new resolution — the customer declined the proposed replacement.`,
+        type: 'item_resolution_declined',
+        data: { taskId: task?.publicId, itemResolutionId: issue.publicId },
+      });
+      await this.publishOrderUpdate(issue.orderId, task?.sourceStateId, task?.hubId);
       return issue.toObject();
     }
     issue.customerDecision = 'ACCEPTED'; issue.customerDecidedAt = new Date(); issue.version += 1;
@@ -512,36 +515,24 @@ export class FulfilmentService {
     return (await ItemResolution.findById(issue._id).lean({ virtuals: true })) || issue.toObject();
   }
 
+  /**
+   * A replacement top-up is "just another payment" now: it opens the exact
+   * same hosted /payment/{token} page a normal order or delivery payment
+   * does (provider choice, share/revoke, the lot) instead of a bespoke
+   * substitution-only checkout — see PaymentLinkService.createForSubstitution.
+   */
   private async initializeSubstitutionTopUp(issue: any, order: any, customerId: string) {
-    if (issue.adjustmentAuthorizationUrl && issue.adjustmentPaymentReference) return issue;
-    const customer = await User.findById(customerId).select('email publicId').lean() as any;
-    if (!customer?.email) throw new HttpError(409, 'Customer email is required for the top-up payment', undefined, 'PAYMENT_INITIALIZATION_NOT_ALLOWED');
-    const reference = issue.adjustmentPaymentReference || `SUB-${issue.publicId}-${issue.version}`;
-    const providerName = await defaultProviderName();
-    const callbackEnvVar = providerName === 'monnify' ? 'MONNIFY_CALLBACK_URL' : 'PAYSTACK_CALLBACK_URL';
-    const initialized = await paymentProvider(providerName).initialize({
-      reference,
-      amountMinor: Number(issue.adjustmentMinor),
-      currency: String(order.currency || 'NGN'),
-      email: customer.email,
-      callbackUrl: process.env[callbackEnvVar] || `${String(process.env.APP_URL || 'http://localhost:4000').replace(/\/$/, '')}/api/v1/payments/${providerName}/callback`,
-      metadata: {
-        purpose: 'order_substitution_top_up',
-        itemResolutionId: issue.publicId,
-        orderId: order.publicId || String(order._id),
-        customerId: customer.publicId || customerId,
-      },
-    });
+    const link = await new PaymentLinkService().createForSubstitution(
+      customerId,
+      { publicId: issue.publicId, adjustmentMinor: Number(issue.adjustmentMinor) },
+      order,
+    );
     const updated = await ItemResolution.findOneAndUpdate(
-      { _id: issue._id, status: 'PAYMENT_PENDING', adjustmentPaymentReference: { $exists: false } },
-      { $set: { adjustmentPaymentReference: reference, adjustmentAuthorizationUrl: initialized.authorizationUrl, adjustmentProvider: providerName } },
+      { _id: issue._id, status: 'PAYMENT_PENDING' },
+      { $set: { adjustmentAuthorizationUrl: link.url } },
       { returnDocument: 'after' },
     );
-    if (!updated) {
-      const existing = await ItemResolution.findById(issue._id);
-      if (existing?.adjustmentPaymentReference !== reference) throw new HttpError(409, 'A top-up payment is already active', undefined, 'INVALID_STATE_TRANSITION');
-      return existing;
-    }
+    if (!updated) throw new HttpError(409, 'A top-up payment is already active', undefined, 'INVALID_STATE_TRANSITION');
     Object.assign(issue, updated.toObject());
     return issue;
   }
@@ -551,6 +542,8 @@ export class FulfilmentService {
     const unknownEntry = [...issue.history].reverse().find((entry: any) => entry.action === 'REFUND_OUTCOME_UNKNOWN');
     const payment = unknownEntry?.paymentId ? await Payment.findById(String(unknownEntry.paymentId)) : await Payment.findOne({
       orderId: String(order._id),
+      // Never fund one item's refund out of a different item's top-up payment.
+      itemResolutionId: { $exists: false },
       gateway: { $in: ['paystack', 'monnify'] },
       status: { $in: [PaymentStatus.SUCCESSFUL, PaymentStatus.PARTIALLY_REFUNDED] },
       $expr: { $gte: [{ $subtract: [{ $ifNull: ['$amountMinor', 0] }, { $ifNull: ['$refundedAmount', 0] }] }, amountMinor] },
@@ -582,24 +575,22 @@ export class FulfilmentService {
     await this.applyResolvedSubstitution(issue, customerId);
   }
 
-  async verifySubstitutionTopUp(reference: string, providerEventId?: string) {
-    const issue = await ItemResolution.findOne({ adjustmentPaymentReference: reference });
+  /**
+   * Called by PaymentService.confirmPayment once a top-up Payment (scoped by
+   * itemResolutionId) is verified and marked CONFIRMED — the evidence check
+   * already happened there, via the same path every order/delivery payment
+   * goes through, so this only applies the resulting side effect.
+   */
+  async confirmSubstitutionAdjustment(itemResolutionId: string, providerReference?: string, paidAt?: Date) {
+    const issue = await ItemResolution.findOne({ publicId: itemResolutionId });
     if (!issue) return { matched: false };
     if (issue.status === 'RESOLVED' && issue.adjustmentStatus === 'CONFIRMED') return { matched: true, duplicate: true };
     if (issue.status !== 'PAYMENT_PENDING') throw new HttpError(409, 'This top-up is no longer payable', undefined, 'INVALID_STATE_TRANSITION');
-    const order = await Order.findById(issue.orderId).lean() as any;
-    if (!order) throw new HttpError(404, 'Order not found', undefined, 'NOT_FOUND');
-    const providerName = (issue.adjustmentProvider || 'paystack') as ProviderName;
-    const verified = await paymentProvider(providerName).verify(reference);
-    if (verified.reference !== reference || verified.status !== 'success' || verified.amountMinor !== Number(issue.adjustmentMinor) || verified.currency !== String(order.currency || 'NGN').toUpperCase()) {
-      throw new HttpError(409, 'Top-up payment evidence does not match this replacement', undefined, 'PAYMENT_EVIDENCE_MISMATCH');
-    }
     issue.adjustmentStatus = 'CONFIRMED';
-    issue.adjustmentProviderReference = verified.providerId || providerEventId || reference;
-    issue.adjustmentProcessedAt = verified.paidAt || new Date();
-    const actor = providerName === 'monnify' ? 'MONNIFY_WEBHOOK' : 'PAYSTACK_WEBHOOK';
-    issue.history.push({ action: 'TOP_UP_CONFIRMED', actorId: actor, providerReference: issue.adjustmentProviderReference, at: new Date() });
-    await this.applyResolvedSubstitution(issue, actor);
+    issue.adjustmentProviderReference = providerReference;
+    issue.adjustmentProcessedAt = paidAt || new Date();
+    issue.history.push({ action: 'TOP_UP_CONFIRMED', actorId: 'PAYMENT_WEBHOOK', providerReference, at: new Date() });
+    await this.applyResolvedSubstitution(issue, 'PAYMENT_WEBHOOK');
     await this.publishOrderUpdate(issue.orderId);
     return { matched: true, processed: true };
   }
@@ -627,6 +618,17 @@ export class FulfilmentService {
       issue.status = 'RESOLVED'; issue.adjustmentStatus = issue.adjustmentStatus || 'NOT_REQUIRED'; issue.version += 1;
       issue.history.push({ action: 'SUBSTITUTION_APPLIED', actorId, at: new Date() });
       await issue.save({ session });
+    });
+    // The reporting Market Associate is the one who now needs to go source this
+    // replacement — every accept path (immediate, after top-up, after refund)
+    // converges here, so notifying from this one spot covers all three.
+    if (issue.reportedBy) void createCommerceNotification({
+      eventKey: `item-resolution:${issue.publicId}:approved:${issue.reportedBy}`,
+      userId: String(issue.reportedBy),
+      title: 'Replacement approved by customer',
+      body: `${String(proposal?.productTitle || 'The replacement item')} was approved — go ahead and source it.`,
+      type: 'item_resolution_approved',
+      data: { taskId: issue.taskId, itemResolutionId: issue.publicId },
     });
   }
 
@@ -732,6 +734,25 @@ export class FulfilmentService {
     if (!updated) throw new HttpError(409, 'This task changed. Refresh and try again.', undefined, 'STALE_VERSION');
     await audit('fulfilment.task.reassigned', 'fulfilment_task', task.publicId || task._id.toString(), actor.accountId, { marketAssociateId: marketAssociate.publicId || marketAssociate._id.toString(), hubId: hub.publicId || hub._id.toString() }, String(body.reason).trim(), task.sourceStateId, hub._id.toString());
     await this.publishOrderUpdate(task.orderId, task.sourceStateId, hub.publicId || hub._id.toString());
+    if (task.marketAssociateId && task.marketAssociateId !== marketAssociate._id.toString()) {
+      const outgoing = await MarketAssociateProfile.findById(task.marketAssociateId).select('accountId').lean();
+      if (outgoing?.accountId) void createCommerceNotification({
+        eventKey: `fulfilment:${task.publicId}:reassigned-from:${updated.version}`,
+        userId: outgoing.accountId,
+        title: 'Task reassigned',
+        body: `${task.publicId} was moved to another Market Associate: ${String(body.reason).trim()}`,
+        type: 'order_updated',
+        data: { taskId: task.publicId },
+      });
+    }
+    if (marketAssociate.accountId) void createCommerceNotification({
+      eventKey: `fulfilment:${task.publicId}:reassigned-to:${updated.version}`,
+      userId: marketAssociate.accountId,
+      title: 'New order to fulfil',
+      body: `${task.publicId} was reassigned to you. Accept it to begin.`,
+      type: 'order_assigned',
+      data: { taskId: task.publicId, orderId: task.orderId },
+    });
     return updated;
   }
 
@@ -762,6 +783,24 @@ export class FulfilmentService {
       // The OVERDUE status flip above is the real state change; it used to be
       // paired with an exception row that nothing acted on.
       custodyOverdue += 1;
+      const [order, partner] = await Promise.all([
+        Order.findById(custody.orderId).select('publicId sourceStateId').lean() as Promise<any>,
+        HookPartner.findOne(partnerIdentity(String(custody.partnerId))).select('accountId stateId').lean() as Promise<any>,
+      ]);
+      await notifyStaffByPermission({
+        permission: 'fulfilment.manage', stateId: order?.sourceStateId || partner?.stateId,
+        eventKeyPrefix: `partner-custody:${custody.publicId}:overdue`,
+        title: 'Partner custody overdue', body: `${order?.publicId || custody.publicId} has sat with the Partner past its handover window.`,
+        type: 'order_updated', data: { orderId: order?.publicId, custodyId: custody.publicId, href: order?.publicId ? `/dashboard/orders/${order.publicId}` : undefined },
+      });
+      if (partner?.accountId) void createCommerceNotification({
+        eventKey: `partner-custody:${custody.publicId}:overdue:partner`,
+        userId: partner.accountId,
+        title: 'A parcel with you is overdue',
+        body: `${order?.publicId || custody.publicId} needs to be handed to the customer or returned to Hook — its handover window has passed.`,
+        type: 'order_updated',
+        data: { orderId: order?.publicId },
+      });
     }
     return { custodyOverdue };
   }
@@ -1050,6 +1089,12 @@ export class FulfilmentService {
     if (!taskUpdate.modifiedCount) throw new HttpError(409, 'This fulfilment task changed. Refresh and try again.', undefined, 'STALE_VERSION');
     await audit('fulfilment.task.blocked', 'fulfilment_task', task._id.toString(), accountId, { issue }, undefined, task.sourceStateId, task.hubId);
     await this.publishOrderUpdate(task.orderId, task.sourceStateId, task.hubId);
+    await notifyStaffByPermission({
+      permission: 'fulfilment.manage', stateId: task.sourceStateId, hubId: task.hubId,
+      eventKeyPrefix: `fulfilment-task:${task.publicId}:blocked:${idempotencyKey}`,
+      title: 'Fulfilment task blocked', body: issue.summary,
+      type: 'order_updated', data: { taskId: task.publicId, href: `/dashboard/fulfilment/tasks/${task.publicId}` },
+    });
     return (await FulfilmentTask.findById(task._id).lean({ virtuals: true })) as any;
   }
 
@@ -1073,6 +1118,12 @@ export class FulfilmentService {
     await OrderItem.updateOne({ _id: orderItemId }, { $set: { fulfilmentStatus: 'EXCEPTION', resolutionState: 'REPLACEMENT_PENDING' } });
     await audit('fulfilment.item.issue_created', 'item_resolution', resolution.id, accountId, { taskId: task.publicId, orderItemId, type: body.type }, undefined, task.sourceStateId, task.hubId);
     await this.publishOrderUpdate(task.orderId, task.sourceStateId, task.hubId);
+    await notifyStaffByPermission({
+      permission: 'fulfilment.manage', stateId: task.sourceStateId, hubId: task.hubId,
+      eventKeyPrefix: `item-resolution:${resolution.id}:reported`,
+      title: 'Item exception reported', body: `${item.productTitle || 'A product'} needs review: ${body.type ? String(body.type).replaceAll('_', ' ').toLowerCase() : body.summary}`,
+      type: 'item_resolution_reported', data: { taskId: task.publicId, itemResolutionId: resolution.publicId, href: `/dashboard/fulfilment/tasks/${task.publicId}` },
+    });
     return resolution.toObject();
   }
 
@@ -1100,6 +1151,17 @@ export class FulfilmentService {
     if (!updated) throw new HttpError(409, 'This fulfilment task changed. Refresh and try again.', undefined, 'STALE_VERSION');
     await audit('fulfilment.task.unblocked', 'fulfilment_task', task._id.toString(), actor.accountId, { reason }, undefined, task.sourceStateId, task.hubId);
     await this.publishOrderUpdate(task.orderId, task.sourceStateId, task.hubId);
+    if (task.marketAssociateId) {
+      const marketAssociateProfile = await MarketAssociateProfile.findById(task.marketAssociateId).select('accountId').lean();
+      if (marketAssociateProfile?.accountId) void createCommerceNotification({
+        eventKey: `fulfilment:${task.publicId}:unblocked:${updated.version}`,
+        userId: marketAssociateProfile.accountId,
+        title: 'Task unblocked',
+        body: `${task.publicId} is releasable again. ${reason}`,
+        type: 'order_updated',
+        data: { taskId: task.publicId },
+      });
+    }
     return updated;
   }
 
@@ -1686,7 +1748,8 @@ export class FulfilmentService {
     const order = await orderByIdentifier(orderIdentifier); await assertStaffScope(actor, order.sourceStateId, body.hubId);
     const provider = String(body.provider || 'manual') as LogisticsProviderKey;
     if (provider === 'simulated' && !isLogisticsSimulationEnabled()) throw new HttpError(503, 'Logistics simulation is available only in a non-production environment when explicitly enabled', undefined, 'PROVIDER_NOT_READY');
-    if (!['manual', 'other', 'simulated'].includes(provider)) throw new HttpError(409, 'GIG and Fez adapters are disabled until provider credentials and contracts are verified', undefined, 'PROVIDER_NOT_READY');
+    if (provider === 'fez' && !isFezLogisticsEnabled()) throw new HttpError(409, 'Fez is disabled until provider credentials are verified', undefined, 'PROVIDER_NOT_READY');
+    if (!['manual', 'other', 'simulated', 'fez'].includes(provider)) throw new HttpError(409, 'GIG is disabled until provider credentials and contracts are verified', undefined, 'PROVIDER_NOT_READY');
 
     // The courier the customer chose and paid for at checkout. Booking used to
     // ignore this entirely — staff picked from a dropdown defaulting to
@@ -1724,11 +1787,23 @@ export class FulfilmentService {
     const simulationBooking = provider === 'simulated'
       ? await logisticsProvider('simulated').book({ orderId: order.publicId, providerCostMinor: body.providerCostMinor, providerQuoteMinor: body.providerQuoteMinor })
       : undefined;
+    const deliveryAddressSnapshot = order.addressSnapshot || order.deliveryAddress;
+    let fezBooking: Record<string, unknown> | undefined;
+    let fezQuoteMinor: number | undefined;
+    if (provider === 'fez') {
+      const hubDoc = await DispatchHub.findOne(identifier(consolidation.hubId)).select('name address contact stateId').lean() as any;
+      const hubState = hubDoc?.stateId ? await OperationState.findOne(identifier(hubDoc.stateId)).select('name').lean() as any : null;
+      const hub = hubDoc ? { name: hubDoc.name, address: hubDoc.address, phone: hubDoc.contact?.phone, stateName: hubState?.name } : undefined;
+      const bookingInput = { orderId: order.publicId, bookingIdempotencyKey: body.idempotencyKey, deliveryAddressSnapshot, totalMinor: order.totalMinor, weightGrams: consolidation.weightGrams, hub };
+      const fez = logisticsProvider('fez');
+      fezQuoteMinor = await fez.quote(bookingInput).then((quote) => Number(quote.quoteMinor)).catch(() => undefined);
+      fezBooking = await fez.book(bookingInput);
+    }
     const shipmentId = await nextPublicId('shipment');
     let shipment: any;
     try {
       shipment = await this.atomically(async (session) => {
-        const [created] = await Shipment.create([{ publicId: shipmentId, orderId: order._id.toString(), fulfilmentGroupId: consolidation.fulfilmentGroupId, sourceStateId: consolidation.sourceStateId, hubId: consolidation.hubId, consolidationId: consolidation._id.toString(), provider, courierCode, courierName, substitutedFrom: substituting ? String(chosen.code) : undefined, substitutionReason: substituting ? String(body.substitutionReason).trim() : undefined, serviceName: body.serviceName || (provider === 'simulated' ? 'Hook Logistics Simulator' : undefined), externalReference: body.externalReference || simulationBooking?.externalReference, status: ShipmentStatus.BOOKED_WITH_PROVIDER, deliveryAddressSnapshot: order.addressSnapshot || order.deliveryAddress, estimatedDeliveryAt: body.estimatedDeliveryAt ? new Date(body.estimatedDeliveryAt) : simulationBooking?.estimatedDeliveryAt ? new Date(String(simulationBooking.estimatedDeliveryAt)) : undefined, bookedAt: new Date(), providerCostMinor: body.providerCostMinor, providerQuoteMinor: body.providerQuoteMinor, trackingNumber: body.trackingNumber || simulationBooking?.trackingNumber, trackingEvents: [{ status: 'BOOKED_WITH_PROVIDER', at: new Date(), actorId: actor.accountId, mode: provider === 'simulated' ? 'simulation' : undefined }], evidence: evidence(body.evidence), releaseStatus: order.commercePaymentMethod === 'PAY_AT_HANDOVER' ? 'AWAITING_HANDOVER_PAYMENT' : 'NOT_REQUIRED', bookingIdempotencyKey: body.idempotencyKey, version: 1 }], { session });
+        const [created] = await Shipment.create([{ publicId: shipmentId, orderId: order._id.toString(), fulfilmentGroupId: consolidation.fulfilmentGroupId, sourceStateId: consolidation.sourceStateId, hubId: consolidation.hubId, consolidationId: consolidation._id.toString(), provider, courierCode, courierName, substitutedFrom: substituting ? String(chosen.code) : undefined, substitutionReason: substituting ? String(body.substitutionReason).trim() : undefined, serviceName: body.serviceName || (provider === 'simulated' ? 'Hook Logistics Simulator' : provider === 'fez' ? 'Fez Delivery' : undefined), externalReference: body.externalReference || simulationBooking?.externalReference || fezBooking?.externalReference, status: ShipmentStatus.BOOKED_WITH_PROVIDER, deliveryAddressSnapshot, estimatedDeliveryAt: body.estimatedDeliveryAt ? new Date(body.estimatedDeliveryAt) : simulationBooking?.estimatedDeliveryAt ? new Date(String(simulationBooking.estimatedDeliveryAt)) : undefined, bookedAt: new Date(), providerCostMinor: body.providerCostMinor ?? fezQuoteMinor, providerQuoteMinor: body.providerQuoteMinor ?? fezQuoteMinor, trackingNumber: body.trackingNumber || simulationBooking?.trackingNumber || (fezBooking?.trackingNumber as string | undefined), trackingEvents: [{ status: 'BOOKED_WITH_PROVIDER', at: new Date(), actorId: actor.accountId, mode: provider === 'simulated' ? 'simulation' : undefined }], evidence: evidence(body.evidence), releaseStatus: order.commercePaymentMethod === 'PAY_AT_HANDOVER' ? 'AWAITING_HANDOVER_PAYMENT' : 'NOT_REQUIRED', bookingIdempotencyKey: body.idempotencyKey, version: 1 }], { session });
         await Order.updateOne({ _id: order._id }, { $set: { commerceStatus: CommerceOrderStatus.READY_FOR_DISPATCH, customerProgress: [{ key: 'shipment', label: 'Shipment booked and awaiting pickup', at: new Date() }] }, $push: { timeline: timelineEntry('BOOKED_WITH_PROVIDER', actor.accountId) } }, { session });
         return created;
       });
@@ -1779,7 +1854,17 @@ export class FulfilmentService {
       return moved;
     });
     if (!updated) throw new HttpError(409, 'Shipment changed. Refresh and try again.', undefined, 'STALE_VERSION');
-    if (orderStatus) await notifyStatus(shipment.orderId, next);
+    // DELIVERY_FAILED has no CommerceOrderStatus of its own, so orderStatus stays
+    // undefined for it — notify anyway, this is the gap where nobody heard about a failed attempt.
+    if (orderStatus || next === ShipmentStatus.DELIVERY_FAILED) await notifyStatus(shipment.orderId, next);
+    if (next === ShipmentStatus.DELIVERY_FAILED) {
+      await notifyStaffByPermission({
+        permission: 'fulfilment.manage', stateId: shipment.sourceStateId, hubId: shipment.hubId,
+        eventKeyPrefix: `shipment:${shipment.publicId}:delivery-failed:${updated.version}`,
+        title: 'Delivery attempt failed', body: `${order?.publicId || shipment.publicId} needs a redelivery or return decision.`,
+        type: 'order_delayed', data: { orderId: order?.publicId, shipmentId: shipment.publicId, href: order?.publicId ? `/dashboard/orders/${order.publicId}` : undefined },
+      });
+    }
     await this.publishOrderUpdate(shipment.orderId, shipment.sourceStateId, shipment.hubId);
     if (orderStatus === CommerceOrderStatus.DELIVERED && order?.userId) {
       await createCommerceNotification({
@@ -1899,7 +1984,8 @@ export class FulfilmentService {
       throw new HttpError(400, attempts >= 4 ? 'Invalid collection code. Collection is now locked for 15 minutes.' : `Invalid collection code. ${4 - attempts} attempt${4 - attempts === 1 ? '' : 's'} left.`, undefined, 'VALIDATION_ERROR');
     }
     // Every live payment on the order must be confirmed, not just the first one found.
-    const payments = await Payment.find({ orderId: custody.orderId }).select('commerceStatus').lean() as any[];
+    // A replacement-item top-up is excluded: that gates the item's own resolution, not custody release for the rest of the order.
+    const payments = await Payment.find({ orderId: custody.orderId, itemResolutionId: { $exists: false } }).select('commerceStatus').lean() as any[];
     const live = payments.filter((item) => !['CANCELLED', 'EXPIRED', 'FAILED'].includes(String(item.commerceStatus)));
     if (!live.length || live.some((item) => item.commerceStatus !== CommercePaymentStatus.CONFIRMED)) throw new HttpError(409, 'Confirmed payment is required before collection', undefined, 'PAYMENT_REQUIRED');
     const result = await PartnerCustody.findOneAndUpdate({ _id: custody._id, status: 'IN_CUSTODY' }, { $set: { status: 'RELEASED', releasedAt: new Date() }, $push: { history: { action: 'RELEASED', actorId: actor.accountId, at: new Date(), ...(idempotencyKey ? { idempotencyKey } : {}) } } }, { returnDocument: 'after' }).lean({ virtuals: true });
@@ -1922,18 +2008,32 @@ export class FulfilmentService {
     await Order.updateOne({ _id: order._id }, { $set: { commerceStatus: CommerceOrderStatus.RETURN_IN_PROGRESS }, $push: { timeline: timelineEntry('RETURN_REQUESTED', actor.accountId) } });
     await notifyStatus(order._id, 'RETURN_IN_PROGRESS');
     await this.publishOrderUpdate(order._id.toString(), order.sourceStateId);
+    await notifyStaffByPermission({
+      permission: 'fulfilment.manage', stateId: order.sourceStateId,
+      eventKeyPrefix: `return:${record.publicId}:requested`,
+      title: 'New return request', body: `${order.publicId} — ${items.length} item${items.length === 1 ? '' : 's'} returned: ${String(body.reason || body.reasonType || '')}`.trim(),
+      type: 'return_update', data: { orderId: order.publicId, returnRequestId: record.publicId, href: `/dashboard/orders/${order.publicId}` },
+    });
     return record.toJSON();
   }
 
   async reviewReturn(actor: Actor, identifierValue: string, body: Record<string, any>) {
     const request = await ReturnRequest.findOne(identifier(identifierValue)).lean({ virtuals: true }) as any;
     if (!request) throw new HttpError(404, 'Return request not found', undefined, 'NOT_FOUND');
-    const order = await Order.findById(request.orderId).select('sourceStateId').lean() as any;
+    const order = await Order.findById(request.orderId).select('sourceStateId userId publicId').lean() as any;
     if (!order) throw new HttpError(404, 'Return request not found', undefined, 'NOT_FOUND');
     await assertStaffScope(actor, order.sourceStateId);
     if (!['APPROVED', 'REJECTED'].includes(body.decision)) throw new HttpError(400, 'Return decision is required', undefined, 'VALIDATION_ERROR');
     const updated = await ReturnRequest.findOneAndUpdate({ _id: request._id, status: { $in: ['REQUESTED', 'UNDER_REVIEW'] } }, { $set: { status: body.decision, reviewedBy: actor.accountId, decisionNote: body.reason, handoverDueAt: body.decision === 'APPROVED' ? new Date(Date.now() + 5 * 24 * 60 * 60 * 1000) : undefined } }, { returnDocument: 'after' }).lean({ virtuals: true }); if (!updated) throw new HttpError(409, 'Return request has already been decided', undefined, 'INVALID_STATE_TRANSITION');
     await this.publishOrderUpdate(request.orderId, order.sourceStateId);
+    if (order.userId) void createCommerceNotification({
+      eventKey: `return:${request.publicId}:${body.decision.toLowerCase()}`,
+      userId: order.userId,
+      title: body.decision === 'APPROVED' ? 'Your return was approved' : 'Your return was declined',
+      body: body.decision === 'APPROVED' ? 'Hand your item to the courier or drop-off point named in your order.' : String(body.reason || 'Contact support if you have questions about this decision.'),
+      type: 'return_update',
+      data: { orderId: order.publicId },
+    });
     return updated;
   }
 
@@ -1950,7 +2050,7 @@ export class FulfilmentService {
       const returnRequest = await ReturnRequest.findOne(identifier(String(body.returnRequestId))).select('orderId').lean() as any;
       if (!returnRequest || String(returnRequest.orderId) !== String(order._id)) throw new HttpError(400, 'Return request does not belong to this order', undefined, 'VALIDATION_ERROR');
     }
-    const payment = await Payment.findOne({ orderId: order._id.toString() }).lean({ virtuals: true }) as any;
+    const payment = await Payment.findOne({ orderId: order._id.toString(), itemResolutionId: { $exists: false } }).lean({ virtuals: true }) as any;
     if (!payment || payment.commerceStatus !== CommercePaymentStatus.CONFIRMED) {
       throw new HttpError(409, 'Only captured payments can be refunded', undefined, 'PAYMENT_NOT_CAPTURED');
     }
@@ -2035,7 +2135,20 @@ export class FulfilmentService {
       try {
         if (!refund.paymentId) continue;
         const found = await this.payments.reconcileRefund(refund.paymentId, refund.amountMinor, refund.idempotencyKey);
-        if (!found) continue;
+        if (!found) {
+          // Still unresolved after an hour parked: alert finance once (the eventKey is per
+          // refund with no time component, so this can only ever fire a single time for it).
+          if (Date.now() - new Date(refund.updatedAt || 0).getTime() > 60 * 60_000) {
+            const order = await Order.findById(refund.orderId).select('sourceStateId publicId').lean() as any;
+            await notifyStaffByPermission({
+              permission: 'finance.refunds.view', stateId: order?.sourceStateId,
+              eventKeyPrefix: `refund:${refund.publicId}:stuck-unknown`,
+              title: 'Refund outcome still unknown', body: `${order?.publicId || refund.publicId}'s refund could not be confirmed with the provider — it may need a manual check.`,
+              type: 'order_updated', data: { orderId: order?.publicId, refundId: refund.publicId, href: order?.publicId ? `/dashboard/orders/${order.publicId}` : undefined },
+            });
+          }
+          continue;
+        }
         const order = await Order.findById(refund.orderId).select('sourceStateId userId publicId').lean() as any;
         if (!order) continue;
         await this.finalizeRefund({ accountId: 'SYSTEM' } as Actor, refund, order, found.providerReference, 'Reconciled with provider');
@@ -2176,113 +2289,6 @@ export class FulfilmentService {
     };
   }
 
-  /**
-   * Orders currently moving through fulfilment, with their tasks rolled up.
-   *
-   * The control tower answers "which tasks need attention"; this answers
-   * "where is this order right now", which previously required opening tasks
-   * one at a time. Modelled on customerOrderProgress() — same fan-out, staff
-   * scoped instead of customer scoped, and paginated so it does not inherit
-   * the tower's silent 200-row truncation.
-   */
-  async fulfilmentOrders(actor: Actor, query: Record<string, unknown>) {
-    await assertStaffScope(actor, query.stateId as string | undefined);
-    const { page, limit, skip } = getPagination(query as any);
-
-    const filter: Record<string, any> = {
-      commerceStatus: { $in: FULFILMENT_ORDER_STATUSES },
-      deletedAt: { $exists: false },
-    };
-    if (query.stage && query.stage !== 'all') {
-      const stage = STAGE_STATUSES[String(query.stage)];
-      if (stage) filter.commerceStatus = { $in: stage };
-    }
-    // Staff scope wins over any caller-supplied state, matching controlTower().
-    if (query.stateId) filter.sourceStateId = String(query.stateId);
-    if (actor.stateIds?.length) filter.sourceStateId = { $in: actor.stateIds };
-
-    if (typeof query.search === 'string' && query.search.trim()) {
-      const safe = query.search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const term = new RegExp(`^${safe}`, 'i');
-      filter.$or = [{ publicId: term }, { orderCode: term }];
-    }
-
-    const [orders, total] = await Promise.all([
-      Order.find(filter)
-        .select('publicId orderCode commerceStatus status userId sourceStateId totalMinor currency createdAt')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean({ virtuals: true }) as Promise<any[]>,
-      Order.countDocuments(filter),
-    ]);
-    if (!orders.length) return { data: [], total, page, limit, totalPages: Math.max(Math.ceil(total / limit), 1) };
-
-    const orderIds = orders.map((order) => String(order._id));
-    const [tasks, items, shipments, users] = await Promise.all([
-      FulfilmentTask.find({ orderId: { $in: orderIds } }).lean({ virtuals: true }) as Promise<any[]>,
-      OrderItem.find({ orderId: { $in: orderIds } })
-        .select('orderId publicId productTitle productImage productSnapshot quantity')
-        .lean() as Promise<any[]>,
-      Shipment.find({ orderId: { $in: orderIds } }).select('orderId publicId status trackingNumber').lean() as Promise<any[]>,
-      User.find({ _id: { $in: [...new Set(orders.map((order) => String(order.userId)).filter(Boolean))] } })
-        .select('firstName lastName email')
-        .lean() as Promise<any[]>,
-    ]);
-
-    const names = await resolveFulfilmentNames(tasks);
-    const userById = new Map(users.map((user) => [String(user._id), user]));
-    const group = <T extends { orderId?: string }>(rows: T[]) => {
-      const map = new Map<string, T[]>();
-      for (const row of rows) {
-        const key = String(row.orderId);
-        map.set(key, [...(map.get(key) || []), row]);
-      }
-      return map;
-    };
-    const tasksByOrder = group(tasks);
-    const itemsByOrder = group(items);
-    const shipmentsByOrder = group(shipments);
-    const data = orders.map((order) => {
-      const orderTasks = tasksByOrder.get(String(order._id)) || [];
-      const customer = userById.get(String(order.userId));
-      return {
-        id: order.publicId,
-        reference: order.orderCode || order.publicId,
-        commerceStatus: order.commerceStatus || order.status,
-        totalMinor: Number(order.totalMinor || 0),
-        currency: order.currency || 'NGN',
-        createdAt: order.createdAt,
-        sourceStateId: order.sourceStateId,
-        customer: customer
-          ? { name: `${customer.firstName || ''} ${customer.lastName || ''}`.trim() || customer.email, email: customer.email }
-          : undefined,
-        items: (itemsByOrder.get(String(order._id)) || []).map((item) => ({
-          id: item.publicId,
-          title: item.productSnapshot?.title || item.productTitle,
-          imageUrl: item.productSnapshot?.image || item.productImage,
-          quantity: Number(item.quantity || 0),
-        })),
-        tasks: orderTasks.map((task) => ({
-          id: task.publicId,
-          status: task.status,
-          market: names.market(task.marketId),
-          hub: names.hub(task.hubId),
-          marketAssociate: names.marketAssociate(task.marketAssociateId),
-        })),
-        shipments: (shipmentsByOrder.get(String(order._id)) || []).map((shipment) => ({
-          id: shipment.publicId,
-          status: shipment.status,
-          trackingNumber: shipment.trackingNumber,
-        })),
-        blockedTaskCount: orderTasks.filter((task) => task.status === FulfilmentTaskStatus.BLOCKED).length,
-      };
-    });
-
-    return { data, total, page, limit, totalPages: Math.max(Math.ceil(total / limit), 1) };
-  }
-
-
   async returns(actor: Actor, query: Record<string, unknown>) {
     await assertStaffScope(actor, query.stateId as string | undefined);
     const filter: Record<string, any> = query.status ? { status: query.status } : {};
@@ -2393,12 +2399,12 @@ export class FulfilmentService {
     return { providers: logisticsReadiness() };
   }
 
-  async logisticsWebhook(provider: string, eventId: string, payload: Record<string, unknown>, signature: string) {
+  async logisticsWebhook(provider: string, eventId: string, payload: Record<string, unknown>, signature: string, timestamp?: string) {
     if (!['gig', 'fez', 'manual', 'simulated', 'other'].includes(provider)) throw new HttpError(400, 'Unsupported logistics provider', undefined, 'VALIDATION_ERROR');
     if (!eventId) throw new HttpError(400, 'Provider event id is required', undefined, 'VALIDATION_ERROR');
     if (['gig', 'fez'].includes(provider) && process.env[`LOGISTICS_${provider.toUpperCase()}_ENABLED`] !== 'true') throw new HttpError(503, `${provider.toUpperCase()} logistics integration is not enabled`, undefined, 'PROVIDER_NOT_READY');
     if (provider === 'simulated' && !isLogisticsSimulationEnabled()) throw new HttpError(503, 'Logistics simulation is not enabled', undefined, 'PROVIDER_NOT_READY');
-    if (!logisticsSignature(provider, payload, signature)) throw new HttpError(401, 'Invalid logistics webhook signature', undefined, 'WEBHOOK_SIGNATURE_INVALID');
+    if (!logisticsSignature(provider, payload, signature, timestamp)) throw new HttpError(401, 'Invalid logistics webhook signature', undefined, 'WEBHOOK_SIGNATURE_INVALID');
     const payloadHash = digest(JSON.stringify(payload));
     const normalizedProvider = provider as any;
     // Only a fully handled delivery is a duplicate. One left RECEIVED (crash,
@@ -2446,13 +2452,22 @@ export class FulfilmentService {
       DELIVERY_FAILED: ShipmentStatus.DELIVERY_FAILED,
       RETURN_IN_TRANSIT: ShipmentStatus.RETURN_IN_TRANSIT,
       RETURNED_TO_HOOK: ShipmentStatus.RETURNED_TO_HOOK,
+      // Fez's own, coarser status vocabulary (its docs don't fully enumerate it,
+      // so this list may need extending once real webhook traffic is observed).
+      PENDING_PICK_UP: ShipmentStatus.AWAITING_PICKUP,
+      DISPATCHED: ShipmentStatus.IN_TRANSIT,
+      RETURNED: ShipmentStatus.RETURNED_TO_HOOK,
     };
     const next = statusMap[statusKey];
     if (!shipment || !next) {
       await LogisticsWebhookEvent.updateOne({ _id: event._id }, { $set: { status: 'IGNORED', processedAt: new Date() } });
       return { duplicate: false, event: { ...event.toJSON(), status: 'IGNORED' }, accepted: false };
     }
-    const allowed: Record<string, string[]> = { READY_FOR_BOOKING: ['BOOKED_WITH_PROVIDER'], BOOKING_PENDING: ['BOOKED_WITH_PROVIDER'], BOOKED_WITH_PROVIDER: ['AWAITING_PICKUP', 'CANCELLED'], AWAITING_PICKUP: ['PICKED_UP', 'CANCELLED'], PICKED_UP: ['IN_TRANSIT', 'DELIVERY_FAILED'], IN_TRANSIT: ['OUT_FOR_DELIVERY', 'DELIVERY_FAILED', 'RETURN_IN_TRANSIT'], OUT_FOR_DELIVERY: ['DELIVERED', 'DELIVERY_FAILED', 'AWAITING_HANDOVER_PAYMENT'], AWAITING_HANDOVER_PAYMENT: ['RELEASE_APPROVED'], RELEASE_APPROVED: ['DELIVERED'], DELIVERY_FAILED: ['RETURN_IN_TRANSIT'], RETURN_IN_TRANSIT: ['RETURNED_TO_HOOK'] };
+    // IN_TRANSIT allows DELIVERED and RETURNED_TO_HOOK directly (not just via
+    // OUT_FOR_DELIVERY/DELIVERY_FAILED), and PICKED_UP allows RETURNED_TO_HOOK
+    // directly, because Fez's coarser status vocabulary has no "out for
+    // delivery" or "delivery failed" event of its own before Delivered/Returned.
+    const allowed: Record<string, string[]> = { READY_FOR_BOOKING: ['BOOKED_WITH_PROVIDER'], BOOKING_PENDING: ['BOOKED_WITH_PROVIDER'], BOOKED_WITH_PROVIDER: ['AWAITING_PICKUP', 'CANCELLED'], AWAITING_PICKUP: ['PICKED_UP', 'CANCELLED'], PICKED_UP: ['IN_TRANSIT', 'DELIVERY_FAILED', 'RETURNED_TO_HOOK'], IN_TRANSIT: ['OUT_FOR_DELIVERY', 'DELIVERY_FAILED', 'RETURN_IN_TRANSIT', 'DELIVERED', 'RETURNED_TO_HOOK'], OUT_FOR_DELIVERY: ['DELIVERED', 'DELIVERY_FAILED', 'AWAITING_HANDOVER_PAYMENT'], AWAITING_HANDOVER_PAYMENT: ['RELEASE_APPROVED'], RELEASE_APPROVED: ['DELIVERED'], DELIVERY_FAILED: ['RETURN_IN_TRANSIT'], RETURN_IN_TRANSIT: ['RETURNED_TO_HOOK'] };
     if (shipment.status === next) {
       // Already in this state (e.g. the provider re-sent it under a new event id): nothing to apply.
       await LogisticsWebhookEvent.updateOne({ _id: event._id }, { $set: { status: 'PROCESSED', processedAt: new Date(), shipmentId: shipment.publicId || shipment._id.toString() } });
@@ -2474,7 +2489,16 @@ export class FulfilmentService {
       return moved;
     });
     if (!updated) throw new HttpError(409, 'Shipment changed while processing provider event', undefined, 'STALE_VERSION');
-    if (orderStatus) await notifyStatus(shipment.orderId, next);
+    if (orderStatus || next === ShipmentStatus.DELIVERY_FAILED) await notifyStatus(shipment.orderId, next);
+    if (next === ShipmentStatus.DELIVERY_FAILED) {
+      const order = await Order.findById(shipment.orderId).select('publicId').lean() as any;
+      await notifyStaffByPermission({
+        permission: 'fulfilment.manage', stateId: shipment.sourceStateId, hubId: shipment.hubId,
+        eventKeyPrefix: `shipment:${shipment.publicId}:delivery-failed:${updated.version}`,
+        title: 'Delivery attempt failed', body: `${order?.publicId || shipment.publicId} needs a redelivery or return decision.`,
+        type: 'order_delayed', data: { orderId: order?.publicId, shipmentId: shipment.publicId, href: order?.publicId ? `/dashboard/orders/${order.publicId}` : undefined },
+      });
+    }
     await this.publishOrderUpdate(shipment.orderId, shipment.sourceStateId, shipment.hubId);
     return { duplicate: false, event: { ...event.toJSON(), status: 'PROCESSED' }, shipment: updated, accepted: true };
     } catch (error) {

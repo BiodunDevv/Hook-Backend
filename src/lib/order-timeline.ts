@@ -51,7 +51,26 @@ const STATUS_PUSH: Record<string, { type: string; key: string; title: string; bo
   ON_HOLD: { type: 'order_updated', key: 'on-hold', title: 'Your order is on hold', body: 'Open the order to see what we need from you.' },
   RETURN_IN_PROGRESS: { type: 'return_update', key: 'return', title: 'Your return is in progress', body: 'We will keep you updated.' },
   REFUNDED: { type: 'refund_processed', key: 'refunded', title: 'Your refund was issued', body: 'It is on its way back to you.' },
+  DELIVERY_FAILED: { type: 'order_delayed', key: 'delivery-failed', title: 'A delivery attempt failed', body: 'Our team is arranging another attempt and will update you shortly.' },
 };
+
+/** A partner-facing rendering for a subset of the same statuses, since their copy talks to a counter operator, not the end customer. */
+const PARTNER_STATUS_PUSH: Record<string, { title: string; body: string }> = {
+  IN_FULFILMENT: { title: 'Sourcing started', body: 'Hook is sourcing the items for this order now.' },
+  READY_FOR_DISPATCH: { title: 'Order packed', body: 'This order is sealed and ready for its courier.' },
+  PICKED_UP: { title: 'Order shipped', body: 'The courier has collected this order.' },
+  IN_TRANSIT: { title: 'Order in transit', body: 'This order is moving to the customer.' },
+  OUT_FOR_DELIVERY: { title: 'Out for delivery', body: 'This order arrives today.' },
+  DELIVERED: { title: 'Order delivered', body: 'This order has been delivered.' },
+  DELIVERY_FAILED: { title: 'Delivery attempt failed', body: 'A delivery attempt on this order failed. Hook is arranging another attempt.' },
+  ON_HOLD: { title: 'Order on hold', body: 'This order needs attention — open it to see what Hook needs.' },
+  RETURN_IN_PROGRESS: { title: 'Return in progress', body: 'A return is being processed for this order.' },
+  REFUNDED: { title: 'Order refunded', body: 'This order was refunded.' },
+};
+
+function partnerRecordIdentity(value: string) {
+  return /^[a-f\d]{24}$/i.test(value) ? { $or: [{ _id: value }, { publicId: value }] } : { publicId: value };
+}
 
 /**
  * The customer's phone hears about each meaningful status. The event key is
@@ -62,18 +81,38 @@ async function pushOrderStatus(orderId: unknown, status: string) {
   const entry = STATUS_PUSH[status];
   if (!entry) return;
   try {
-    const order = (await Order.findById(orderId).select('publicId userId').lean()) as { publicId?: string; userId?: string } | null;
-    if (!order?.userId || !order.publicId) return;
+    const order = (await Order.findById(orderId).select('publicId userId initiatingPartnerId').lean()) as { publicId?: string; userId?: string; initiatingPartnerId?: string } | null;
+    if (!order?.publicId) return;
     const { createCommerceNotification } = await import('@services/commerce-notification.service');
-    await createCommerceNotification({
-      // DELIVERED reuses the key the manual delivery path already writes.
-      eventKey: `order:${order.publicId}:${entry.key}`,
-      userId: order.userId,
-      title: entry.title,
-      body: entry.body,
-      type: entry.type,
-      data: { orderId: order.publicId },
-    });
+    if (order.userId) {
+      await createCommerceNotification({
+        // DELIVERED reuses the key the manual delivery path already writes.
+        eventKey: `order:${order.publicId}:${entry.key}`,
+        userId: order.userId,
+        title: entry.title,
+        body: entry.body,
+        type: entry.type,
+        data: { orderId: order.publicId },
+      });
+    }
+    // Assisted-checkout orders have a Partner with their own stake in this order's progress — tell them too, in their own words.
+    if (order.initiatingPartnerId) {
+      const partnerCopy = PARTNER_STATUS_PUSH[status];
+      if (partnerCopy) {
+        const { HookPartner } = await import('@models/platform/operations-accounts.model');
+        const partner = await HookPartner.findOne(partnerRecordIdentity(String(order.initiatingPartnerId))).select('accountId').lean() as { accountId?: string } | null;
+        if (partner?.accountId) {
+          await createCommerceNotification({
+            eventKey: `order:${order.publicId}:${entry.key}:partner:${partner.accountId}`,
+            userId: partner.accountId,
+            title: partnerCopy.title,
+            body: partnerCopy.body,
+            type: entry.type,
+            data: { orderId: order.publicId },
+          });
+        }
+      }
+    }
   } catch {
     // A push must never block a status transition.
   }

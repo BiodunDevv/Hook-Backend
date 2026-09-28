@@ -164,6 +164,14 @@ export function createCustomerRouter() {
     asyncHandler(controller.checkoutConfirm),
   );
   router.get("/orders", asyncHandler(controller.listOrders));
+  // Registered ahead of /orders/:id below, since that route would otherwise
+  // match "pending-approvals" as an :id.
+  router.get(
+    "/orders/pending-approvals",
+    requireAuth,
+    requireAccountType(AccountType.CUSTOMER),
+    asyncHandler(controller.pendingApprovals),
+  );
   router.get("/orders/:id", asyncHandler(controller.getOrder));
   router.get(
     "/orders/:id/receipt",

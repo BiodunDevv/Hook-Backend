@@ -262,7 +262,8 @@ export class OrderService {
     const orderIds = orders.map((order) => order.id);
     const [items, payments, groups] = await Promise.all([
       orderIds.length ? OrderItem.find({ orderId: { $in: orderIds } }).lean({ virtuals: true }) : [],
-      orderIds.length ? Payment.find({ orderId: { $in: orderIds } }).select('-gatewayResponse -authorizationUrl -accessCode').lean({ virtuals: true }) : [],
+      // Excludes replacement-item top-ups: orderPayments[0] below stands in for "this order's payment status", which a top-up must not shadow.
+      orderIds.length ? Payment.find({ orderId: { $in: orderIds }, itemResolutionId: { $exists: false } }).select('-gatewayResponse -authorizationUrl -accessCode').lean({ virtuals: true }) : [],
       orderIds.length ? OrderFulfilmentGroup.find({ orderId: { $in: orderIds } }).sort({ createdAt: 1 }).lean({ virtuals: true }) : [],
     ]);
     const itemMap = new Map<string, any[]>();
@@ -307,6 +308,48 @@ export class OrderService {
     }) as any;
   }
 
+  /**
+   * A light, cross-order signal for "do I have anything to confirm right now" —
+   * the home-screen prompt and Profile badge poll this instead of loading
+   * every order's full detail just to check for a pending substitution.
+   */
+  /**
+   * Cross-order signal for the mascot/banner: still needs the customer's
+   * attention either way — either a decision (CUSTOMER_APPROVAL_PENDING) or,
+   * once they've accepted a priced replacement, the top-up payment that
+   * unblocks fulfilment (PAYMENT_PENDING). Dropping the mascot the moment
+   * they accept would strand them mid-flow with an unpaid top-up and no
+   * reminder to finish it.
+   */
+  async pendingApprovals(owner: CustomerOwner) {
+    if (!owner.userId) return { count: 0, items: [] };
+    const resolutions = await ItemResolution.find({ customerId: owner.userId, status: { $in: ['CUSTOMER_APPROVAL_PENDING', 'PAYMENT_PENDING'] } })
+      .sort({ createdAt: -1 })
+      .limit(20)
+      .lean({ virtuals: true });
+    if (!resolutions.length) return { count: 0, items: [] };
+    const orders = await Order.find({ _id: { $in: resolutions.map((entry: any) => entry.orderId) } })
+      .select('publicId orderCode')
+      .lean({ virtuals: true });
+    const orderMap = new Map(orders.map((order: any) => [order.id, order]));
+    return {
+      count: resolutions.length,
+      items: resolutions.map((entry: any) => {
+        const order = orderMap.get(entry.orderId);
+        return {
+          itemResolutionId: entry.publicId,
+          orderId: order?.publicId || order?.orderCode || entry.orderId,
+          displayNumber: order ? displayNumber(order) : undefined,
+          productTitle: entry.proposal?.productTitle,
+          summary: entry.summary,
+          adjustmentMinor: Number(entry.adjustmentMinor || 0),
+          createdAt: entry.createdAt,
+          status: entry.status as 'CUSTOMER_APPROVAL_PENDING' | 'PAYMENT_PENDING',
+        };
+      }),
+    };
+  }
+
   async getCustomerOrder(owner: CustomerOwner, id: string) {
     const identifier = id.match(/^[a-f\d]{24}$/i) ? { $or: [{ _id: id }, { publicId: id }, { orderCode: id }] } : { $or: [{ publicId: id }, { orderCode: id }] };
     const order = await Order.findOne({ ...identifier, ...this.ownerWhere(owner) }).lean({ virtuals: true });
@@ -316,7 +359,10 @@ export class OrderService {
       Payment.find({ orderId: order.id }).select('-gatewayResponse -authorizationUrl -accessCode').lean({ virtuals: true }),
       OrderFulfilmentGroup.find({ orderId: order.id }).sort({ createdAt: 1 }).lean({ virtuals: true }),
       Shipment.find({ orderId: order.id }).sort({ createdAt: 1 }).lean({ virtuals: true }),
-      ItemResolution.find({ orderId: order.id, ...(order.userId ? { customerId: order.userId } : {}), status: { $in: ['CUSTOMER_APPROVAL_PENDING', 'PAYMENT_PENDING', 'REFUND_PENDING', 'DECLINED', 'RESOLVED'] } }).sort({ createdAt: -1 }).lean({ virtuals: true }),
+      // OPEN/ADMIN_REVIEW included too, not just CUSTOMER_APPROVAL_PENDING onward — a
+      // customer should see why an item is being worked on as soon as it's reported,
+      // not only once staff have proposed a replacement.
+      ItemResolution.find({ orderId: order.id, ...(order.userId ? { customerId: order.userId } : {}), status: { $in: ['OPEN', 'ADMIN_REVIEW', 'CUSTOMER_APPROVAL_PENDING', 'PAYMENT_PENDING', 'REFUND_PENDING', 'DECLINED', 'RESOLVED'] } }).sort({ createdAt: -1 }).lean({ virtuals: true }),
     ]);
     const subtotalMinor = Number(order.subtotalMinor ?? Math.round(Number(order.subtotal || 0) * 100));
     const vatMinor = Number(order.vatMinor || 0);

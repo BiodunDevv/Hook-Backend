@@ -25,9 +25,8 @@ export interface ItemResolution extends BaseEntity {
   customerDecidedAt?: Date;
   adjustmentMinor: number;
   adjustmentStatus?: 'NOT_REQUIRED' | 'PENDING' | 'CONFIRMED' | 'FAILED';
-  adjustmentPaymentReference?: string;
+  /** The same hosted checkout page a normal order/delivery payment uses (/payment/{token}) — see PaymentLinkService.createForSubstitution. The backing Payment is found by Payment.itemResolutionId, not stored here. */
   adjustmentAuthorizationUrl?: string;
-  adjustmentProvider?: "paystack" | "monnify";
   adjustmentProviderReference?: string;
   adjustmentProcessedAt?: Date;
   idempotencyKey: string;
@@ -53,9 +52,7 @@ const schema = createSchema<ItemResolution>({
   customerDecidedAt: { type: Date },
   adjustmentMinor: { type: Number, default: 0 },
   adjustmentStatus: { type: String, enum: ['NOT_REQUIRED', 'PENDING', 'CONFIRMED', 'FAILED'] },
-  adjustmentPaymentReference: { type: String, unique: true, sparse: true, index: true },
   adjustmentAuthorizationUrl: { type: String },
-  adjustmentProvider: { type: String, enum: ["paystack", "monnify"] },
   adjustmentProviderReference: { type: String },
   adjustmentProcessedAt: { type: Date },
   idempotencyKey: { type: String, required: true, unique: true, index: true },

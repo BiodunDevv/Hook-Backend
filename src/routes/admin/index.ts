@@ -158,6 +158,18 @@ export function createAdminRouter() {
   // Keep staff notifications on an explicit admin path so the Admin shell
   // never presents a customer identity to the API.
   router.get("/notifications", asyncHandler(notifications.list));
+  router.patch("/notifications/read-all", asyncHandler(notifications.markAllRead));
+  router.patch("/notifications/:id/read", asyncHandler(notifications.markRead));
+  router.post(
+    "/push/subscribe",
+    validateBody(z.object({ endpoint: z.string().url(), keys: z.object({ p256dh: z.string().min(1), auth: z.string().min(1) }) })),
+    asyncHandler(notifications.subscribePush),
+  );
+  router.post(
+    "/push/unsubscribe",
+    validateBody(z.object({ endpoint: z.string().url() })),
+    asyncHandler(notifications.unsubscribePush),
+  );
 
   // ── Search (permission-scoped — controller reads user from req) ────────
   router.get("/search", asyncHandler(search.global));
@@ -741,7 +753,6 @@ export function createAdminRouter() {
 
   // ── Phase 5 fulfilment, Hub, logistics, returns and refunds ───────────
   router.get('/fulfilment/control-tower', requirePermission('fulfilment.view'), asyncHandler(fulfilment.controlTower));
-  router.get('/fulfilment/orders', requirePermission('fulfilment.view'), asyncHandler(fulfilment.fulfilmentOrders));
   router.get('/fulfilment/tasks/:id', requirePermission('fulfilment.view'), asyncHandler(fulfilment.adminTaskDetail));
   router.post('/fulfilment/issues/:id/proposals', requirePermission('fulfilment.assign'), validateBody(z.object({ version: z.coerce.number().int().positive(), productId: z.string().min(1).optional(), productTitle: z.string().min(1).max(200), productImage: z.string().url().optional(), color: z.string().min(1).max(80), size: z.string().min(1).max(80), quantity: z.coerce.number().int().positive(), unitPriceMinor: z.coerce.number().int().nonnegative(), reason: z.string().min(3).max(1000) }).strict()), asyncHandler(fulfilment.proposeItemResolution));
   router.get('/fulfilment/market-associates', requirePermission('fulfilment.assign'), asyncHandler(fulfilment.assignmentMarketAssociates));

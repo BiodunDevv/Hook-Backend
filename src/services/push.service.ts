@@ -1,5 +1,7 @@
+import webpush from 'web-push';
 import { DeviceToken } from '@models/notifications/device-token.model';
 import { PushTicket } from '@models/notifications/push-ticket.model';
+import { WebPushSubscription } from '@models/notifications/web-push-subscription.model';
 
 /**
  * Sends push notifications through Expo's push service and looks after what
@@ -108,6 +110,47 @@ export async function sendPushToUser(userId: string, content: Omit<PushMessage, 
   if (!pushEnabled()) return;
   const devices = await DeviceToken.find({ userId, isActive: true }).select('expoPushToken').lean();
   await sendPushMessages(devices.map((device) => ({ ...content, to: device.expoPushToken })));
+}
+
+const vapidConfigured = () => Boolean(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY);
+let vapidSet = false;
+function ensureVapid() {
+  if (vapidSet || !vapidConfigured()) return;
+  webpush.setVapidDetails(
+    process.env.VAPID_SUBJECT || 'mailto:support@hook.ng',
+    process.env.VAPID_PUBLIC_KEY!,
+    process.env.VAPID_PRIVATE_KEY!,
+  );
+  vapidSet = true;
+}
+
+/** Browser (Web Push) delivery for staff/Market Associate/Partner accounts — Expo tokens don't apply to a browser tab. */
+export async function sendWebPushToUser(userId: string, content: { title: string; body: string; data?: Record<string, unknown> }) {
+  if (!pushEnabled() || !vapidConfigured()) return;
+  ensureVapid();
+  const subscriptions = await WebPushSubscription.find({ userId, isActive: true }).lean();
+  if (!subscriptions.length) return;
+  await Promise.all(subscriptions.map(async (subscription) => {
+    try {
+      await webpush.sendNotification(
+        { endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } },
+        JSON.stringify({ title: content.title, body: content.body, data: content.data || {} }),
+      );
+    } catch (error) {
+      const statusCode = (error as { statusCode?: number })?.statusCode;
+      // Gone/Not Found: the browser dropped this subscription — stop sending to it.
+      if (statusCode === 404 || statusCode === 410) {
+        await WebPushSubscription.updateOne({ _id: subscription._id }, { $set: { isActive: false } });
+      } else {
+        console.warn('[push] web-push send failed', statusCode || (error instanceof Error ? error.message : error));
+      }
+    }
+  }));
+}
+
+/** Every existing caller of createCommerceNotification keeps working unchanged and now also reaches staff browsers. */
+export async function notifyPush(userId: string, content: Omit<PushMessage, 'to'>) {
+  await Promise.all([sendPushToUser(userId, content), sendWebPushToUser(userId, content)]);
 }
 
 /**

@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { DELIVERY_SLA_HOURS, OrderStatus, PaymentStatus } from "@lib/constants";
+import { DELIVERY_SLA_HOURS, FulfilmentTaskStatus, OrderStatus, PaymentStatus } from "@lib/constants";
 import { auditAdminAction } from "@lib/audit";
 import { EmailService } from "@emails/email.service";
 import { getEmailSettings } from "@services/email-settings.service";
@@ -26,6 +26,8 @@ import { PaymentService } from "@services/payment.service";
 import { restoreOrderIncentives } from "@services/order-restoration.service";
 import { splitOrderIntoGroups } from "@services/order-split.service";
 import { createCommerceNotification } from "@services/commerce-notification.service";
+import { FulfilmentTask } from "@models/fulfilment/fulfilment.model";
+import { MarketAssociateProfile } from "@models/platform/operations-accounts.model";
 
 export class AdminOrdersController {
   private readonly email = new EmailService();
@@ -43,7 +45,8 @@ export class AdminOrdersController {
         .escrowLedger()
         .find({ where: { orderId: order.id }, order: { createdAt: "ASC" } }),
     ]);
-    return { ...order, items, payment: payments[0], payments, fulfilmentGroups, logistics, escrowLedger };
+    // "payment" is the order's primary payment summary; a replacement-item top-up must not stand in for it, though it still shows in the full "payments" list below.
+    return { ...order, items, payment: payments.find((entry: any) => !entry.itemResolutionId) || payments[0], payments, fulfilmentGroups, logistics, escrowLedger };
   }
 
   list = async (req: Request, res: Response) => {
@@ -268,6 +271,28 @@ export class AdminOrdersController {
     );
 
     await notifyStatus(String(order._id), CommerceOrderStatus.CANCELLED);
+    // A live task (e.g. a Pay-at-Handover order cancelled mid-sourcing) must
+    // stop and its Market Associate must be told, or they keep working an order that no longer exists.
+    const activeTasks = await FulfilmentTask.find({
+      orderId: String(order._id),
+      status: { $nin: [FulfilmentTaskStatus.COMPLETED, FulfilmentTaskStatus.CANCELLED] },
+    }).lean();
+    for (const task of activeTasks) {
+      await FulfilmentTask.updateOne({ _id: task._id, version: task.version }, { $set: { status: FulfilmentTaskStatus.CANCELLED }, $inc: { version: 1 } });
+      if (task.marketAssociateId) {
+        const marketAssociateProfile = await MarketAssociateProfile.findById(task.marketAssociateId).select("accountId").lean();
+        if (marketAssociateProfile?.accountId) {
+          await createCommerceNotification({
+            eventKey: `fulfilment:${task.publicId}:order-cancelled`,
+            userId: marketAssociateProfile.accountId,
+            title: "Order cancelled — stop this task",
+            body: `${order.publicId} was cancelled. ${reason}`.trim(),
+            type: "order_cancelled",
+            data: { taskId: task.publicId, orderId: order.publicId },
+          }).catch(() => undefined);
+        }
+      }
+    }
     if (order.userId) {
       await createCommerceNotification({
         eventKey: `order:${order.publicId}:cancelled-by-admin`,

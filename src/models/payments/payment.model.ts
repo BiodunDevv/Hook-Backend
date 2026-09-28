@@ -5,6 +5,8 @@ export interface Payment extends BaseEntity {
   publicId?: string;
   orderId?: string;
   fulfilmentGroupId?: string;
+  /** Set when this Payment is a replacement-item top-up rather than a normal order/delivery payment — see PaymentLinkService.createForSubstitution. */
+  itemResolutionId?: string;
   giftId?: string;
   resourceType: "order" | "gift";
   transactionRef: string;
@@ -48,6 +50,7 @@ const PaymentSchema = createSchema<Payment>({
   publicId: { type: String, unique: true, sparse: true, index: true },
   orderId: { type: String, sparse: true, index: true },
   fulfilmentGroupId: { type: String, unique: true, sparse: true, index: true },
+  itemResolutionId: { type: String, unique: true, sparse: true, index: true },
   giftId: { type: String, unique: true, sparse: true, index: true },
   resourceType: {
     type: String,

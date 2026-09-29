@@ -367,6 +367,10 @@ export const publicDeletionCancelSchema = z.union([
 export const waitlistJoinSchema = z.object({
   email: emailField,
   name: z.string().trim().min(2).max(120),
+  phone: z.string().trim().regex(/^\+?[0-9\s-]{7,20}$/, 'Enter a valid phone number'),
+  city: z.string().trim().min(2).max(120),
+  // Optional: the landing page's free-text prompt, not every signup will answer it.
+  itemInterest: z.string().trim().max(1000).optional(),
   // A ticked consent checkbox so the landing page cannot join people without asking them first.
   consent: z.literal(true, { message: 'Consent to be contacted is required to join the waitlist' }),
 }).strict();

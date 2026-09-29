@@ -600,7 +600,11 @@ export class FulfilmentService {
     await this.atomically(async (session) => {
       const item = await OrderItem.findOneAndUpdate(
         { _id: issue.orderItemId, resolutionState: 'REPLACEMENT_PENDING' },
-        { $set: { productId: proposal.productId, productTitle: proposal.productTitle, productImage: proposal.productImage, selectedVariants: proposal.selectedVariants, quantity: proposal.quantity, unitPriceMinor: proposal.unitPriceMinor, totalPriceMinor: proposal.totalPriceMinor, unitPrice: proposal.unitPriceMinor / 100, totalPrice: proposal.totalPriceMinor / 100, replacementSnapshot: { ...proposal, original: issue.originalSnapshot, approvedByCustomerAt: issue.customerDecidedAt }, resolutionState: 'RESOLVED', fulfilmentStatus: 'SOURCING' } },
+        // variantSnapshot is what QC and item-verification compare "Found" against as
+        // "Ordered" — leaving it pointing at the pre-replacement spec would flag every
+        // correctly-sourced replacement as a colour/size mismatch, so it moves with
+        // selectedVariants here rather than staying frozen at the original order.
+        { $set: { productId: proposal.productId, productTitle: proposal.productTitle, productImage: proposal.productImage, selectedVariants: proposal.selectedVariants, variantSnapshot: proposal.selectedVariants, quantity: proposal.quantity, unitPriceMinor: proposal.unitPriceMinor, totalPriceMinor: proposal.totalPriceMinor, unitPrice: proposal.unitPriceMinor / 100, totalPrice: proposal.totalPriceMinor / 100, replacementSnapshot: { ...proposal, original: issue.originalSnapshot, approvedByCustomerAt: issue.customerDecidedAt }, resolutionState: 'RESOLVED', fulfilmentStatus: 'SOURCING' } },
         { returnDocument: 'after', session },
       ).lean() as any;
       if (!item) {
@@ -1600,7 +1604,10 @@ export class FulfilmentService {
     const group = groupIds.length
       ? await OrderFulfilmentGroup.findOne({ orderId: order._id.toString(), publicId: groupIds[0] }).lean()
       : await OrderFulfilmentGroup.findOne({ orderId: order._id.toString(), sourceStateId }).lean();
-    const items = await OrderItem.find({ orderId: order._id.toString(), ...(group ? { fulfilmentGroupId: group.publicId } : { stateId: sourceStateId }), resolutionState: { $ne: 'RESOLVED' } }).lean({ virtuals: true }) as any[];
+    // A RESOLVED item (a replacement the customer approved) still ships as its new product and still
+    // needs its own Hub QC pass — applyResolvedSubstitution sets it back to fulfilmentStatus SOURCING
+    // for exactly that reason, so excluding it here would let consolidation skip its QC entirely.
+    const items = await OrderItem.find({ orderId: order._id.toString(), ...(group ? { fulfilmentGroupId: group.publicId } : { stateId: sourceStateId }) }).lean({ virtuals: true }) as any[];
     if (!items.length || items.some((item) => !packageItems.has(item._id.toString()))) throw new HttpError(409, 'Every active order item must pass Hub quality check before consolidation', undefined, 'ORDER_NOT_COMPLETE');
     const packageHubIds = [...new Set(packages.map((item: any) => String(item.hubId)))];
     if (packageHubIds.length !== 1 || (body.hubId && String(body.hubId) !== packageHubIds[0])) throw new HttpError(409, 'All packages must be at the same Dispatch Hub before consolidation', undefined, 'HUB_MISMATCH');
@@ -1794,6 +1801,12 @@ export class FulfilmentService {
       const hubDoc = await DispatchHub.findOne(identifier(consolidation.hubId)).select('name address contact stateId').lean() as any;
       const hubState = hubDoc?.stateId ? await OperationState.findOne(identifier(hubDoc.stateId)).select('name').lean() as any : null;
       const hub = hubDoc ? { name: hubDoc.name, address: hubDoc.address, phone: hubDoc.contact?.phone, stateName: hubState?.name } : undefined;
+      // Fez requires a sender phone for a third-party pickup — surface a clear, actionable
+      // error here rather than letting Fez's raw "Senders phone is required" reach staff with
+      // no indication of which Hub or where to fix it.
+      if (hub?.address && !hub.phone) {
+        throw new HttpError(409, `${hub.name || 'This Hub'} has no contact phone number set. Add one under Hubs before booking with Fez.`, undefined, 'VALIDATION_ERROR');
+      }
       const bookingInput = { orderId: order.publicId, bookingIdempotencyKey: body.idempotencyKey, deliveryAddressSnapshot, totalMinor: order.totalMinor, weightGrams: consolidation.weightGrams, hub };
       const fez = logisticsProvider('fez');
       fezQuoteMinor = await fez.quote(bookingInput).then((quote) => Number(quote.quoteMinor)).catch(() => undefined);

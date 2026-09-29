@@ -22,10 +22,16 @@ function readAddress(input: Record<string, unknown>): FezAddress {
   };
 }
 
+/** Module-level so the session survives across requests/instances within this process. */
+let cachedSession: { authToken: string; expiresAt: number } | undefined;
+
 /**
- * Fez Delivery adapter. Auth is just the account's secret-key (from
- * Developers > Manage API Key in the Fez business portal), sent as the
- * secret-key header on every call — no login step, no bearer token.
+ * Fez Delivery adapter. Two separate credentials, not one: `secret-key` is
+ * the static org key from Developers > Manage Keys, but the `Authorization`
+ * Bearer token is a short-lived session obtained by logging in with
+ * FEZ_USER_ID/FEZ_PASSWORD via POST /user/authenticate — that login response
+ * carries the token under authDetails.authToken plus an expireToken. This
+ * class logs in once and reuses the token until shortly before it expires.
  */
 export class FezLogisticsProvider implements LogisticsProvider {
   readonly name: LogisticsProviderName = 'fez';
@@ -38,8 +44,42 @@ export class FezLogisticsProvider implements LogisticsProvider {
     return value;
   }
 
-  private async send(path: string, init: RequestInit): Promise<Record<string, any>> {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json', 'secret-key': this.secretKey(), ...(init.headers as Record<string, string> | undefined) };
+  private credentials() {
+    const userId = process.env.FEZ_USER_ID;
+    const password = process.env.FEZ_PASSWORD;
+    if (!userId || !password) throw new HttpError(503, 'Fez logistics is not configured', undefined, 'LOGISTICS_PROVIDER_UNAVAILABLE');
+    return { userId, password };
+  }
+
+  private async authenticate(): Promise<string> {
+    if (cachedSession && cachedSession.expiresAt > Date.now()) return cachedSession.authToken;
+    const { userId, password } = this.credentials();
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/user/authenticate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: userId, password }),
+        signal: AbortSignal.timeout(15000),
+      });
+    } catch {
+      throw new HttpError(503, 'Fez is temporarily unavailable', undefined, 'LOGISTICS_PROVIDER_UNAVAILABLE');
+    }
+    const body = (await response.json().catch(() => ({}))) as Record<string, any>;
+    const authToken = body.authDetails?.authToken as string | undefined;
+    if (!response.ok || String(body.status || '').toLowerCase() !== 'success' || !authToken) {
+      throw new HttpError(502, String(body.description || 'Fez login failed'), { httpStatus: response.status }, 'LOGISTICS_PROVIDER_ERROR');
+    }
+    // Refresh a minute early so a call in flight never races the real expiry.
+    const expireAt = Number(body.authDetails?.expireToken);
+    const expiresAt = Number.isFinite(expireAt) && expireAt > Date.now() ? expireAt - 60_000 : Date.now() + 10 * 60_000;
+    cachedSession = { authToken, expiresAt };
+    return authToken;
+  }
+
+  private async send(path: string, init: RequestInit, retrying = false): Promise<Record<string, any>> {
+    const authToken = await this.authenticate();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}`, 'secret-key': this.secretKey(), ...(init.headers as Record<string, string> | undefined) };
     let response: Response;
     try {
       response = await fetch(`${this.baseUrl}${path}`, { ...init, headers, signal: AbortSignal.timeout(15000) });
@@ -47,8 +87,18 @@ export class FezLogisticsProvider implements LogisticsProvider {
       throw new HttpError(503, 'Fez is temporarily unavailable', undefined, 'LOGISTICS_PROVIDER_UNAVAILABLE');
     }
     const body = (await response.json().catch(() => ({}))) as Record<string, any>;
+    // A stale cached token gets exactly one retry with a fresh login before giving up.
+    if (response.status === 401 && !retrying) {
+      cachedSession = undefined;
+      return this.send(path, init, true);
+    }
     if (!response.ok || String(body.status || '').toLowerCase() !== 'success') {
-      throw new HttpError(502, String(body.description || 'Fez could not process the request'), { httpStatus: response.status }, 'LOGISTICS_PROVIDER_ERROR');
+      // `description` is often just a generic bucket ("Error creating orders") — Fez puts the
+      // actual per-field reason in other shapes depending on the endpoint, so check those too
+      // rather than hiding them behind the generic text.
+      const detail = body.errors || body.error || body.message || body.data;
+      const reason = detail ? `${body.description || 'Fez could not process the request'}: ${typeof detail === 'string' ? detail : JSON.stringify(detail)}` : String(body.description || 'Fez could not process the request');
+      throw new HttpError(502, reason, { httpStatus: response.status, providerBody: body }, 'LOGISTICS_PROVIDER_ERROR');
     }
     return body;
   }

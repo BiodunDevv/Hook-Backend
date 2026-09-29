@@ -14,7 +14,7 @@ export class WaitlistService {
   private email = new EmailService();
 
   /** Re-submitting the same email is a friendly no-op, not an error; consent is already validated at the route, so this just timestamps it. */
-  async join(input: { email: string; name: string }) {
+  async join(input: { email: string; name: string; phone: string; city: string; itemInterest?: string }) {
     const email = input.email.trim().toLowerCase();
     const existing = await WaitlistEntry.findOne({ email });
     if (existing) return { publicId: existing.publicId, alreadyJoined: true };
@@ -23,6 +23,9 @@ export class WaitlistService {
         publicId: await nextPublicId('waitlistEntry'),
         email,
         name: input.name.trim(),
+        phone: input.phone.trim(),
+        city: input.city.trim(),
+        itemInterest: input.itemInterest?.trim() || undefined,
         consentedAt: new Date(),
         unsubscribeToken: randomUUID(),
       });
@@ -48,7 +51,12 @@ export class WaitlistService {
     const filter: Record<string, unknown> = { deletedAt: { $exists: false } };
     if (input.search) {
       const term = input.search.trim();
-      filter.$or = [{ email: { $regex: term, $options: 'i' } }, { name: { $regex: term, $options: 'i' } }];
+      filter.$or = [
+        { email: { $regex: term, $options: 'i' } },
+        { name: { $regex: term, $options: 'i' } },
+        { phone: { $regex: term, $options: 'i' } },
+        { city: { $regex: term, $options: 'i' } },
+      ];
     }
     const [data, total, redeemed] = await Promise.all([
       WaitlistEntry.find(filter).sort({ createdAt: -1 }).skip(input.skip).limit(input.limit).lean(),

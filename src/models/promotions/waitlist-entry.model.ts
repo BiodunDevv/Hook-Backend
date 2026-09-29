@@ -11,6 +11,11 @@ export interface WaitlistEntry extends BaseEntity {
   publicId: string;
   email: string;
   name: string;
+  /** Required by the join API for every new signup; optional here only because entries created before this field existed must stay loadable. */
+  phone?: string;
+  city?: string;
+  /** Free-text answer to "What items would you like to shop from Lagos markets when we launch?" — optional, unlike the contact fields. */
+  itemInterest?: string;
   pendingCreditMinor?: number;
   giftReason?: string;
   redeemedByUserId?: string;
@@ -27,6 +32,11 @@ const schema = createSchema<WaitlistEntry>({
   publicId: { type: String, required: true, unique: true, index: true },
   email: { type: String, required: true, unique: true, lowercase: true, trim: true, index: true },
   name: { type: String, required: true, trim: true, maxlength: 120 },
+  // Sparse/no `required` at the schema level: existing entries from before this field
+  // existed must stay loadable — the API contract enforces "required" for new joins instead.
+  phone: { type: String, trim: true, maxlength: 32 },
+  city: { type: String, trim: true, maxlength: 120 },
+  itemInterest: { type: String, trim: true, maxlength: 1000 },
   pendingCreditMinor: { type: Number, min: 0 },
   giftReason: { type: String, maxlength: 300 },
   redeemedByUserId: { type: String, index: true },

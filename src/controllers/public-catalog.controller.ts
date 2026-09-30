@@ -36,7 +36,7 @@ const PUBLIC_PRODUCT_CARD_FIELDS = [
   "colors",
   "sizes",
 ].join(" ");
-const PUBLIC_PRODUCT_FIELDS = `${PUBLIC_PRODUCT_CARD_FIELDS} description customerAvailabilityNote`;
+const PUBLIC_PRODUCT_FIELDS = `${PUBLIC_PRODUCT_CARD_FIELDS} description customerAvailabilityNote lastAvailabilityConfirmedAt`;
 
 async function internalId(
   model: any,

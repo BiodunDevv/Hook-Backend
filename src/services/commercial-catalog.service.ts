@@ -898,6 +898,7 @@ export async function publicProductRepresentations(
           media: mediaPresentation,
           variants: productVariants,
           availabilityNote: product.customerAvailabilityNote,
+          lastAvailabilityConfirmedAt: product.lastAvailabilityConfirmedAt,
           publishedAt: product.publishedAt,
         };
   });

@@ -28,6 +28,7 @@ import { splitOrderIntoGroups } from "@services/order-split.service";
 import { createCommerceNotification } from "@services/commerce-notification.service";
 import { FulfilmentTask } from "@models/fulfilment/fulfilment.model";
 import { MarketAssociateProfile } from "@models/platform/operations-accounts.model";
+import { OperationState } from "@models/platform/geography.model";
 
 export class AdminOrdersController {
   private readonly email = new EmailService();
@@ -45,8 +46,25 @@ export class AdminOrdersController {
         .escrowLedger()
         .find({ where: { orderId: order.id }, order: { createdAt: "ASC" } }),
     ]);
+    // Every sourceStateId on the order and its delivery groups is a raw Mongo id — resolve
+    // them all to readable names in one pass so neither the summary stat nor the delivery
+    // group cards have to show a bare id to staff.
+    const stateIds = [
+      ...(order.sourceStateId ? [String(order.sourceStateId)] : []),
+      ...((order.sourceStateIds || []) as unknown[]).map(String),
+      ...fulfilmentGroups.map((group: any) => String(group.sourceStateId)).filter(Boolean),
+    ];
+    const states = stateIds.length
+      ? await OperationState.find({ _id: { $in: [...new Set(stateIds)] } }).select("name code").lean()
+      : [];
+    const stateById = new Map(states.map((state: any) => [String(state._id), state]));
+    const sourceStateNames = [...new Set(stateIds)].map((id) => stateById.get(id)?.name).filter(Boolean) as string[];
+    const namedFulfilmentGroups = fulfilmentGroups.map((group: any) => ({
+      ...group,
+      sourceStateName: stateById.get(String(group.sourceStateId))?.name,
+    }));
     // "payment" is the order's primary payment summary; a replacement-item top-up must not stand in for it, though it still shows in the full "payments" list below.
-    return { ...order, items, payment: payments.find((entry: any) => !entry.itemResolutionId) || payments[0], payments, fulfilmentGroups, logistics, escrowLedger };
+    return { ...order, items, payment: payments.find((entry: any) => !entry.itemResolutionId) || payments[0], payments, fulfilmentGroups: namedFulfilmentGroups, sourceStateNames, logistics, escrowLedger };
   }
 
   list = async (req: Request, res: Response) => {

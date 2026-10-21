@@ -38,11 +38,6 @@ function baseOptions(): RedisOptions {
   };
 }
 
-/**
- * Hosts whose traffic never leaves the machine or its private network:
- * loopback, a single-label name (a Docker Compose service such as "redis"),
- * or an RFC 1918 address.
- */
 export function isPrivateHost(host: string) {
   if (['localhost', '127.0.0.1', '::1', '[::1]'].includes(host)) return true;
   if (!host.includes('.') && !host.includes(':')) return true;
@@ -51,8 +46,8 @@ export function isPrivateHost(host: string) {
 
 /**
  * Validates configuration at boot. In production a plaintext redis:// URL to a
- * public host is refused: the URL carries the password and the traffic would
- * cross the internet unencrypted.
+ * remote host is refused: the URL carries the password and the traffic would
+ * cross the network unencrypted.
  */
 export function assertRedisConfig(options: { required: boolean }) {
   if (!redisConfigured()) {

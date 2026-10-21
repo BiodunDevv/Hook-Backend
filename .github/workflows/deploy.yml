@@ -1,6 +1,5 @@
 name: Deploy
 
-# Runs after CI passes on main, or by hand from the Actions tab.
 on:
   workflow_run:
     workflows: [CI]
@@ -27,5 +26,4 @@ jobs:
           install -m 700 -d ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy && chmod 600 ~/.ssh/deploy
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
-          # The server key only runs deploy/deploy.sh with this SHA (forced command).
           ssh -i ~/.ssh/deploy -o BatchMode=yes "deploy@$HOST" "$SHA"

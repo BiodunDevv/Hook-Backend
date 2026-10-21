@@ -1,4 +1,3 @@
-# One image for every Hook role (API, worker); only the start command differs.
 FROM node:22-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -15,7 +14,6 @@ COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --chown=node:node package.json swagger-spec.json ./
 COPY --chown=node:node public ./public
-# Email templates are read from disk at runtime.
 COPY --chown=node:node src/emails/templates ./src/emails/templates
 RUN mkdir -p uploads && chown node:node uploads
 USER node

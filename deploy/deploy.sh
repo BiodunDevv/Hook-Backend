@@ -1,25 +1,15 @@
 #!/usr/bin/env bash
-# Zero-downtime deploy on the VPS: build the new image, then replace the API
-# copies one at a time, waiting for each to report healthy. If one fails, the
-# previous image is put back and the script exits non-zero.
-#
-# Usage (on the server, from the repo checkout): deploy/deploy.sh [git-ref]
 set -euo pipefail
 
-# Wrapped in main() so bash reads the whole script before the checkout below
-# can replace this file on disk.
 main() {
 cd "$(dirname "$0")"
 
 REF="${1:-origin/main}"
-# GitHub Actions reaches this script through a key that can run nothing else;
-# accept only a commit SHA or origin/main from it.
 [[ "$REF" =~ ^([0-9a-f]{7,40}|origin/main)$ ]] || { echo "refusing ref: $REF"; exit 2; }
 git -C .. fetch --quiet origin
 git -C .. checkout --quiet --force --detach "$REF"
 echo "Deploying $(git -C .. log -1 --format='%h %s')"
 
-# Keep the running image so it can be restored.
 if docker image inspect hook-api:latest >/dev/null 2>&1; then
   docker tag hook-api:latest hook-api:previous
 fi

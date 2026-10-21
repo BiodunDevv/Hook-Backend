@@ -12,6 +12,9 @@ main() {
 cd "$(dirname "$0")"
 
 REF="${1:-origin/main}"
+# GitHub Actions reaches this script through a key that can run nothing else;
+# accept only a commit SHA or origin/main from it.
+[[ "$REF" =~ ^([0-9a-f]{7,40}|origin/main)$ ]] || { echo "refusing ref: $REF"; exit 2; }
 git -C .. fetch --quiet origin
 git -C .. checkout --quiet --force --detach "$REF"
 echo "Deploying $(git -C .. log -1 --format='%h %s')"

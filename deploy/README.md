@@ -31,16 +31,10 @@ If a copy fails to start, the previous image is restored.
 
 ## Automatic deploys
 
-A systemd timer on the server runs `deploy/auto-deploy.sh` every 2 minutes.
-When `main` has a new commit and all of its GitHub checks have passed, it runs
-`deploy.sh` for that commit. A commit with failing checks is skipped. GitHub
-holds no keys to the server; the server only reads the public repo.
-
-```bash
-sudo cp deploy/systemd/hook-auto-deploy.* /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now hook-auto-deploy.timer
-journalctl -u hook-auto-deploy -f      # watch deploys
-```
+`.github/workflows/deploy.yml` runs after CI passes on `main` (or by hand from
+the Actions tab). It connects as `deploy` with a key that the server restricts
+to one forced command, `deploy/deploy.sh <sha>`: the key cannot open a shell.
+Repository secrets: `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS`, `DEPLOY_HOST`.
 
 ## Useful commands
 

@@ -39,9 +39,20 @@ function baseOptions(): RedisOptions {
 }
 
 /**
+ * Hosts whose traffic never leaves the machine or its private network:
+ * loopback, a single-label name (a Docker Compose service such as "redis"),
+ * or an RFC 1918 address.
+ */
+export function isPrivateHost(host: string) {
+  if (['localhost', '127.0.0.1', '::1', '[::1]'].includes(host)) return true;
+  if (!host.includes('.') && !host.includes(':')) return true;
+  return /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host);
+}
+
+/**
  * Validates configuration at boot. In production a plaintext redis:// URL to a
- * remote host is refused: the URL carries the password and the traffic would
- * cross the network unencrypted.
+ * public host is refused: the URL carries the password and the traffic would
+ * cross the internet unencrypted.
  */
 export function assertRedisConfig(options: { required: boolean }) {
   if (!redisConfigured()) {
@@ -58,8 +69,7 @@ export function assertRedisConfig(options: { required: boolean }) {
     throw new Error('REDIS_URL is not a valid URL');
   }
   if (!['redis:', 'rediss:'].includes(parsed.protocol)) throw new Error('REDIS_URL must start with redis:// or rediss://');
-  const local = ['localhost', '127.0.0.1', '::1'].includes(parsed.hostname);
-  if (process.env.NODE_ENV === 'production' && parsed.protocol === 'redis:' && !local) {
+  if (process.env.NODE_ENV === 'production' && parsed.protocol === 'redis:' && !isPrivateHost(parsed.hostname)) {
     throw new Error('REDIS_URL must use rediss:// (TLS) for a remote Redis in production');
   }
 }

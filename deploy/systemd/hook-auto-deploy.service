@@ -1,0 +1,9 @@
+[Unit]
+Description=Deploy the latest passing commit of Hook-Backend main
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=deploy
+ExecStart=/home/deploy/hook-backend/deploy/auto-deploy.sh

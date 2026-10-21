@@ -5,11 +5,15 @@
 #
 # Usage (on the server, from the repo checkout): deploy/deploy.sh [git-ref]
 set -euo pipefail
+
+# Wrapped in main() so bash reads the whole script before the checkout below
+# can replace this file on disk.
+main() {
 cd "$(dirname "$0")"
 
 REF="${1:-origin/main}"
 git -C .. fetch --quiet origin
-git -C .. checkout --quiet --detach "$REF"
+git -C .. checkout --quiet --force --detach "$REF"
 echo "Deploying $(git -C .. log -1 --format='%h %s')"
 
 # Keep the running image so it can be restored.
@@ -49,3 +53,6 @@ docker compose up -d --no-deps --force-recreate worker
 docker compose up -d nginx
 docker image prune -f >/dev/null
 echo "Deploy complete"
+}
+
+main "$@"

@@ -5,10 +5,10 @@ contactPoints:
     name: email
     receivers:
       - uid: email
-        type: email
+        type: webhook
         settings:
-          addresses: hook.africa2025@gmail.com;ogunseitangold105@gmail.com
-          singleEmail: true
+          url: http://alert-mailer:8080/
+          httpMethod: POST
 
 policies:
   - orgId: 1

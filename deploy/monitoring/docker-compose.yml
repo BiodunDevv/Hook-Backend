@@ -57,12 +57,6 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
-      GF_SMTP_ENABLED: "true"
-      GF_SMTP_HOST: smtp-relay.brevo.com:587
-      GF_SMTP_USER: ${SMTP_USER}
-      GF_SMTP_PASSWORD: ${SMTP_PASSWORD}
-      GF_SMTP_FROM_ADDRESS: ${SMTP_FROM}
-      GF_SMTP_FROM_NAME: Hook Alerts
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
@@ -72,6 +66,20 @@ services:
     deploy:
       resources:
         limits: { memory: 256M }
+
+  alert-mailer:
+    image: node:22-alpine
+    command: ["node", "/app/server.js"]
+    environment:
+      BREVO_API_KEY: ${BREVO_API_KEY}
+      ALERT_FROM: ${ALERT_FROM}
+      ALERT_TO: hook.africa2025@gmail.com,ogunseitangold105@gmail.com
+    volumes:
+      - ./alert-mailer/server.js:/app/server.js:ro
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits: { memory: 64M }
 
   uptime-kuma:
     image: louislam/uptime-kuma:1.23.16

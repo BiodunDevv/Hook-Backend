@@ -65,6 +65,7 @@ services:
       GF_SMTP_FROM_NAME: Hook Alerts
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
     depends_on: [loki, prometheus]
     restart: unless-stopped
